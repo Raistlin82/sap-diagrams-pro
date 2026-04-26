@@ -458,17 +458,63 @@ def _node_style(n: Node, shape_index: "ShapeIndex") -> tuple[str, bool, str]:
     return style, False, n.label
 
 
-def _edge_style(e: Edge) -> str:
-    # Edges use the SAP non-SAP grey by default; semantic edges (positive/
-    # negative/critical) can be added in v0.2 via an optional ``severity``
-    # field on the Edge dataclass.
+def _edge_style(
+    e: Edge,
+    src_geom: tuple[int, int, int, int] | None = None,
+    tgt_geom: tuple[int, int, int, int] | None = None,
+) -> str:
+    """Build the SAP-canonical edge style.
+
+    When ``src_geom`` and ``tgt_geom`` are provided (absolute x,y,w,h of the
+    source and target node), exitX/exitY and entryX/entryY anchor points are
+    computed from the geometric relationship between the two shapes. This is
+    what makes SAP edges route as orthogonal L/U shapes around boxes instead
+    of cutting straight through them.
+    """
     stroke = PALETTE["non_sap_border"]
     base = EDGE_STYLES[e.style].format(stroke=stroke)
     if e.direction == "bidirectional":
         base += "startArrow=blockThin;startFill=1;"
     elif e.direction == "none":
         base = base.replace("endArrow=blockThin", "endArrow=none").replace("endFill=1", "endFill=0")
-    return f"{base}fontSize=10;fontColor={PALETTE['text']};labelBackgroundColor=#FFFFFF;"
+    style = f"{base}fontSize=10;fontColor={PALETTE['text']};labelBackgroundColor=#FFFFFF;"
+
+    # Compute exit/entry anchors when both endpoints' geometries are known.
+    if src_geom and tgt_geom:
+        exit_anchor, entry_anchor = _compute_anchors(src_geom, tgt_geom)
+        style += (
+            f"exitX={exit_anchor[0]};exitY={exit_anchor[1]};exitDx=0;exitDy=0;"
+            f"entryX={entry_anchor[0]};entryY={entry_anchor[1]};entryDx=0;entryDy=0;"
+        )
+    return style
+
+
+def _compute_anchors(
+    src: tuple[int, int, int, int],
+    tgt: tuple[int, int, int, int],
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Pick the side of source and target where the edge attaches.
+
+    Anchors are expressed in drawio's relative-to-shape units (0..1).
+    Strategy: choose the dominant axis between centres, then attach to the
+    facing midpoint. Result: orthogonal L/U routes that hug shape edges.
+    """
+    sx, sy, sw, sh = src
+    tx, ty, tw, th = tgt
+    src_cx, src_cy = sx + sw / 2, sy + sh / 2
+    tgt_cx, tgt_cy = tx + tw / 2, ty + th / 2
+    dx = tgt_cx - src_cx
+    dy = tgt_cy - src_cy
+
+    if abs(dx) >= abs(dy):
+        # Horizontal dominance.
+        if dx >= 0:
+            return (1.0, 0.5), (0.0, 0.5)  # source-right → target-left
+        return (0.0, 0.5), (1.0, 0.5)      # source-left  → target-right
+    # Vertical dominance.
+    if dy >= 0:
+        return (0.5, 1.0), (0.5, 0.0)      # source-bottom → target-top
+    return (0.5, 0.0), (0.5, 1.0)          # source-top    → target-bottom
 
 
 def emit(diagram: Diagram, shape_index: "ShapeIndex | None" = None) -> str:
@@ -546,21 +592,28 @@ def emit(diagram: Diagram, shape_index: "ShapeIndex | None" = None) -> str:
     )
 
     # 2. Groups — top-level FIRST (so they sit behind sub-groups in z-order),
-    #    then nested sub-groups on top.
+    #    then nested sub-groups on top. Use real drawio parenting: a nested
+    #    sub-group's mxCell parent is its top-level parent's cell id, and its
+    #    geometry is RELATIVE to that parent's origin.
     top_level_groups = [g for g in diagram.groups if not g.parent]
     nested_groups = [g for g in diagram.groups if g.parent]
 
-    for g in top_level_groups + nested_groups:
+    # Map group_id → emitted mxCell id (so children can reference it).
+    group_cell_ids: dict[str, str] = {}
+
+    for g in top_level_groups:
         if g.id not in group_geo:
             continue
         x, y, w, h = group_geo[g.id]
+        cell_id = _stable_id("g", g.id)
+        group_cell_ids[g.id] = cell_id
         g_cell = ET.SubElement(
             root,
             "mxCell",
             attrib={
-                "id": _stable_id("g", g.id),
+                "id": cell_id,
                 "value": g.label,
-                "style": _group_style(g, is_nested=bool(g.parent)),
+                "style": _group_style(g, is_nested=False),
                 "vertex": "1",
                 "parent": "1",
             },
@@ -571,6 +624,38 @@ def emit(diagram: Diagram, shape_index: "ShapeIndex | None" = None) -> str:
             attrib={
                 "x": str(x),
                 "y": str(y),
+                "width": str(w),
+                "height": str(h),
+                "as": "geometry",
+            },
+        )
+
+    for g in nested_groups:
+        if g.id not in group_geo or g.parent not in group_geo:
+            continue
+        x, y, w, h = group_geo[g.id]
+        px, py, _, _ = group_geo[g.parent]
+        rel_x, rel_y = x - px, y - py
+        cell_id = _stable_id("g", g.id)
+        group_cell_ids[g.id] = cell_id
+        parent_cell_id = group_cell_ids.get(g.parent, "1")
+        g_cell = ET.SubElement(
+            root,
+            "mxCell",
+            attrib={
+                "id": cell_id,
+                "value": g.label,
+                "style": _group_style(g, is_nested=True),
+                "vertex": "1",
+                "parent": parent_cell_id,
+            },
+        )
+        ET.SubElement(
+            g_cell,
+            "mxGeometry",
+            attrib={
+                "x": str(rel_x),
+                "y": str(rel_y),
                 "width": str(w),
                 "height": str(h),
                 "as": "geometry",
@@ -590,14 +675,26 @@ def emit(diagram: Diagram, shape_index: "ShapeIndex | None" = None) -> str:
     for idx, n in enumerate(orphans):
         node_xy[n.id] = (cx + (idx % 4) * (NODE_W + NODE_GAP_X), cy + (idx // 4) * (NODE_H + NODE_GAP_Y))
 
+    # Track each node's absolute geometry so edges can compute anchor points
+    # based on their endpoints' relative positions.
+    node_abs_geom: dict[str, tuple[int, int, int, int]] = {}
+
     for n in diagram.nodes:
         x, y = node_xy[n.id]
         style, is_icon, label = _node_style(n, shape_index)
         # SAP icons are square; plain boxes are wide rectangles.
-        if is_icon:
-            w, h = ICON_W, ICON_H
-        else:
-            w, h = NODE_W, NODE_H
+        w, h = (ICON_W, ICON_H) if is_icon else (NODE_W, NODE_H)
+        node_abs_geom[n.id] = (x, y, w, h)
+
+        # Real drawio parenting: if the node belongs to a (sub-)group, parent
+        # the mxCell to that group cell and emit relative coordinates.
+        parent_cell_id = "1"
+        rel_x, rel_y = x, y
+        if n.group and n.group in group_cell_ids and n.group in group_geo:
+            parent_cell_id = group_cell_ids[n.group]
+            gx, gy, _, _ = group_geo[n.group]
+            rel_x, rel_y = x - gx, y - gy
+
         n_cell = ET.SubElement(
             root,
             "mxCell",
@@ -606,30 +703,32 @@ def emit(diagram: Diagram, shape_index: "ShapeIndex | None" = None) -> str:
                 "value": label,
                 "style": style,
                 "vertex": "1",
-                "parent": "1",
+                "parent": parent_cell_id,
             },
         )
         ET.SubElement(
             n_cell,
             "mxGeometry",
             attrib={
-                "x": str(x),
-                "y": str(y),
+                "x": str(rel_x),
+                "y": str(rel_y),
                 "width": str(w),
                 "height": str(h),
                 "as": "geometry",
             },
         )
 
-    # 4. Edges
+    # 4. Edges — exit/entry anchors derived from absolute node geometries.
     for e in diagram.edges:
+        src_geom = node_abs_geom.get(e.source)
+        tgt_geom = node_abs_geom.get(e.target)
         e_cell = ET.SubElement(
             root,
             "mxCell",
             attrib={
                 "id": _stable_id("e", e.id),
                 "value": e.label,
-                "style": _edge_style(e),
+                "style": _edge_style(e, src_geom, tgt_geom),
                 "edge": "1",
                 "parent": "1",
                 "source": _stable_id("n", e.source),

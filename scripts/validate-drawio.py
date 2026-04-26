@@ -228,6 +228,32 @@ def validate(path: Path) -> list[Issue]:
             )
 
     # ── Rule 5: spacing rule of thumb (overlapping geometries) ───────────────
+    # mxCell coordinates are relative to the cell's `parent` attribute. Walk
+    # the parent chain to compute absolute positions before comparing.
+    cells_by_id = {c.get("id"): c for c in cells if c.get("id")}
+
+    def _absolute_pos(cell_id: str, _seen: set | None = None) -> tuple[float, float]:
+        if _seen is None:
+            _seen = set()
+        if cell_id in _seen or cell_id not in cells_by_id:
+            return 0.0, 0.0
+        _seen.add(cell_id)
+        cell = cells_by_id[cell_id]
+        geom = cell.find("mxGeometry")
+        if geom is None:
+            return 0.0, 0.0
+        try:
+            x = float(geom.get("x", "0"))
+            y = float(geom.get("y", "0"))
+        except ValueError:
+            return 0.0, 0.0
+        parent_id = cell.get("parent")
+        if parent_id and parent_id not in ("0", "1"):
+            px, py = _absolute_pos(parent_id, _seen)
+            x += px
+            y += py
+        return x, y
+
     boxes: list[tuple[str, float, float, float, float]] = []
     for cell in cells:
         if cell.get("vertex") != "1":
@@ -236,13 +262,13 @@ def validate(path: Path) -> list[Issue]:
         if geom is None:
             continue
         try:
-            x = float(geom.get("x", "0"))
-            y = float(geom.get("y", "0"))
             w = float(geom.get("width", "0"))
             h = float(geom.get("height", "0"))
         except ValueError:
             continue
-        boxes.append((cell.get("id", "?"), x, y, w, h))
+        cid = cell.get("id", "?")
+        x, y = _absolute_pos(cid)
+        boxes.append((cid, x, y, w, h))
 
     for i in range(len(boxes)):
         a_id, ax, ay, aw, ah = boxes[i]
