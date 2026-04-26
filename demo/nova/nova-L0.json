@@ -1,0 +1,25 @@
+{
+  "_comment": "SPDX-FileCopyrightText: 2026 Gabriele Capparelli — SPDX-License-Identifier: Apache-2.0 — NOVA Invoice Suite L0 Executive Overview, distilled from passive-invoice-mgmt CLAUDE.md",
+  "metadata": {
+    "title": "NOVA Invoice Suite — L0",
+    "level": "L0",
+    "author": "Gabriele Capparelli"
+  },
+  "groups": [
+    {"id": "users", "type": "user", "label": "Finance Team", "position": "top-left"},
+    {"id": "external", "type": "third-party", "label": "External Senders", "position": "top-right"},
+    {"id": "nova", "type": "btp-layer", "label": "NOVA Invoice Suite", "position": "center"},
+    {"id": "s4", "type": "sap-app", "label": "SAP S/4HANA", "position": "bottom-right"}
+  ],
+  "nodes": [
+    {"id": "ap-team", "label": "AP / Finance", "group": "users"},
+    {"id": "sdi", "label": "Italian SDI + Suppliers", "group": "external"},
+    {"id": "core", "label": "Invoice Processing", "group": "nova"},
+    {"id": "s4hana", "label": "S/4HANA Cloud / On-Prem", "group": "s4"}
+  ],
+  "edges": [
+    {"id": "e1", "source": "sdi", "target": "core", "style": "dashed", "label": "FatturaPA + PDF in"},
+    {"id": "e2", "source": "ap-team", "target": "core", "style": "solid", "label": "process / approve"},
+    {"id": "e3", "source": "core", "target": "s4hana", "style": "solid", "label": "post supplier invoice"}
+  ]
+}
