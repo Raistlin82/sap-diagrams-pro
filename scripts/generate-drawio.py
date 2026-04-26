@@ -477,7 +477,14 @@ def _edge_style(
         base += "startArrow=blockThin;startFill=1;"
     elif e.direction == "none":
         base = base.replace("endArrow=blockThin", "endArrow=none").replace("endFill=1", "endFill=0")
-    style = f"{base}fontSize=10;fontColor={PALETTE['text']};labelBackgroundColor=#FFFFFF;"
+    # labelBackgroundColor with explicit padding hides the line behind the
+    # text — without this, edge labels sit on top of the route and become
+    # unreadable when the route passes over another shape.
+    style = (
+        f"{base}fontSize=10;fontColor={PALETTE['text']};"
+        f"labelBackgroundColor=#FFFFFF;labelBorderColor=none;"
+        f"verticalAlign=middle;align=center;"
+    )
 
     # Compute exit/entry anchors when both endpoints' geometries are known.
     if src_geom and tgt_geom:
@@ -604,8 +611,11 @@ def emit(
     ET.SubElement(root, "mxCell", attrib={"id": "0"})
     ET.SubElement(root, "mxCell", attrib={"id": "1", "parent": "0"})
 
-    # 1. Title
+    # 1. Title — full-width centered band at the top of the canvas, leaving
+    # margin on both sides. Avoids the empty-top-left corner you'd otherwise
+    # see when content shifts toward the centre under dot layout.
     title_id = _stable_id("title", diagram.title)
+    title_w = max(canvas_w - 96, 600)
     title_cell = ET.SubElement(
         root,
         "mxCell",
@@ -613,7 +623,7 @@ def emit(
             "id": title_id,
             "value": f"{diagram.title} [{diagram.level}]",
             "style": (
-                f"text;html=1;align=left;verticalAlign=middle;"
+                f"text;html=1;align=center;verticalAlign=middle;"
                 f"fontColor={PALETTE['title']};fontSize=18;fontStyle=1;"
             ),
             "vertex": "1",
@@ -624,9 +634,9 @@ def emit(
         title_cell,
         "mxGeometry",
         attrib={
-            "x": "24",
-            "y": "16",
-            "width": "800",
+            "x": "48",
+            "y": "12",
+            "width": str(title_w),
             "height": "32",
             "as": "geometry",
         },

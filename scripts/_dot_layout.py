@@ -28,7 +28,7 @@ import shutil
 import subprocess
 from typing import Any
 
-PAD = 40  # extra px margin around dot's computed bbox
+PAD = 60  # extra px margin around dot's computed bbox (room for title + legend)
 
 # Default node footprint (inches at 72 DPI). SAP icons render best as a
 # 96×112 box (icon 64×64 + label below); plain boxes are wider and shorter.
@@ -59,11 +59,19 @@ def to_dot_source(diagram, shape_index) -> str:
     lines = ["digraph SAPDiagram {"]
     lines.append("  rankdir=TB;")
     lines.append("  splines=ortho;")
-    lines.append('  graph [pad="0.4", nodesep="0.5", ranksep="0.7", '
-                 'compound=true, fontname="Helvetica"];')
+    # Larger pad gives the title and legend room. nodesep/ranksep tuned to
+    # match SAP example breathing room (matches typical 32-40px gaps in the
+    # 11 official samples). concentrate=true merges parallel edges that
+    # share a source/target side, eliminating duplicate-route clutter.
+    lines.append('  graph [pad="0.6", nodesep="0.8", ranksep="1.0", '
+                 'compound=true, concentrate=true, fontname="Helvetica"];')
     lines.append('  node [shape=box, fontname="Helvetica", fontsize=10, '
                  'fixedsize=true];')
-    lines.append('  edge [fontname="Helvetica", fontsize=9];')
+    # forcelabels=true allows xlabel to position edge labels off the line
+    # (avoids the SAP guideline's #1 readability issue: stacked labels on
+    # long horizontal edges).
+    lines.append('  edge [fontname="Helvetica", fontsize=9, '
+                 'labelfloat=true, labeldistance=2];')
     lines.append("")
 
     # Build helpers.
@@ -117,13 +125,39 @@ def to_dot_source(diagram, shape_index) -> str:
         _emit_node(n, indent=2)
 
     lines.append("")
-    # Edges — labels go on drawio's mxCell, NOT here (the splines=ortho
-    # routing emits a warning about edge labels otherwise, and we render
-    # cleaner labels through drawio's labelBackgroundColor anyway).
+
+    # Build node → top-level cluster lookup for cross-cluster edges. When a
+    # node is in a sub-group (parent set), walk up to the top-level cluster
+    # so ltail/lhead can attach to the OUTER cluster boundary and prevent
+    # dot from yanking the node out of its container.
+    group_by_id = {g.id: g for g in diagram.groups}
+
+    def _top_cluster(node_id: str) -> str | None:
+        for n in diagram.nodes:
+            if n.id != node_id:
+                continue
+            gid = n.group
+            while gid and gid in group_by_id and group_by_id[gid].parent:
+                gid = group_by_id[gid].parent
+            return gid
+        return None
+
+    # Edges — drawio renders labels (not dot) so we don't pass `label=`,
+    # but ltail/lhead are critical for cluster containment under
+    # compound=true. Without them, dot can pull a node out of its cluster
+    # to shorten an edge, which is exactly the BPA-outside-BTP bug.
     for e in diagram.edges:
-        lines.append(
-            f"  {_qid(e.source)} -> {_qid(e.target)} [id=\"{_escape(e.id)}\"];"
-        )
+        src_cluster = _top_cluster(e.source)
+        tgt_cluster = _top_cluster(e.target)
+        attrs = [f'id="{_escape(e.id)}"']
+        # Only attach ltail/lhead when source and target sit in DIFFERENT
+        # top-level clusters; same-cluster edges should connect node-to-node
+        # so dot routes inside the cluster.
+        if src_cluster and tgt_cluster and src_cluster != tgt_cluster:
+            attrs.append(f'ltail="cluster_{src_cluster}"')
+            attrs.append(f'lhead="cluster_{tgt_cluster}"')
+        attrs_str = "[" + ", ".join(attrs) + "]"
+        lines.append(f"  {_qid(e.source)} -> {_qid(e.target)} {attrs_str};")
     lines.append("}")
     return "\n".join(lines)
 
