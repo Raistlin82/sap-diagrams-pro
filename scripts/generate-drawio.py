@@ -69,6 +69,28 @@ def _load_canonical_pills() -> dict:
 
 _CANONICAL_PILLS = _load_canonical_pills()
 
+# Normalised lookup table for fuzzy matching: strip whitespace, lowercase.
+# So "REST/OData", "REST / OData", "rest/odata" all resolve to the same
+# canonical entry.
+_CANONICAL_PILLS_NORM: dict[str, dict] = {
+    re.sub(r"\s+", "", k).lower(): v for k, v in _CANONICAL_PILLS.items()
+}
+
+
+def _resolve_canonical_pill(label: str | None) -> dict | None:
+    """Resolve a pill label to its canonical SAP entry. Tries exact match
+    first, then whitespace-insensitive case-insensitive match."""
+    if not label:
+        return None
+    if label in _CANONICAL_PILLS:
+        return _CANONICAL_PILLS[label]
+    normalised = re.sub(r"\s+", "", label).lower()
+    return _CANONICAL_PILLS_NORM.get(normalised)
+
+
+# `re` was used above; keep at module top so the helpers above don't need
+# their own imports. (Already imported at the top of this file.)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Horizon palette (from btp-solution-diagrams/guideline/docs/btp_guideline/foundation.md)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -814,7 +836,7 @@ def _edge_style(
         # Annotation edges: prefer canonical SAP color when the label
         # matches a known pattern (SAML2/OIDC, Group, OIDC, …). Otherwise
         # use the explicit pillColor family.
-        canonical = _CANONICAL_PILLS.get(e.label) if e.label else None
+        canonical = _resolve_canonical_pill(e.label)
         if canonical and canonical.get("stroke"):
             stroke = canonical["stroke"]
         else:
