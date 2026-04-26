@@ -30,10 +30,12 @@ from typing import Any
 
 PAD = 60  # extra px margin around dot's computed bbox (room for title + legend)
 
-# Default node footprint (inches at 72 DPI). SAP icons render best as a
-# 96×112 box (icon 64×64 + label below); plain boxes are wider and shorter.
-ICON_W_IN = 1.4   # 100 px
-ICON_H_IN = 1.3   # 94 px (icon + label below)
+# Default node footprint (inches at 72 DPI). Aligned with the engine's
+# SAP-canonical icon size of 61.24×57 px. Reserve extra space below for
+# the verticalLabelPosition=bottom label so dot doesn't pack icons too
+# tight.
+ICON_W_IN = 1.05  # ~76 px (icon 61 + 15 padding)
+ICON_H_IN = 1.10  # ~79 px (icon 57 + 22 label)
 PLAIN_W_IN = 1.8  # 130 px
 PLAIN_H_IN = 0.85 # 61 px
 

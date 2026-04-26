@@ -182,6 +182,9 @@ SAP_FONT_FAMILY = "72,Helvetica,Arial,sans-serif"
 # Rendering at 80×80 stretches and looks blurry. We render them at native
 # size × 2 = 48×48 for crisp output. The label sits below via
 # verticalLabelPosition=bottom in the style string.
+# Generic icons (User, Mobile, Cloud Connector, …) — slightly smaller
+# than SAP service icons since their source SVG is 24×24 native (vs 48
+# native for service icons). 48×48 = 2× native, crisp without crowding.
 GENERIC_ICON_W = 48
 GENERIC_ICON_H = 48
 CELL_W = CANVAS_W // 3
@@ -190,10 +193,11 @@ GROUP_PADDING = 24
 # Plain (no SAP icon) box sizing — used for users, non-SAP, unresolved services.
 NODE_W = 160
 NODE_H = 80
-# SAP icon node sizing — square icon + label below it. Matches the SAP shape
-# library style `verticalLabelPosition=bottom;verticalAlign=top;`.
-ICON_W = 80
-ICON_H = 80
+# SAP icon node sizing — exact SAP-canonical size 61.24×57 px observed
+# in the official editable example diagrams. Floats are preserved
+# verbatim in mxGeometry (drawio supports sub-pixel values).
+ICON_W = 61.24
+ICON_H = 57
 NODE_GAP_X = 24
 NODE_GAP_Y = 36  # extra vertical room because labels sit below SAP icons
 
@@ -1162,9 +1166,24 @@ def emit(
         # crowding the surrounding layout.
         if n.id in node_geo:
             x, y, w, h = node_geo[n.id]
-            # Override dot's calculated size for generic icons.
+            # Override dot's reserved-space size with the SAP-canonical
+            # exact icon dimensions. dot needs more space for layout
+            # (~76×79) but the rendered cell must be precisely
+            # 61.24×57 (SAP convention) for service icons, 48×48 for
+            # generic icons. Centre the actual cell within the reserved
+            # space so the layout doesn't shift.
             if n.genericIcon:
+                offset_x = (w - GENERIC_ICON_W) / 2
+                offset_y = (h - GENERIC_ICON_H) / 2
+                x = x + offset_x
+                y = y + offset_y
                 w, h = GENERIC_ICON_W, GENERIC_ICON_H
+            elif is_icon:
+                offset_x = (w - ICON_W) / 2
+                offset_y = (h - ICON_H) / 2
+                x = x + offset_x
+                y = y + offset_y
+                w, h = ICON_W, ICON_H
         else:
             x, y = node_xy.get(n.id, (0, 0))
             if n.genericIcon:
