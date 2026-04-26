@@ -29,6 +29,13 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install graphviz (dot)
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends graphviz
+          dot -V
+
       - name: Verify shebangs + SPDX headers on scripts
         run: |
           set -eu
@@ -38,15 +45,33 @@ jobs:
           done
           echo "OK: shebangs and SPDX headers present"
 
-      - name: Generate L0 / L1 / L2 .drawio from committed examples
+      - name: Generate L0 / L1 / L2 .drawio with dot layout (primary)
         run: |
           set -eu
-          mkdir -p out
+          mkdir -p out/dot
           for level in L0 L1 L2; do
             python3 scripts/generate-drawio.py \
               "skills/sap-diagram-generate/examples/${level}-example.json" \
-              --out "out/${level}.drawio"
+              --layout dot \
+              --out "out/dot/${level}.drawio"
           done
+
+      - name: Generate L0 / L1 / L2 .drawio with greedy fallback
+        run: |
+          set -eu
+          mkdir -p out/greedy
+          for level in L0 L1 L2; do
+            python3 scripts/generate-drawio.py \
+              "skills/sap-diagram-generate/examples/${level}-example.json" \
+              --layout greedy \
+              --out "out/greedy/${level}.drawio"
+          done
+
+      - name: Move primary outputs to canonical out/ for downstream steps
+        run: |
+          set -eu
+          mkdir -p out
+          cp out/dot/*.drawio out/
           ls -la out/
 
       - name: Validate generated .drawio files in strict mode

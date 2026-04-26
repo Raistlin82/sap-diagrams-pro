@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<mxfile host="sap-diagrams-pro" modified="2026-04-26T17:27:07+00:00" agent="sap-diagrams-pro/0.1.0" version="24.7.8">
+<mxfile host="sap-diagrams-pro" modified="2026-04-26T20:32:32+00:00" agent="sap-diagrams-pro/0.1.0" version="24.7.8">
   <diagram id="d-fe65070e" name="NOVA Invoice Suite — L0">
-    <mxGraphModel dx="1422" dy="754" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+    <mxGraphModel dx="1422" dy="754" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="416" pageHeight="430" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -9,37 +9,55 @@
           <mxGeometry x="24" y="16" width="800" height="32" as="geometry" />
         </mxCell>
         <mxCell id="g-5b7dcd14" value="Finance Team" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#475E75;fillColor=#FFFFFF;arcSize=12;absoluteArcSize=1;strokeWidth=1.5;verticalAlign=top;align=left;fontColor=#1D2D3E;fontStyle=1;fontSize=13;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="24" y="24" width="485" height="285" as="geometry" />
+          <mxGeometry x="48" y="48" width="154" height="106" as="geometry" />
         </mxCell>
         <mxCell id="g-59d8f3ec" value="External Senders" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#475E75;fillColor=#F5F6F7;arcSize=12;absoluteArcSize=1;strokeWidth=1.5;verticalAlign=top;align=left;fontColor=#1D2D3E;fontStyle=1;fontSize=13;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="1090" y="24" width="485" height="285" as="geometry" />
+          <mxGeometry x="214" y="48" width="154" height="106" as="geometry" />
         </mxCell>
         <mxCell id="g-e5daba83" value="NOVA Invoice Suite" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#EBF8FF;arcSize=12;absoluteArcSize=1;strokeWidth=1.5;verticalAlign=top;align=left;fontColor=#1D2D3E;fontStyle=1;fontSize=13;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="557" y="357" width="485" height="285" as="geometry" />
+          <mxGeometry x="131" y="162" width="154" height="106" as="geometry" />
         </mxCell>
         <mxCell id="g-cf02869b" value="SAP S/4HANA" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=12;absoluteArcSize=1;strokeWidth=1.5;verticalAlign=top;align=left;fontColor=#1D2D3E;fontStyle=1;fontSize=13;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="1090" y="690" width="485" height="285" as="geometry" />
+          <mxGeometry x="131" y="276" width="154" height="106" as="geometry" />
         </mxCell>
         <mxCell id="n-480cef4b" value="AP / Finance" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=8;absoluteArcSize=1;strokeWidth=1.5;fontColor=#1D2D3E;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="g-5b7dcd14">
-          <mxGeometry x="16" y="32" width="160" height="80" as="geometry" />
+          <mxGeometry x="12" y="33" width="130" height="61" as="geometry" />
         </mxCell>
         <mxCell id="n-1f508ec9" value="Italian SDI + Suppliers" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=8;absoluteArcSize=1;strokeWidth=1.5;fontColor=#1D2D3E;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="g-59d8f3ec">
-          <mxGeometry x="16" y="32" width="160" height="80" as="geometry" />
+          <mxGeometry x="12" y="33" width="130" height="61" as="geometry" />
         </mxCell>
         <mxCell id="n-94a0426e" value="Invoice Processing" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=8;absoluteArcSize=1;strokeWidth=1.5;fontColor=#1D2D3E;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="g-e5daba83">
-          <mxGeometry x="16" y="32" width="160" height="80" as="geometry" />
+          <mxGeometry x="12" y="33" width="130" height="61" as="geometry" />
         </mxCell>
         <mxCell id="n-5cacba51" value="S/4HANA Cloud / On-Prem" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=8;absoluteArcSize=1;strokeWidth=1.5;fontColor=#1D2D3E;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="g-cf02869b">
-          <mxGeometry x="16" y="32" width="160" height="80" as="geometry" />
+          <mxGeometry x="12" y="33" width="130" height="61" as="geometry" />
         </mxCell>
-        <mxCell id="e-84896d3e" value="FatturaPA + PDF in" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;dashed=1;dashPattern=8 4;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;exitX=0.0;exitY=0.5;exitDx=0;exitDy=0;entryX=1.0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-1f508ec9" target="n-94a0426e">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="e-84896d3e" value="FatturaPA + PDF in" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;dashed=1;dashPattern=8 4;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1.0;exitDx=0;exitDy=0;entryX=0.5;entryY=0.0;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-1f508ec9" target="n-94a0426e">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="250" y="142" />
+              <mxPoint x="250" y="142" />
+              <mxPoint x="250" y="183" />
+            </Array>
+          </mxGeometry>
         </mxCell>
-        <mxCell id="e-dc188591" value="process / approve" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;dashed=0;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;exitX=1.0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-480cef4b" target="n-94a0426e">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="e-dc188591" value="process / approve" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;dashed=0;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1.0;exitDx=0;exitDy=0;entryX=0.5;entryY=0.0;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-480cef4b" target="n-94a0426e">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="166" y="142" />
+              <mxPoint x="166" y="142" />
+              <mxPoint x="166" y="183" />
+            </Array>
+          </mxGeometry>
         </mxCell>
-        <mxCell id="e-0e647f28" value="post supplier invoice" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;dashed=0;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;exitX=1.0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-94a0426e" target="n-5cacba51">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="e-0e647f28" value="post supplier invoice" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;dashed=0;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1.0;exitDx=0;exitDy=0;entryX=0.5;entryY=0.0;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-94a0426e" target="n-5cacba51">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="208" y="256" />
+              <mxPoint x="208" y="256" />
+              <mxPoint x="208" y="297" />
+            </Array>
+          </mxGeometry>
         </mxCell>
       </root>
     </mxGraphModel>

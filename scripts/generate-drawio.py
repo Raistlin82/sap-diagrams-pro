@@ -517,11 +517,52 @@ def _compute_anchors(
     return (0.5, 0.0), (0.5, 1.0)          # source-top    → target-bottom
 
 
-def emit(diagram: Diagram, shape_index: "ShapeIndex | None" = None) -> str:
+def emit(
+    diagram: Diagram,
+    shape_index: "ShapeIndex | None" = None,
+    layout: str = "auto",
+) -> str:
+    """Render the diagram to .drawio XML.
+
+    ``layout`` selects the positioning backend:
+      - ``"auto"``   — try graphviz dot, fall back to greedy if dot is missing
+      - ``"dot"``    — require dot; raise SystemExit if unavailable
+      - ``"greedy"`` — force the built-in 3×3 grid layout
+    """
     if shape_index is None:
         shape_index = ShapeIndex.load()
     nodes_by_id = {n.id: n for n in diagram.nodes}
-    group_geo = layout_groups(diagram.groups)
+
+    dot_result = None
+    if layout in ("auto", "dot"):
+        # Load _dot_layout via importlib so the script works regardless of
+        # whether scripts/ is on sys.path.
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "_dot_layout", Path(__file__).resolve().parent / "_dot_layout.py"
+        )
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _dot_compute_layout = _mod.compute_layout
+        dot_result = _dot_compute_layout(diagram, shape_index)
+        if dot_result is None and layout == "dot":
+            raise SystemExit(
+                "ERROR: --layout dot requested but graphviz `dot` is not "
+                "available, returned an error, or produced unparseable JSON. "
+                "Install with `brew install graphviz` (macOS) or "
+                "`apt install graphviz` (Debian/Ubuntu)."
+            )
+
+    if dot_result:
+        group_geo = dot_result["groups"]
+        node_geo = dot_result["nodes"]
+        edge_waypoints: dict[str, list[tuple[float, float]]] = dot_result["edges"]
+        canvas_w, canvas_h = dot_result["canvas"]
+    else:
+        group_geo = layout_groups(diagram.groups)
+        node_geo = {}
+        edge_waypoints = {}
+        canvas_w, canvas_h = CANVAS_W, CANVAS_H
 
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     mxfile = ET.Element(
@@ -553,8 +594,8 @@ def emit(diagram: Diagram, shape_index: "ShapeIndex | None" = None) -> str:
             "fold": "1",
             "page": "1",
             "pageScale": "1",
-            "pageWidth": str(CANVAS_W),
-            "pageHeight": str(CANVAS_H),
+            "pageWidth": str(canvas_w),
+            "pageHeight": str(canvas_h),
             "math": "0",
             "shadow": "0",
         },
@@ -680,10 +721,15 @@ def emit(diagram: Diagram, shape_index: "ShapeIndex | None" = None) -> str:
     node_abs_geom: dict[str, tuple[int, int, int, int]] = {}
 
     for n in diagram.nodes:
-        x, y = node_xy[n.id]
         style, is_icon, label = _node_style(n, shape_index)
-        # SAP icons are square; plain boxes are wide rectangles.
-        w, h = (ICON_W, ICON_H) if is_icon else (NODE_W, NODE_H)
+        # When dot layout is in effect, node_geo provides exact positions and
+        # sizes. Otherwise fall back to the greedy node_xy + ICON/PLAIN
+        # default sizes.
+        if n.id in node_geo:
+            x, y, w, h = node_geo[n.id]
+        else:
+            x, y = node_xy.get(n.id, (0, 0))
+            w, h = (ICON_W, ICON_H) if is_icon else (NODE_W, NODE_H)
         node_abs_geom[n.id] = (x, y, w, h)
 
         # Real drawio parenting: if the node belongs to a (sub-)group, parent
@@ -718,7 +764,7 @@ def emit(diagram: Diagram, shape_index: "ShapeIndex | None" = None) -> str:
             },
         )
 
-    # 4. Edges — exit/entry anchors derived from absolute node geometries.
+    # 4. Edges — exit/entry anchors + optional waypoints from dot.
     for e in diagram.edges:
         src_geom = node_abs_geom.get(e.source)
         tgt_geom = node_abs_geom.get(e.target)
@@ -735,7 +781,21 @@ def emit(diagram: Diagram, shape_index: "ShapeIndex | None" = None) -> str:
                 "target": _stable_id("n", e.target),
             },
         )
-        ET.SubElement(e_cell, "mxGeometry", attrib={"relative": "1", "as": "geometry"})
+        geom_el = ET.SubElement(
+            e_cell, "mxGeometry", attrib={"relative": "1", "as": "geometry"}
+        )
+        # When dot has computed waypoints for this edge, embed them so the
+        # final route follows the SAP-style L/U paths instead of straight
+        # diagonals.
+        wps = edge_waypoints.get(e.id, [])
+        if wps:
+            arr = ET.SubElement(geom_el, "Array", attrib={"as": "points"})
+            for wx, wy in wps:
+                ET.SubElement(
+                    arr,
+                    "mxPoint",
+                    attrib={"x": str(int(round(wx))), "y": str(int(round(wy)))},
+                )
 
     return _serialize(mxfile)
 
@@ -772,11 +832,21 @@ def main(argv: list[str] | None = None) -> int:
         default="-",
         help="Path to .drawio output ('-' for stdout, default).",
     )
+    parser.add_argument(
+        "--layout",
+        choices=("auto", "dot", "greedy"),
+        default="auto",
+        help=(
+            "Layout backend. 'auto' uses graphviz dot if available else "
+            "the built-in greedy 3x3 grid. 'dot' requires graphviz. "
+            "'greedy' forces the built-in layout."
+        ),
+    )
     args = parser.parse_args(argv)
 
     payload = _read_input(args.input)
     diagram = parse_json(payload)
-    xml = emit(diagram)
+    xml = emit(diagram, layout=args.layout)
     _write_output(xml, args.out)
     if args.out != "-":
         print(f"✅ Wrote {args.out}", file=sys.stderr)
