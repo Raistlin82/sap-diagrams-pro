@@ -63,3 +63,4 @@ tech_id,canonical_name,aliases
 32136-edge-integration-cell_sd,SAP Edge Integration Cell,EIC|Edge Cell
 33149-sap-s4hana-for-microsoft-teams_sd,SAP S/4HANA for Microsoft Teams,S/4 Teams|S4 for Teams
 48072-sap-identity-provisoning,SAP Identity Provisioning,IPS|Identity Provisioning
+31015-sap-cloud-identity_sap-authorization-and-trust-management-service_sd,SAP Authorization and Trust Management Service,XSUAA|Authorization & Trust Mgmt|Auth Trust Mgmt|Trust Management
