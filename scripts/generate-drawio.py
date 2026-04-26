@@ -38,6 +38,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Default location of the shape index built by build-shape-index.py.
+DEFAULT_SHAPE_INDEX = (
+    Path(__file__).resolve().parent.parent / "assets" / "shape-index.json"
+)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Horizon palette (from btp-solution-diagrams/guideline/docs/btp_guideline/foundation.md)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -72,12 +77,22 @@ GROUP_STYLES = {
     "external": (PALETTE["non_sap_border"], PALETTE["non_sap_fill"]),
 }
 
-# Line styles per the guideline.
+# Line styles per the guideline. The base style matches the SAP convention
+# observed in the official editable examples (orthogonalEdgeStyle, blockThin
+# arrow head, jettySize=auto). The "dashed" variants override `dashed`/
+# `dashPattern`, and "thick" reserves strokeWidth=4 for firewalls only.
+_EDGE_BASE = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
+    "html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;"
+    "strokeColor={stroke};strokeWidth=1.5;"
+)
 EDGE_STYLES = {
-    "solid": "endArrow=classic;startArrow=none;dashed=0;strokeWidth=1.5;",
-    "dashed": "endArrow=classic;startArrow=none;dashed=1;dashPattern=8 4;strokeWidth=1.5;",
-    "dotted": "endArrow=classic;startArrow=none;dashed=1;dashPattern=1 4;strokeWidth=1.5;",
-    "thick": "endArrow=none;startArrow=none;dashed=0;strokeWidth=4;",
+    "solid":  _EDGE_BASE + "dashed=0;",
+    "dashed": _EDGE_BASE + "dashed=1;dashPattern=8 4;",
+    "dotted": _EDGE_BASE + "dashed=1;dashPattern=1 4;",
+    "thick":  _EDGE_BASE.replace("strokeWidth=1.5", "strokeWidth=4")
+                        .replace("endArrow=blockThin", "endArrow=none")
+                        + "dashed=0;",
 }
 
 # Layout grid for groups (3×3).
@@ -102,10 +117,15 @@ CANVAS_H = 1000
 CELL_W = CANVAS_W // 3
 CELL_H = CANVAS_H // 3
 GROUP_PADDING = 24
+# Plain (no SAP icon) box sizing — used for users, non-SAP, unresolved services.
 NODE_W = 160
 NODE_H = 80
+# SAP icon node sizing — square icon + label below it. Matches the SAP shape
+# library style `verticalLabelPosition=bottom;verticalAlign=top;`.
+ICON_W = 80
+ICON_H = 80
 NODE_GAP_X = 24
-NODE_GAP_Y = 24
+NODE_GAP_Y = 36  # extra vertical room because labels sit below SAP icons
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -148,6 +168,64 @@ class Diagram:
     groups: list[Group]
     nodes: list[Node]
     edges: list[Edge]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shape index — maps service names → SAP icon style strings
+# ─────────────────────────────────────────────────────────────────────────────
+class ShapeIndex:
+    """Wrap shape-index.json and provide fast service-name resolution."""
+
+    def __init__(self, services: list[dict[str, Any]]):
+        self._by_name: dict[str, dict[str, Any]] = {}
+        self._by_alias: dict[str, dict[str, Any]] = {}
+        self._by_techid: dict[str, dict[str, Any]] = {}
+        for s in services:
+            name = s.get("name", "")
+            tech = s.get("techId", "")
+            size = s.get("size", "M")
+            # Prefer M-size for the canonical lookup — resilient default.
+            existing = self._by_name.get(name)
+            if not existing or (existing.get("size") != "M" and size == "M"):
+                self._by_name[name] = s
+            if tech:
+                existing = self._by_techid.get(tech)
+                if not existing or (existing.get("size") != "M" and size == "M"):
+                    self._by_techid[tech] = s
+            for alias in s.get("aliases", []) or []:
+                existing = self._by_alias.get(alias.lower())
+                if not existing or (existing.get("size") != "M" and size == "M"):
+                    self._by_alias[alias.lower()] = s
+
+    @classmethod
+    def load(cls, path: Path | None = None) -> "ShapeIndex":
+        """Load from JSON. Returns an empty index if the file is missing."""
+        target = path or DEFAULT_SHAPE_INDEX
+        if not target.exists():
+            return cls([])
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return cls([])
+        return cls(data.get("services", []))
+
+    def resolve(self, query: str | None) -> dict[str, Any] | None:
+        """Lookup priority: exact name → exact alias (case-insensitive) →
+        exact techId → fuzzy substring on name. Returns None on miss."""
+        if not query:
+            return None
+        if query in self._by_name:
+            return self._by_name[query]
+        if query.lower() in self._by_alias:
+            return self._by_alias[query.lower()]
+        if query in self._by_techid:
+            return self._by_techid[query]
+        # Fuzzy: case-insensitive substring on canonical names.
+        ql = query.lower()
+        for name, svc in self._by_name.items():
+            if ql in name.lower() or name.lower() in ql:
+                return svc
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -293,28 +371,47 @@ def _group_style(g: Group) -> str:
     )
 
 
-def _node_style(n: Node) -> str:
-    # Default styled box. For real generation, an icon URL/shape would replace
-    # the basic style; we keep a clean placeholder here so the diagram is
-    # readable even before the shape index resolves a true SAP icon.
-    return (
+def _node_style(n: Node, shape_index: "ShapeIndex") -> tuple[str, bool, str]:
+    """Return (style_string, is_sap_icon, display_label).
+
+    When the node's ``service`` resolves in the shape index, we use the SAP
+    icon's drawioStyle directly (an SVG inline base64 image). The display
+    label becomes the SAP canonical name unless the JSON intermediate
+    explicitly overrides it via Node.label.
+    """
+    svc = shape_index.resolve(n.service)
+    if svc and svc.get("drawioStyle"):
+        # SAP icon found — use the official style.
+        canonical = svc.get("name") or n.label
+        # Prefer user-provided label; fall back to canonical SAP name.
+        label = n.label if n.label and n.label != n.id else canonical
+        return svc["drawioStyle"], True, label
+    # Fallback: clean styled box that respects the Horizon palette.
+    style = (
         f"rounded=1;whiteSpace=wrap;html=1;"
         f"strokeColor={PALETTE['btp_border']};fillColor=#FFFFFF;"
         f"arcSize=8;absoluteArcSize=1;strokeWidth=1.5;"
         f"fontColor={PALETTE['title']};fontSize=11;align=center;verticalAlign=middle;"
     )
+    return style, False, n.label
 
 
 def _edge_style(e: Edge) -> str:
-    base = EDGE_STYLES[e.style]
+    # Edges use the SAP non-SAP grey by default; semantic edges (positive/
+    # negative/critical) can be added in v0.2 via an optional ``severity``
+    # field on the Edge dataclass.
+    stroke = PALETTE["non_sap_border"]
+    base = EDGE_STYLES[e.style].format(stroke=stroke)
     if e.direction == "bidirectional":
-        base = base.replace("startArrow=none", "startArrow=classic")
+        base += "startArrow=blockThin;startFill=1;"
     elif e.direction == "none":
-        base = base.replace("endArrow=classic", "endArrow=none")
-    return f"{base}fontSize=10;fontColor={PALETTE['text']};"
+        base = base.replace("endArrow=blockThin", "endArrow=none").replace("endFill=1", "endFill=0")
+    return f"{base}fontSize=10;fontColor={PALETTE['text']};labelBackgroundColor=#FFFFFF;"
 
 
-def emit(diagram: Diagram) -> str:
+def emit(diagram: Diagram, shape_index: "ShapeIndex | None" = None) -> str:
+    if shape_index is None:
+        shape_index = ShapeIndex.load()
     nodes_by_id = {n.id: n for n in diagram.nodes}
     group_geo = layout_groups(diagram.groups)
 
@@ -429,13 +526,19 @@ def emit(diagram: Diagram) -> str:
 
     for n in diagram.nodes:
         x, y = node_xy[n.id]
+        style, is_icon, label = _node_style(n, shape_index)
+        # SAP icons are square; plain boxes are wide rectangles.
+        if is_icon:
+            w, h = ICON_W, ICON_H
+        else:
+            w, h = NODE_W, NODE_H
         n_cell = ET.SubElement(
             root,
             "mxCell",
             attrib={
                 "id": _stable_id("n", n.id),
-                "value": n.label,
-                "style": _node_style(n),
+                "value": label,
+                "style": style,
                 "vertex": "1",
                 "parent": "1",
             },
@@ -446,8 +549,8 @@ def emit(diagram: Diagram) -> str:
             attrib={
                 "x": str(x),
                 "y": str(y),
-                "width": str(NODE_W),
-                "height": str(NODE_H),
+                "width": str(w),
+                "height": str(h),
                 "as": "geometry",
             },
         )

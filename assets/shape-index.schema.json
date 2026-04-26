@@ -24,7 +24,12 @@
           "format": "date-time"
         },
         "totalServices": {"type": "integer", "minimum": 0},
-        "schemaVersion": {"type": "string", "default": "1.0.0"}
+        "schemaVersion": {"type": "string", "default": "1.1.0"},
+        "overridesApplied": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of CSV override entries applied at build time."
+        }
       }
     },
     "sets": {
@@ -61,12 +66,16 @@
         "properties": {
           "name": {
             "type": "string",
-            "description": "Canonical SAP service name (e.g. 'SAP Build Process Automation')."
+            "description": "User-friendly canonical SAP service name from the shape's `value` field, post CSV override (e.g. 'SAP Build Process Automation')."
+          },
+          "techId": {
+            "type": "string",
+            "description": "Original tech ID from the SAP library (e.g. '20002-sap-build-process-automation_sd'). Preserved as alias for backwards compatibility."
           },
           "aliases": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Common aliases / abbreviations (BPA, Build Apps, ...)."
+            "description": "Aliases for resolution: tech ID, acronyms, common short forms, CSV-curated additions."
           },
           "set": {
             "type": "string",

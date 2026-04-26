@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 Gabriele Capparelli
+# SPDX-License-Identifier: Apache-2.0
+#
+# Manual overrides applied on top of the auto-normalized shape-index names.
+# Format: tech_id,canonical_name,aliases (aliases pipe-separated, no spaces)
+#
+# Add an override when the auto-normalized name is wrong, awkward or missing
+# common aliases. The auto-normalizer covers ~90% of cases; this CSV is for
+# the remaining ~10% where editorial judgment is needed.
+#
+# Edit, then run: python3 scripts/build-shape-index.py
+#
+# Lines starting with # are ignored. Blank lines are ignored.
+# tech_id is matched case-sensitively against shape-index.json services[].name (pre-normalize).
+
+tech_id,canonical_name,aliases
+10002-cloud-integration-automation_sd,SAP Cloud Integration Automation,CIAS|Cloud Integration Automation
+10014-sap-audit-log-service_sd,SAP Audit Log Service,Audit Log|SAP Audit
+10017-sap-btp_cloud-foundry-runtime_sd,SAP BTP Cloud Foundry Runtime,Cloud Foundry|CF Runtime|CF
+10035-sap-cloud-identity_sap-keystore-service_sd,SAP Cloud Identity Keystore Service,Keystore Service|IAS Keystore
+20002-sap-build-process-automation_sd,SAP Build Process Automation,BPA|Build Process Auto|Workflow
+20004-sap-build-apps_sd,SAP Build Apps,Build Apps|AppGyver
+20005-sap-build-code_sd,SAP Build Code,Build Code|BAS Build
+20006-sap-build-work-zone_sd,SAP Build Work Zone advanced edition,Work Zone|Launchpad|FLP
+20007-sap-cloud-application-programming-model_sd,SAP Cloud Application Programming Model,CAP|CDS|@sap/cds
+20008-sap-cloud-connector_sd,SAP Cloud Connector,Cloud Connector|SCC
+20009-sap-cloud-integration_sd,SAP Cloud Integration,CPI|Cloud Integration|iflows
+20010-sap-integration-suite_sd,SAP Integration Suite,Integration Suite|IS
+20011-sap-api-management_sd,SAP API Management,API Mgmt|APIM
+20012-sap-open-connectors_sd,SAP Open Connectors,Open Connectors|OC
+20013-sap-event-mesh_sd,SAP Event Mesh,Event Mesh|EM|Pub/Sub
+20015-sap-document-management-service_sd,SAP Document Management Service,DMS|Document Mgmt
+20016-sap-document-information-extraction_sd,SAP Document Information Extraction,DOX|Document Info Extraction
+20017-sap-ai-core_sd,SAP AI Core,AI Core|AICORE
+20018-sap-ai-launchpad_sd,SAP AI Launchpad,AI Launchpad
+20019-sap-generative-ai-hub_sd,SAP Generative AI Hub,GenAI Hub|Joule Studio
+20020-sap-joule_sd,SAP Joule,Joule|AI Assistant
+20021-sap-cloud-logging_sd,SAP Cloud Logging,Cloud Logging|Logging
+20022-sap-cloud-alm_sd,SAP Cloud ALM,Cloud ALM|ALM
+20023-sap-alert-notification-service_sd,SAP Alert Notification Service,ANS|Alert Notification
+20025-sap-business-application-studio_sd,SAP Business Application Studio,BAS|App Studio
+20026-sap-service-manager_sd,SAP Service Manager,Service Manager|SM
+20027-sap-datasphere_sd,SAP Datasphere,Datasphere|DSP|DWC
+20028-sap-analytics-cloud_sd,SAP Analytics Cloud,SAC|Analytics Cloud
+20029-sap-data-intelligence_sd,SAP Data Intelligence,Data Intelligence|DI
+20030-sap-master-data-integration_sd,SAP Master Data Integration,MDI|Master Data Integration
+20031-sap-cloud-transport-management-service_sd,SAP Cloud Transport Management Service,cTMS|Cloud Transport|TMS
+20032-sap-continuous-integration-and-delivery_sd,SAP Continuous Integration and Delivery,BTP CI/CD|Continuous Integration
+20033-sap-mobile-services_sd,SAP Mobile Services,Mobile Services|Mobile
+20034-sap-task-center_sd,SAP Task Center,Task Center
+20035-sap-start_sd,SAP Start,Start|BTP Start
+20036-sap-landscape-management-cloud_sd,SAP Landscape Management Cloud,LaMa Cloud|LMC
+20062-sap-application-logging-service-for-sap-btp_sd,SAP Application Logging Service for SAP BTP,Application Logging|App Logging
+20074-sap-cloud-identity_sap-custom-domain-service_sd,SAP Cloud Identity Custom Domain Service,Custom Domain
+20090-sap-job-scheduling-service_sd,SAP Job Scheduling Service,Job Scheduler|Job Scheduling|Cron
+20092-sap-monitoring-service-for-sap-btp_sd,SAP Monitoring Service for SAP BTP,Monitoring Service
+20095-sap-translation-hub_sd,SAP Translation Hub,Translation Hub
+31045-sap-solution-lifecycle-management-service-for-sap-btp_sd,SAP Solution Lifecycle Management Service for SAP BTP,SLM|Solution Lifecycle Mgmt
+31068-sap-build-work-zone_sd,SAP Build Work Zone,Work Zone Standard
+31113-sap-connectivity-service_sd,SAP Connectivity Service,Connectivity|BTP Connectivity
+32082-sap-event-broker-for-sap-cloud-applications_sd,SAP Event Broker for SAP Cloud Applications,Event Broker
+32129-sap-cloud-identity-service,SAP Cloud Identity Services,IAS|Identity Authentication
+32136-edge-integration-cell_sd,SAP Edge Integration Cell,EIC|Edge Cell
+33149-sap-s4hana-for-microsoft-teams_sd,SAP S/4HANA for Microsoft Teams,S/4 Teams|S4 for Teams
+48072-sap-identity-provisoning,SAP Identity Provisioning,IPS|Identity Provisioning
