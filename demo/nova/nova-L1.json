@@ -68,7 +68,7 @@
     {"id": "e22", "source": "cap", "target": "audit", "style": "dashed", "label": "audit events"},
     {"id": "e23", "source": "scheduler", "target": "cap", "style": "dashed", "label": "12 cron jobs"},
     {"id": "e24", "source": "logging", "target": "alm", "style": "dashed", "label": "metrics"},
-    {"id": "e25", "source": "ias", "target": "xsuaa", "style": "solid", "label": "trust"},
+    {"id": "e25", "source": "ias", "target": "xsuaa", "style": "solid", "label": "Trust", "kind": "trust"},
     {"id": "e26", "source": "cap", "target": "xsuaa", "style": "solid", "label": "JWT validation"}
   ]
 }

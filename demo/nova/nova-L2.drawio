@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<mxfile host="sap-diagrams-pro" modified="2026-04-26T21:12:25+00:00" agent="sap-diagrams-pro/0.1.0" version="24.7.8">
+<mxfile host="sap-diagrams-pro" modified="2026-04-26T21:41:20+00:00" agent="sap-diagrams-pro/0.1.0" version="24.7.8">
   <diagram id="d-62834bc3" name="NOVA Invoice Suite — L2 Technical">
     <mxGraphModel dx="1422" dy="754" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="4126" pageHeight="930" math="0" shadow="0">
       <root>
@@ -560,7 +560,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="e-be399bdd" value="trust (IAS-XSUAA)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;dashed=0;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;labelBorderColor=none;verticalAlign=middle;align=center;exitX=0.0;exitY=0.5;exitDx=0;exitDy=0;entryX=1.0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-8aa9e6e2" target="n-75bab467">
+        <mxCell id="e-be399bdd" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#CC00DC;strokeWidth=1.5;dashed=0;startArrow=blockThin;startFill=1;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;labelBorderColor=none;verticalAlign=middle;align=center;exitX=0.0;exitY=0.5;exitDx=0;exitDy=0;entryX=1.0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-8aa9e6e2" target="n-75bab467">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
               <mxPoint x="3945" y="499" />
@@ -570,6 +570,11 @@
               <mxPoint x="3790" y="499" />
               <mxPoint x="3790" y="567" />
             </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p-be399bdd" value="Trust" style="rounded=1;whiteSpace=wrap;html=1;arcSize=50;strokeColor=#CC00DC;fillColor=#FFF0FA;fontColor=#CC00DC;fontStyle=1;strokeWidth=1.5;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="e-be399bdd" connectable="0">
+          <mxGeometry width="72" height="26" relative="1" as="geometry">
+            <mxPoint x="-36" y="-13" as="offset" />
           </mxGeometry>
         </mxCell>
         <mxCell id="e-ae5638d3" value="OIDC (on-prem)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;dashed=0;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;labelBorderColor=none;verticalAlign=middle;align=center;exitX=0.0;exitY=0.5;exitDx=0;exitDy=0;entryX=1.0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-d1081e35" target="n-ac4be5ac">

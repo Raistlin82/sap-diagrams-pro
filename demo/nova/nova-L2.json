@@ -114,7 +114,7 @@
     {"id": "e36", "source": "cap", "target": "audit", "style": "dashed", "label": "audit events"},
     {"id": "e37", "source": "logging", "target": "alm", "style": "dashed", "label": "metrics"},
 
-    {"id": "e38", "source": "ias", "target": "xsuaa", "style": "solid", "label": "trust (IAS-XSUAA)"},
+    {"id": "e38", "source": "ias", "target": "xsuaa", "style": "solid", "label": "Trust", "kind": "trust"},
     {"id": "e39", "source": "keycloak", "target": "cap", "style": "solid", "label": "OIDC (on-prem)"},
     {"id": "e40", "source": "cap", "target": "xsuaa", "style": "solid", "label": "JWT validation"},
     {"id": "e41", "source": "ctms", "target": "kyma", "style": "dashed", "label": "deploy"},

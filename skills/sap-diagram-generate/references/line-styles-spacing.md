@@ -20,6 +20,38 @@ The SAP guideline assigns specific semantics to line styles. **Always include a 
 
 The plugin's `EDGE_STYLES` dict in `generate-drawio.py` encodes exactly these four. Adding a new style requires updating both the generator and the validator.
 
+## Edge kind — semantic colours
+
+Beyond the line style, an edge can declare a semantic ``kind`` that switches its stroke colour and (for `trust`) the label rendering. The default is `"default"` (Horizon non-SAP grey `#475E75`). Set ``kind`` on the JSON edge object alongside ``style``, ``label`` and ``direction``.
+
+| `kind` | Stroke | Use case | Notes |
+|---|---|---|---|
+| `default` | `#475E75` (grey) | Standard data flow | Plain label with white background. |
+| `trust` | `#CC00DC` (pink) | IAS ↔ XSUAA, IAS ↔ identity provider, federation, OAuth trust | Auto-bidirectional. Label rendered as a pink pill (rounded rectangle with `arcSize=50`, fill `#FFF0FA`, bold pink text) — this is the SAP-canonical visualisation of a trust relationship and matches the `SAP_Private_Link_Service_L2.drawio` reference. |
+| `positive` | `#188918` (green) | Certified / success flow | Use sparingly. |
+| `critical` | `#C35500` (orange) | Degraded / at-risk flow | E.g. a circuit-breaker-open dependency. |
+| `negative` | `#D20A0A` (red) | Failed / deprecated flow | E.g. a removed integration. |
+
+Example trust edge in JSON:
+
+```json
+{
+  "id": "e-trust-1",
+  "source": "ias",
+  "target": "xsuaa",
+  "style": "solid",
+  "label": "Trust",
+  "kind": "trust"
+}
+```
+
+The plugin will:
+
+1. Render the connector as a pink (`#CC00DC`) bidirectional `blockThin` arrow.
+2. Emit a separate child `mxCell` with `vertex="1"` and `parent=<edge_id>`, styled as a rounded pill (`arcSize=50`, pink border, `#FFF0FA` fill, bold pink text), centred on the edge midpoint via relative geometry + offset.
+
+Why a separate vertex for the pill: drawio does not honour `arcSize` on inline edge labels. The SAP samples (e.g. cell `r2Ocmoq0C5dt8iKspmja-162` in Private Link L2) use the same multi-cell pattern.
+
 ## Arrow direction
 
 | Direction | drawio attribute | Use when |

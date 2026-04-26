@@ -159,6 +159,13 @@ class Edge:
     style: str = "solid"
     label: str = ""
     direction: str = "forward"  # forward | bidirectional | none
+    # Semantic edge type for SAP-canonical highlights:
+    #   "default"   — standard non-SAP grey #475E75 line + plain label
+    #   "trust"     — pink #CC00DC bidirectional + pill label (IAS-XSUAA / IDP)
+    #   "positive"  — green  #188918 (success/certified flow)
+    #   "critical"  — orange #C35500 (degraded/at-risk flow)
+    #   "negative"  — red    #D20A0A (failed/deprecated flow)
+    kind: str = "default"
 
 
 @dataclass
@@ -276,6 +283,7 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
         if node.group and node.group in group_map:
             group_map[node.group].nodes.append(node.id)
 
+    valid_kinds = {"default", "trust", "positive", "critical", "negative"}
     edges: list[Edge] = []
     for e in raw_edges:
         style = e.get("style", "solid")
@@ -283,6 +291,12 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
             raise ValueError(
                 f"edge {e.get('id')!r}: style must be one of "
                 f"{sorted(EDGE_STYLES)} (got {style!r})"
+            )
+        kind = e.get("kind", "default")
+        if kind not in valid_kinds:
+            raise ValueError(
+                f"edge {e.get('id')!r}: kind must be one of "
+                f"{sorted(valid_kinds)} (got {kind!r})"
             )
         edges.append(
             Edge(
@@ -292,6 +306,7 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
                 style=style,
                 label=e.get("label", ""),
                 direction=e.get("direction", "forward"),
+                kind=kind,
             )
         )
 
@@ -458,6 +473,15 @@ def _node_style(n: Node, shape_index: "ShapeIndex") -> tuple[str, bool, str]:
     return style, False, n.label
 
 
+_EDGE_KIND_STROKE = {
+    "default":  PALETTE["non_sap_border"],
+    "trust":    PALETTE["accent_pink_border"],   # #CC00DC
+    "positive": PALETTE["positive_border"],      # #188918
+    "critical": PALETTE["critical_border"],      # #C35500
+    "negative": PALETTE["negative_border"],      # #D20A0A
+}
+
+
 def _edge_style(
     e: Edge,
     src_geom: tuple[int, int, int, int] | None = None,
@@ -465,17 +489,20 @@ def _edge_style(
 ) -> str:
     """Build the SAP-canonical edge style.
 
-    When ``src_geom`` and ``tgt_geom`` are provided (absolute x,y,w,h of the
-    source and target node), exitX/exitY and entryX/entryY anchor points are
-    computed from the geometric relationship between the two shapes. This is
-    what makes SAP edges route as orthogonal L/U shapes around boxes instead
-    of cutting straight through them.
+    Stroke colour comes from the edge's ``kind`` (default grey, trust pink,
+    semantic green/orange/red). Trust edges are also automatically rendered
+    as bidirectional because trust is a symmetric relationship in SAP IAM
+    diagrams.
     """
-    stroke = PALETTE["non_sap_border"]
+    stroke = _EDGE_KIND_STROKE.get(e.kind, PALETTE["non_sap_border"])
     base = EDGE_STYLES[e.style].format(stroke=stroke)
-    if e.direction == "bidirectional":
+    direction = e.direction
+    if e.kind == "trust" and direction == "forward":
+        # Trust is canonically a two-way relationship (IAS ↔ XSUAA).
+        direction = "bidirectional"
+    if direction == "bidirectional":
         base += "startArrow=blockThin;startFill=1;"
-    elif e.direction == "none":
+    elif direction == "none":
         base = base.replace("endArrow=blockThin", "endArrow=none").replace("endFill=1", "endFill=0")
     # labelBackgroundColor with explicit padding hides the line behind the
     # text — without this, edge labels sit on top of the route and become
@@ -778,12 +805,18 @@ def emit(
     for e in diagram.edges:
         src_geom = node_abs_geom.get(e.source)
         tgt_geom = node_abs_geom.get(e.target)
+        edge_id = _stable_id("e", e.id)
+        # For kind=trust, the visible label is rendered as a separate
+        # rounded-pill vertex child of the edge (drawio doesn't support
+        # arcSize on inline edge labels). The edge cell itself carries
+        # an empty value to avoid a duplicate label.
+        inline_value = "" if e.kind == "trust" else e.label
         e_cell = ET.SubElement(
             root,
             "mxCell",
             attrib={
-                "id": _stable_id("e", e.id),
-                "value": e.label,
+                "id": edge_id,
+                "value": inline_value,
                 "style": _edge_style(e, src_geom, tgt_geom),
                 "edge": "1",
                 "parent": "1",
@@ -806,6 +839,42 @@ def emit(
                     "mxPoint",
                     attrib={"x": str(int(round(wx))), "y": str(int(round(wy)))},
                 )
+
+        # Trust pill label — rendered as a child mxCell with rounded pill
+        # styling (arcSize=50). drawio anchors it at the relative position
+        # (0.5, 0) along the edge midpoint.
+        if e.kind == "trust" and e.label:
+            stroke = _EDGE_KIND_STROKE["trust"]
+            pill = ET.SubElement(
+                root,
+                "mxCell",
+                attrib={
+                    "id": _stable_id("p", e.id),
+                    "value": e.label,
+                    "style": (
+                        f"rounded=1;whiteSpace=wrap;html=1;arcSize=50;"
+                        f"strokeColor={stroke};fillColor={PALETTE['accent_pink_fill']};"
+                        f"fontColor={stroke};fontStyle=1;strokeWidth=1.5;"
+                        f"fontSize=11;align=center;verticalAlign=middle;"
+                    ),
+                    "vertex": "1",
+                    "parent": edge_id,
+                    "connectable": "0",
+                },
+            )
+            pill_geom = ET.SubElement(
+                pill,
+                "mxGeometry",
+                attrib={"width": "72", "height": "26", "relative": "1", "as": "geometry"},
+            )
+            # Centre the pill on the edge: x=-36, y=-13 offsets the cell so
+            # its midpoint coincides with the edge midpoint (relative=1
+            # references the edge's midpoint as origin).
+            ET.SubElement(
+                pill_geom,
+                "mxPoint",
+                attrib={"x": "-36", "y": "-13", "as": "offset"},
+            )
 
     return _serialize(mxfile)
 
