@@ -42,6 +42,32 @@ from typing import Any
 DEFAULT_SHAPE_INDEX = (
     Path(__file__).resolve().parent.parent / "assets" / "shape-index.json"
 )
+DEFAULT_CANONICAL_PILLS = (
+    Path(__file__).resolve().parent.parent / "assets" / "canonical-pills.json"
+)
+
+
+def _load_canonical_pills() -> dict:
+    """Load the catalog of 42 SAP-canonical pill labels harvested from the
+    138 official .drawio files (btp-solution-diagrams + architecture-center).
+
+    Each entry maps a label (e.g. "SAML2/OIDC", "Group", "OIDC", "ORD",
+    "Health Check", "REST/SPI", "Identity Lifecycle", "Business Role")
+    to its canonical colour family (green/grey/purple/pink/teal/blue) and
+    exact stroke + fill hex values used in the SAP samples. This lets
+    authors write `kind: "annotation", label: "Group"` and have the colour
+    auto-resolve to purple #5D36FF / fill #F1ECFF, the way SAP actually
+    renders it.
+    """
+    if not DEFAULT_CANONICAL_PILLS.exists():
+        return {}
+    try:
+        return json.loads(DEFAULT_CANONICAL_PILLS.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+_CANONICAL_PILLS = _load_canonical_pills()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Horizon palette (from btp-solution-diagrams/guideline/docs/btp_guideline/foundation.md)
@@ -119,8 +145,15 @@ GRID_POSITIONS = {
 }
 
 # Canvas geometry (matches SAP example diagrams).
-CANVAS_W = 1600
-CANVAS_H = 1000
+# A4 landscape — most-common canvas size across SAP samples (46/138 files).
+# Used as the greedy-layout fallback canvas. dot layout still computes its
+# own bbox; this only matters when --layout greedy is forced.
+CANVAS_W = 1169
+CANVAS_H = 827
+
+# SAP uses the proprietary "72 Brand" font in their assets. We declare the
+# font family chain so drawio falls back gracefully on machines without it.
+SAP_FONT_FAMILY = "72,Helvetica,Arial,sans-serif"
 CELL_W = CANVAS_W // 3
 CELL_H = CANVAS_H // 3
 GROUP_PADDING = 24
@@ -208,6 +241,16 @@ class Edge:
 
 
 @dataclass
+class Preset:
+    """A SAP essential preset embedded into the diagram (e.g. 'user-and-client',
+    'legend', 'cloud-connector', 'saml-oidc', '3rd-party-idp-and-protocols')."""
+    slug: str
+    x: int = 32
+    y: int = 60
+    label: str | None = None  # optional override of preset's internal labels
+
+
+@dataclass
 class Diagram:
     title: str
     level: str
@@ -215,6 +258,7 @@ class Diagram:
     groups: list[Group]
     nodes: list[Node]
     edges: list[Edge]
+    presets: list[Preset] = field(default_factory=list)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,6 +271,7 @@ class ShapeIndex:
         self,
         services: list[dict[str, Any]],
         generic_icons: list[dict[str, Any]] | None = None,
+        essentials: list[dict[str, Any]] | None = None,
     ):
         self._by_name: dict[str, dict[str, Any]] = {}
         self._by_alias: dict[str, dict[str, Any]] = {}
@@ -234,6 +279,12 @@ class ShapeIndex:
         # Generic icon catalog: keyed by lowercased base + variant.
         # e.g. ("user", "non-sap") → entry. Default variant is non-sap.
         self._generic: dict[tuple[str, str], dict[str, Any]] = {}
+        # Essentials catalog: keyed by slug for `Diagram.presets[]` lookup.
+        self._essentials: dict[str, dict[str, Any]] = {}
+        for e in essentials or []:
+            slug = e.get("slug")
+            if slug:
+                self._essentials[slug] = e
         for g in generic_icons or []:
             base = (g.get("base") or "").lower().strip()
             variant = (g.get("variant") or "non-sap").lower().strip()
@@ -270,7 +321,16 @@ class ShapeIndex:
             data = json.loads(target.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return cls([])
-        return cls(data.get("services", []), data.get("genericIcons", []))
+        return cls(
+            data.get("services", []),
+            data.get("genericIcons", []),
+            data.get("essentials", []),
+        )
+
+    def get_essential(self, slug: str) -> dict[str, Any] | None:
+        """Lookup a SAP essential preset by slug (e.g. "user-and-client",
+        "legend", "cloud-connector", "saml-oidc", "3rd-party-idp-and-protocols")."""
+        return self._essentials.get(slug)
 
     def resolve_generic(self, query: str | None) -> dict[str, Any] | None:
         """Lookup a generic icon by base name (+ optional variant suffix).
@@ -423,6 +483,17 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
             )
         )
 
+    presets = []
+    for p in payload.get("presets", []) or []:
+        presets.append(
+            Preset(
+                slug=p["slug"],
+                x=int(p.get("x", 32)),
+                y=int(p.get("y", 60)),
+                label=p.get("label"),
+            )
+        )
+
     return Diagram(
         title=title,
         level=level,
@@ -430,6 +501,7 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
         groups=list(group_map.values()),
         nodes=nodes,
         edges=edges,
+        presets=presets,
     )
 
 
@@ -739,11 +811,17 @@ def _edge_style(
     diagrams.
     """
     if e.kind == "annotation":
-        # Annotation edges inherit colour from the chosen pill family.
-        pill_def = _ANNOTATION_PILL_PALETTE.get(
-            e.pillColor, _ANNOTATION_PILL_PALETTE["purple"]
-        )
-        stroke = pill_def["stroke"]
+        # Annotation edges: prefer canonical SAP color when the label
+        # matches a known pattern (SAML2/OIDC, Group, OIDC, …). Otherwise
+        # use the explicit pillColor family.
+        canonical = _CANONICAL_PILLS.get(e.label) if e.label else None
+        if canonical and canonical.get("stroke"):
+            stroke = canonical["stroke"]
+        else:
+            pill_def = _ANNOTATION_PILL_PALETTE.get(
+                e.pillColor, _ANNOTATION_PILL_PALETTE["purple"]
+            )
+            stroke = pill_def["stroke"]
     else:
         stroke = _EDGE_KIND_STROKE.get(e.kind, PALETTE["non_sap_border"])
     base = EDGE_STYLES[e.style].format(stroke=stroke)
@@ -907,8 +985,8 @@ def emit(
             "value": diagram_title,
             "style": (
                 f"text;html=1;align=left;verticalAlign=middle;"
-                f"fontColor={PALETTE['btp_border']};fontSize=18;fontStyle=1;"
-                f"fontFamily=Helvetica;"
+                f"fontColor={PALETTE['btp_border']};fontSize=20;fontStyle=1;"
+                f"fontFamily={SAP_FONT_FAMILY};"
             ),
             "vertex": "1",
             "parent": "1",
@@ -1224,7 +1302,22 @@ def emit(
         # regardless of the edge's actual length or routing.
         if has_pill and e.label:
             if e.kind == "annotation":
-                pill_def = _ANNOTATION_PILL_PALETTE.get(e.pillColor, _ANNOTATION_PILL_PALETTE["purple"])
+                # 1. Try canonical catalog first — if the label is a known
+                #    SAP-canonical pill (SAML2/OIDC, Group, OIDC, ORD, …),
+                #    use its exact stroke/fill from the 138 SAP examples.
+                canonical = _CANONICAL_PILLS.get(e.label)
+                if canonical:
+                    pill_def = {
+                        "stroke": canonical.get("stroke") or "#475F75",
+                        "fill":   canonical.get("fill") or "#F5F6F7",
+                        "fontColor": canonical.get("stroke") or "#475F75",
+                    }
+                else:
+                    # 2. Fall back to the user-chosen palette family
+                    #    (purple/green/pink/grey/blue/teal).
+                    pill_def = _ANNOTATION_PILL_PALETTE.get(
+                        e.pillColor, _ANNOTATION_PILL_PALETTE["purple"]
+                    )
             else:
                 pill_def = _EDGE_KIND_PILL[e.kind]
             # Width adapts to label length (rough heuristic: ~6.5 px/char +
@@ -1261,15 +1354,108 @@ def emit(
                 attrib={"x": str(-pill_w // 2), "y": "-13", "as": "offset"},
             )
 
-    # 5. Legend molecule (bottom-right) — SAP-canonical convention seen in
-    # SAP_Private_Link_Service_L2.drawio. Auto-detects which line styles
-    # and edge kinds are present and includes only the relevant rows.
-    _emit_legend(root, diagram, canvas_w, canvas_h)
+    # 5. SAP essential presets — embed pre-composed organisms (User and
+    # client, Cloud Connector, SAML/OIDC, 3rd party IdP and protocols, …)
+    # at the requested coordinates. Uses raw XML from essentials.xml so
+    # the visual matches SAP's curated compositions verbatim.
+    for preset in diagram.presets:
+        _embed_preset(root, preset, shape_index)
+
+    # 6. Legend molecule (bottom-right). Two paths:
+    #    - User asked for 'sap' or 'sap-short' preset → embed SAP essential
+    #    - Otherwise auto-generate based on actual styles used.
+    _emit_legend(root, diagram, canvas_w, canvas_h, shape_index)
 
     return _serialize(mxfile)
 
 
-def _emit_legend(root: ET.Element, diagram: Diagram, canvas_w: int, canvas_h: int) -> None:
+def _embed_preset(root: ET.Element, preset: Preset, shape_index: ShapeIndex) -> None:
+    """Embed a SAP essential preset (multi-cell composition) into the
+    diagram at (preset.x, preset.y).
+
+    The essentials.xml entries store an mxGraphModel snippet with cells
+    using IDs like "0", "1", "2", "3", ... When we embed multiple presets
+    in one diagram, those IDs collide. We rewrite them with a stable
+    per-preset prefix derived from the slug, and translate coordinates
+    by (x, y).
+    """
+    essential = shape_index.get_essential(preset.slug)
+    if not essential:
+        return
+    raw = essential.get("rawXml") or ""
+    if not raw:
+        return
+    try:
+        snippet_root = ET.fromstring(f"<wrap>{raw}</wrap>")
+    except ET.ParseError:
+        return
+
+    prefix = f"p-{preset.slug}-{abs(hash(preset.slug)) % 1000000:06d}"
+    id_map: dict[str, str] = {"0": "0", "1": "1"}  # never rewrite drawio root cells
+
+    # First pass: build ID rewrite map.
+    for cell in snippet_root.iter("mxCell"):
+        old_id = cell.get("id")
+        if old_id and old_id not in id_map:
+            id_map[old_id] = f"{prefix}-{old_id}"
+
+    # Second pass: emit each cell with translated geometry + rewritten IDs.
+    for cell in snippet_root.iter("mxCell"):
+        old_id = cell.get("id", "")
+        if old_id in ("0", "1"):
+            continue  # skip drawio root cells (we already have ours)
+        new_id = id_map.get(old_id, old_id)
+        new_parent = id_map.get(cell.get("parent", "1"), "1")
+        new_source = id_map.get(cell.get("source", ""), cell.get("source"))
+        new_target = id_map.get(cell.get("target", ""), cell.get("target"))
+
+        new_attrs = {
+            "id": new_id,
+            "value": cell.get("value", ""),
+            "style": cell.get("style", ""),
+            "parent": new_parent,
+        }
+        if cell.get("vertex") == "1":
+            new_attrs["vertex"] = "1"
+        if cell.get("edge") == "1":
+            new_attrs["edge"] = "1"
+        if new_source:
+            new_attrs["source"] = new_source
+        if new_target:
+            new_attrs["target"] = new_target
+        if cell.get("connectable"):
+            new_attrs["connectable"] = cell.get("connectable")
+
+        new_cell = ET.SubElement(root, "mxCell", attrib=new_attrs)
+
+        # Translate geometry: only top-level cells (parent='1') get the
+        # offset because nested cells use coordinates relative to their
+        # parent. The preset's internal nesting structure is preserved.
+        for child in cell:
+            if child.tag == "mxGeometry":
+                geom_attrs = dict(child.attrib)
+                if cell.get("parent") == "1":
+                    try:
+                        geom_attrs["x"] = str(float(geom_attrs.get("x", "0")) + preset.x)
+                        geom_attrs["y"] = str(float(geom_attrs.get("y", "0")) + preset.y)
+                    except ValueError:
+                        pass
+                new_geom = ET.SubElement(new_cell, "mxGeometry", attrib=geom_attrs)
+                # Copy any inner mxPoint, Array, etc.
+                for grandchild in child:
+                    new_geom.append(grandchild)
+            else:
+                # Generic deep copy (mxPoint, Array, etc.)
+                new_cell.append(child)
+
+
+def _emit_legend(
+    root: ET.Element,
+    diagram: Diagram,
+    canvas_w: int,
+    canvas_h: int,
+    shape_index: ShapeIndex | None = None,
+) -> None:
     """Append a SAP-canonical legend molecule at the bottom-right of the
     canvas, listing only the line styles + edge kinds actually used.
 

@@ -1,0 +1,254 @@
+{
+  "Authenticate": {
+    "family": "green",
+    "stroke": "#188918",
+    "fill": "#F5FAE5",
+    "count": 38
+  },
+  "Trust": {
+    "family": "green",
+    "stroke": "#188918",
+    "fill": "#F5FAE5",
+    "count": 35
+  },
+  "User": {
+    "family": "grey",
+    "stroke": "#475E75",
+    "fill": "#F5F6F7",
+    "count": 12
+  },
+  "Group": {
+    "family": "purple",
+    "stroke": "#5D36FF",
+    "fill": "#F1ECFF",
+    "count": 31
+  },
+  "Identity Lifecycle": {
+    "family": "grey",
+    "stroke": "#475E75",
+    "fill": "#F5F6F7",
+    "count": 34
+  },
+  "Policy": {
+    "family": "purple",
+    "stroke": "#5D36FF",
+    "fill": "#F1ECFF",
+    "count": 13
+  },
+  "Usergroup": {
+    "family": "purple",
+    "stroke": "#5D36FF",
+    "fill": "#F1ECFF",
+    "count": 6
+  },
+  "Role": {
+    "family": "purple",
+    "stroke": "#5D36FF",
+    "fill": "#F1ECFF",
+    "count": 6
+  },
+  "Source": {
+    "family": "grey",
+    "stroke": "#475E75",
+    "fill": "#F5F6F7",
+    "count": 8
+  },
+  "Target": {
+    "family": "grey",
+    "stroke": "#475E75",
+    "fill": "#F5F6F7",
+    "count": 8
+  },
+  "SAML2/OIDC": {
+    "family": "green",
+    "stroke": "#188918",
+    "fill": "#F5FAE5",
+    "count": 75
+  },
+  "SCIM": {
+    "family": "purple",
+    "stroke": "#470BED",
+    "fill": "#F1ECFF",
+    "count": 13
+  },
+  "OIDC": {
+    "family": "green",
+    "stroke": "#188918",
+    "fill": "#F5FAE5",
+    "count": 29
+  },
+  "REST / OData": {
+    "family": "grey",
+    "stroke": "#475E75",
+    "fill": "#F5F6F7",
+    "count": 4
+  },
+  "Role Collection": {
+    "family": "purple",
+    "stroke": "#5D36FF",
+    "fill": "#F1ECFF",
+    "count": 8
+  },
+  "Identity": {
+    "family": "grey",
+    "stroke": "#475E75",
+    "fill": "#F5F6F7",
+    "count": 7
+  },
+  "Customer-managed Identity Lifecycle": {
+    "family": "grey",
+    "stroke": "#475E75",
+    "fill": "#F5F6F7",
+    "count": 5
+  },
+  "REST/SPI": {
+    "family": "grey",
+    "stroke": "#475F75",
+    "fill": null,
+    "count": 6
+  },
+  "Task Data": {
+    "family": "grey",
+    "stroke": "#475E75",
+    "fill": "#F5F6F7",
+    "count": 6
+  },
+  "REST/Token": {
+    "family": "grey",
+    "stroke": "#475F75",
+    "fill": null,
+    "count": 5
+  },
+  "Business Role": {
+    "family": "purple",
+    "stroke": "#5D36FF",
+    "fill": "#F1ECFF",
+    "count": 5
+  },
+  "Role Replica": {
+    "family": "purple",
+    "stroke": "#5D36FF",
+    "fill": "#F1ECFF",
+    "count": 3
+  },
+  "HTTPS": {
+    "family": "grey",
+    "stroke": "#475E75",
+    "fill": "#F5F6F7",
+    "count": 36
+  },
+  "OData/REST/SOAP": {
+    "family": "grey",
+    "stroke": "#475F75",
+    "fill": null,
+    "count": 3
+  },
+  "Business Data Cloud": {
+    "family": "special",
+    "stroke": "NONE",
+    "fill": "LIGHT-DARK(#0878F5, #0D3C56)",
+    "count": 11
+  },
+  "Role Collections": {
+    "family": "purple",
+    "stroke": "#5D36FF",
+    "fill": "#F1ECFF",
+    "count": 3
+  },
+  "IAM": {
+    "family": "grey",
+    "stroke": "#475E75",
+    "fill": "#E6E6E6",
+    "count": 4
+  },
+  "XYZ": {
+    "family": "grey",
+    "stroke": "#595959",
+    "fill": "#595959",
+    "count": 3
+  },
+  "TRUST": {
+    "family": "green",
+    "stroke": "#188918",
+    "fill": "#F5FAE5",
+    "count": 19
+  },
+  "ORD": {
+    "family": "pink",
+    "stroke": "#CC00DC",
+    "fill": "#FFF0FA",
+    "count": 12
+  },
+  "Harmonized API": {
+    "family": "pink",
+    "stroke": "#CC00DC",
+    "fill": "#FFF0FA",
+    "count": 9
+  },
+  "Destination": {
+    "family": "grey",
+    "stroke": "#475F75",
+    "fill": "#F5F6F7",
+    "count": 9
+  },
+  "Data Federation": {
+    "family": "grey",
+    "stroke": "#475F75",
+    "fill": "#F5F6F7",
+    "count": 6
+  },
+  "JWT": {
+    "family": "green",
+    "stroke": "#188918",
+    "fill": "#F5FAE5",
+    "count": 4
+  },
+  "OIDC Trust": {
+    "family": "pink",
+    "stroke": "#CC00DC",
+    "fill": "#FFF0FA",
+    "count": 4
+  },
+  "HTTPS/Standby": {
+    "family": "grey",
+    "stroke": "#475F75",
+    "fill": "#F5F6F7",
+    "count": 6
+  },
+  "HTTPS/Active": {
+    "family": "grey",
+    "stroke": "#475F75",
+    "fill": "#F5F6F7",
+    "count": 6
+  },
+  "Data Sync": {
+    "family": "grey",
+    "stroke": "#475F75",
+    "fill": null,
+    "count": 6
+  },
+  "Healthy Region DNS Update": {
+    "family": "teal",
+    "stroke": "#07838F",
+    "fill": "#F5F6F7",
+    "count": 6
+  },
+  "Multi-Region Controller Flow": {
+    "family": "purple",
+    "stroke": "#5D36FF",
+    "fill": "#F5F6F7",
+    "count": 6
+  },
+  "Events Sync": {
+    "family": "grey",
+    "stroke": "#475F75",
+    "fill": null,
+    "count": 6
+  },
+  "Health Check": {
+    "family": "teal",
+    "stroke": "#07838F",
+    "fill": "#F5F6F7",
+    "count": 6
+  }
+}

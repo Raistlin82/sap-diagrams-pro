@@ -1,10 +1,11 @@
 {
-  "_comment": "SPDX-FileCopyrightText: 2026 Gabriele Capparelli — SPDX-License-Identifier: Apache-2.0 — NOVA Invoice Suite L1 Architect View, distilled from passive-invoice-mgmt CLAUDE.md",
+  "_comment": "SPDX-FileCopyrightText: 2026 Gabriele Capparelli — SPDX-License-Identifier: Apache-2.0 — NOVA Invoice Suite L1 Architect View. Uses SAP-canonical patterns: user/client presets, kind=annotation pills with auto-resolved colours from canonical-pills.json.",
   "metadata": {
     "title": "NOVA Invoice Suite — L1 Architecture",
     "level": "L1",
     "author": "Gabriele Capparelli"
   },
+  "presets": [],
   "groups": [
     {"id": "users", "type": "user", "label": "Personas", "position": "top-left"},
     {"id": "external", "type": "third-party", "label": "External Channels", "position": "top-center"},
@@ -68,7 +69,7 @@
     {"id": "e22", "source": "cap", "target": "audit", "style": "dashed", "label": "audit events"},
     {"id": "e23", "source": "scheduler", "target": "cap", "style": "dashed", "label": "12 cron jobs"},
     {"id": "e24", "source": "logging", "target": "alm", "style": "dashed", "label": "metrics"},
-    {"id": "e25", "source": "ias", "target": "xsuaa", "style": "solid", "label": "Trust", "kind": "trust"},
+    {"id": "e25", "source": "ias", "target": "xsuaa", "style": "solid", "label": "SAML2/OIDC", "kind": "annotation"},
     {"id": "e26", "source": "cap", "target": "xsuaa", "style": "solid", "label": "Authorize", "kind": "authorize"}
   ]
 }

@@ -302,7 +302,13 @@ def _parse_generic_icons(libs_dir: Path) -> list[dict]:
 def _parse_standalone_libraries(libs_dir: Path) -> dict[str, list[dict]]:
     """Parse the 8 top-level XML files in draw.io/ (connectors, annotations,
     area_shapes, default_shapes, numbers, brand_names, essentials,
-    text_elements) into category-keyed lists."""
+    text_elements) into category-keyed lists.
+
+    For ``essentials`` (multi-cell pre-composed organisms like "User and
+    client", "Legend", "Cloud Connector"), we preserve the COMPLETE XML
+    body so the engine can later embed the raw cells into output diagrams
+    as a single SAP-canonical block.
+    """
     catalog: dict[str, list[dict]] = {cat: [] for cat in STANDALONE_LIBRARIES.values()}
     for filename, category in STANDALONE_LIBRARIES.items():
         path = libs_dir / filename
@@ -317,16 +323,27 @@ def _parse_standalone_libraries(libs_dir: Path) -> dict[str, list[dict]]:
             m = re.search(r'style="([^"]*)"', xml_snippet)
             style = m.group(1) if m else ""
             display = title or _extract_display_name(xml_snippet) or "(unnamed)"
-            catalog[category].append(
-                {
-                    "name": display,
-                    "title": title,
-                    "drawioStyle": style,
-                    "rawXml": xml_snippet,
-                    "width": entry.get("w"),
-                    "height": entry.get("h"),
-                }
-            )
+            # For essentials we keep the full XML body. For other categories
+            # we keep the first style + raw XML for reference.
+            shape = {
+                "name": display,
+                "title": title,
+                "drawioStyle": style,
+                "rawXml": xml_snippet,
+                "width": entry.get("w"),
+                "height": entry.get("h"),
+            }
+            if category == "essentials":
+                # Generate a slug usable as preset key: "User and client"
+                # → "user-and-client", "3rd party IdP and protocols" →
+                # "3rd-party-idp-and-protocols".
+                slug = (
+                    re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+                )
+                shape["slug"] = slug
+                # Count mxCell entries inside (for telemetry).
+                shape["cellCount"] = len(re.findall(r"<mxCell", xml_snippet))
+            catalog[category].append(shape)
     return catalog
 
 
