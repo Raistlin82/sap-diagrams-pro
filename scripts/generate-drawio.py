@@ -172,6 +172,13 @@ class Node:
     # Step circle colour (matches numbers.xml variants):
     #   default (dark grey gradient), blue, purple, pink, green, yellow, teal
     stepKind: str = "default"
+    # Generic icon (User, Mobile, Desktop, Cloud Connector, On-Premise,
+    # Third Party, Adapter, AI, Database, Server, ...) sourced from the
+    # 20-03-generic-icons SAP library. When set, OVERRIDES boxStyle and
+    # service icon resolution. Format: "<base>" or "<base>:<variant>"
+    # where variant is sap | non-sap | highlight (default: non-sap).
+    # Example: "user", "mobile:sap", "third-party"
+    genericIcon: str | None = None
 
 
 @dataclass
@@ -183,12 +190,21 @@ class Edge:
     label: str = ""
     direction: str = "forward"  # forward | bidirectional | none
     # Semantic edge type for SAP-canonical highlights:
-    #   "default"   — standard non-SAP grey #475E75 line + plain label
-    #   "trust"     — pink #CC00DC bidirectional + pill label (IAS-XSUAA / IDP)
-    #   "positive"  — green  #188918 (success/certified flow)
-    #   "critical"  — orange #C35500 (degraded/at-risk flow)
-    #   "negative"  — red    #D20A0A (failed/deprecated flow)
+    #   "default"          — standard non-SAP grey line + plain label
+    #   "trust"            — pink #CC00DC bidirectional + pill (IAS-XSUAA / IDP)
+    #   "authenticate"     — green pill (user → app login)
+    #   "authorize"        — purple pill (XSUAA token validation)
+    #   "generic_protocol" — grey pill (named protocol: OData, REST, GraphQL)
+    #   "annotation"       — fully custom pill with `pillColor` + `pillFill`
+    #   "positive"         — green #188918 (success/certified, no pill)
+    #   "critical"         — orange #C35500 (degraded/at-risk, no pill)
+    #   "negative"         — red #D20A0A (failed/deprecated, no pill)
     kind: str = "default"
+    # Custom pill colour family (only when kind="annotation"). Picks one of:
+    # purple (Group/Role/Policy/Identity*), green (Authenticate-like), pink
+    # (Trust-like), grey (protocol-like), blue (REST/SAML2/OIDC), teal (BTP
+    # accent). The pill is always rendered with arcSize=50 + fontStyle=1.
+    pillColor: str = "purple"
 
 
 @dataclass
@@ -207,10 +223,26 @@ class Diagram:
 class ShapeIndex:
     """Wrap shape-index.json and provide fast service-name resolution."""
 
-    def __init__(self, services: list[dict[str, Any]]):
+    def __init__(
+        self,
+        services: list[dict[str, Any]],
+        generic_icons: list[dict[str, Any]] | None = None,
+    ):
         self._by_name: dict[str, dict[str, Any]] = {}
         self._by_alias: dict[str, dict[str, Any]] = {}
         self._by_techid: dict[str, dict[str, Any]] = {}
+        # Generic icon catalog: keyed by lowercased base + variant.
+        # e.g. ("user", "non-sap") → entry. Default variant is non-sap.
+        self._generic: dict[tuple[str, str], dict[str, Any]] = {}
+        for g in generic_icons or []:
+            base = (g.get("base") or "").lower().strip()
+            variant = (g.get("variant") or "non-sap").lower().strip()
+            size = g.get("size", "M")
+            key = (base, variant)
+            existing = self._generic.get(key)
+            # Prefer M size as canonical default.
+            if not existing or (existing.get("size") != "M" and size == "M"):
+                self._generic[key] = g
         for s in services:
             name = s.get("name", "")
             tech = s.get("techId", "")
@@ -238,7 +270,49 @@ class ShapeIndex:
             data = json.loads(target.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return cls([])
-        return cls(data.get("services", []))
+        return cls(data.get("services", []), data.get("genericIcons", []))
+
+    def resolve_generic(self, query: str | None) -> dict[str, Any] | None:
+        """Lookup a generic icon by base name (+ optional variant suffix).
+
+        Format: ``"<base>"`` or ``"<base>:<variant>"``.
+        Variants: ``sap`` | ``non-sap`` (default) | ``highlight``.
+        Aliases: ``app-clients`` → ``Mobile`` (the SAP "Mobile" icon is a
+        2-monitor pictogram traditionally labelled "Application Clients").
+        """
+        if not query:
+            return None
+        q = query.strip().lower()
+        variant = "non-sap"
+        if ":" in q:
+            q, variant = q.split(":", 1)
+            variant = variant.strip()
+        # Normalise common aliases to the SAP base name.
+        alias_map = {
+            "app-clients": "mobile",
+            "application-clients": "mobile",
+            "client": "mobile",
+            "person": "user",
+            "stick-figure": "user",
+            "monitor": "desktop",
+            "device": "devices",
+            "third-party": "third party",
+            "3rd-party": "third party",
+            "on-premise": "on-premise",
+            "on-prem": "on-premise",
+            "cloud-connector": "cloud connector",
+            "ai-agent": "ai agent",
+        }
+        base = alias_map.get(q, q)
+        # First try exact (base, variant); fall back to non-sap if missing.
+        entry = self._generic.get((base, variant))
+        if not entry:
+            entry = self._generic.get((base, "non-sap"))
+        if not entry:
+            entry = self._generic.get((base, "highlight"))
+        if not entry:
+            entry = self._generic.get((base, "sap"))
+        return entry
 
     def resolve(self, query: str | None) -> dict[str, Any] | None:
         """Lookup priority: exact name → exact alias (case-insensitive) →
@@ -305,6 +379,7 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
             interface=n.get("interface"),
             step=n.get("step"),
             stepKind=n.get("stepKind", "default"),
+            genericIcon=n.get("genericIcon"),
         )
         nodes.append(node)
         if node.group and node.group in group_map:
@@ -312,8 +387,9 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
 
     valid_kinds = {
         "default", "trust", "positive", "critical", "negative",
-        "authenticate", "authorize", "generic_protocol",
+        "authenticate", "authorize", "generic_protocol", "annotation",
     }
+    valid_pill_colors = {"purple", "green", "pink", "grey", "blue", "teal"}
     edges: list[Edge] = []
     for e in raw_edges:
         style = e.get("style", "solid")
@@ -328,6 +404,12 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
                 f"edge {e.get('id')!r}: kind must be one of "
                 f"{sorted(valid_kinds)} (got {kind!r})"
             )
+        pill_color = e.get("pillColor", "purple")
+        if pill_color not in valid_pill_colors:
+            raise ValueError(
+                f"edge {e.get('id')!r}: pillColor must be one of "
+                f"{sorted(valid_pill_colors)} (got {pill_color!r})"
+            )
         edges.append(
             Edge(
                 id=e["id"],
@@ -337,6 +419,7 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
                 label=e.get("label", ""),
                 direction=e.get("direction", "forward"),
                 kind=kind,
+                pillColor=pill_color,
             )
         )
 
@@ -479,14 +562,21 @@ def _group_style(g: Group, is_nested: bool = False) -> str:
 
 
 def _node_style(n: Node, shape_index: "ShapeIndex") -> tuple[str, bool, str]:
-    """Return (style_string, is_sap_icon, display_label).
+    """Return (style_string, is_icon, display_label).
 
     Resolution order:
-      1. SAP service icon — use the SVG-inline drawioStyle from the index.
-      2. Plain box — use the variant from ``Node.boxStyle`` (defaults to
-         btp-outline, the most common SAP pattern for nodes without a
-         dedicated icon).
+      1. ``genericIcon`` — generic SAP icon (User, Mobile/Desktop, Cloud
+         Connector, …) from the 20-03-generic-icons set. Highest priority
+         because it's an explicit author choice.
+      2. SAP service icon — SVG-inline drawioStyle from the BTP service
+         catalog (resolved via ``service`` field).
+      3. Plain box — variant from ``Node.boxStyle`` (defaults to
+         btp-outline, the most common SAP pattern).
     """
+    if n.genericIcon:
+        gen = shape_index.resolve_generic(n.genericIcon)
+        if gen and gen.get("drawioStyle"):
+            return gen["drawioStyle"], True, n.label
     svc = shape_index.resolve(n.service)
     if svc and svc.get("drawioStyle"):
         canonical = svc.get("name") or n.label
@@ -532,6 +622,44 @@ _EDGE_KIND_PILL = {
         "stroke": "#475f75",
         "fill":   "#f5f6f7",
         "fontColor": "#1D2D3E",
+    },
+}
+
+# Palette for `kind="annotation"` — fully custom pill labels for arbitrary
+# text (Group, Role, Policy, OIDC, SAML2/OIDC, SCIM, REST/SPI, REST/Token,
+# Task Data, Identity Lifecycle, Source, Target, Business Role, Role
+# Replica, …). Sourced from the colours observed across the 4 SAP
+# reference diagrams the user pointed to.
+_ANNOTATION_PILL_PALETTE = {
+    "purple": {  # Group, Role, Policy, Usergroup, Business Role, …
+        "stroke": "#5D36FF",
+        "fill":   "#F1ECFF",
+        "fontColor": "#5D36FF",
+    },
+    "green": {   # Authenticate-like / SAML2 / OIDC / SAML2/OIDC
+        "stroke": "#188918",
+        "fill":   "#F5FAE5",
+        "fontColor": "#188918",
+    },
+    "pink": {    # Trust-like / Mutual Trust
+        "stroke": "#CC00DC",
+        "fill":   "#FFF0FA",
+        "fontColor": "#CC00DC",
+    },
+    "grey": {    # Generic protocol, REST/SPI, REST/Token, Task Data
+        "stroke": "#475F75",
+        "fill":   "#F5F6F7",
+        "fontColor": "#475F75",
+    },
+    "blue": {    # SAP-affiliated annotations (Protocol blue, Source/Target)
+        "stroke": "#0070F2",
+        "fill":   "#EBF8FF",
+        "fontColor": "#0070F2",
+    },
+    "teal": {    # Accent teal (Protocol teal in annotations_and_interfaces.xml)
+        "stroke": "#07838F",
+        "fill":   "#DAFDF5",
+        "fontColor": "#07838F",
     },
 }
 
@@ -610,7 +738,14 @@ def _edge_style(
     as bidirectional because trust is a symmetric relationship in SAP IAM
     diagrams.
     """
-    stroke = _EDGE_KIND_STROKE.get(e.kind, PALETTE["non_sap_border"])
+    if e.kind == "annotation":
+        # Annotation edges inherit colour from the chosen pill family.
+        pill_def = _ANNOTATION_PILL_PALETTE.get(
+            e.pillColor, _ANNOTATION_PILL_PALETTE["purple"]
+        )
+        stroke = pill_def["stroke"]
+    else:
+        stroke = _EDGE_KIND_STROKE.get(e.kind, PALETTE["non_sap_border"])
     base = EDGE_STYLES[e.style].format(stroke=stroke)
     direction = e.direction
     # Trust is canonically a two-way relationship (IAS ↔ XSUAA / IDP).
@@ -755,20 +890,25 @@ def emit(
     ET.SubElement(root, "mxCell", attrib={"id": "0"})
     ET.SubElement(root, "mxCell", attrib={"id": "1", "parent": "0"})
 
-    # 1. Title — full-width centered band at the top of the canvas, leaving
-    # margin on both sides. Avoids the empty-top-left corner you'd otherwise
-    # see when content shifts toward the centre under dot layout.
+    # 1. Title — SAP-canonical: bold blue (#0070F2) + "- SAP BTP Solution
+    # Diagram" suffix. Convention observed in EVERY official sample
+    # (SAP_Task_Center_*.drawio, SAP_Private_Link_Service_L2, etc.).
+    # Left-aligned in the top-left corner.
     title_id = _stable_id("title", diagram.title)
     title_w = max(canvas_w - 96, 600)
+    diagram_title = diagram.title
+    if "Solution Diagram" not in diagram_title:
+        diagram_title = f"{diagram_title} - SAP BTP Solution Diagram"
     title_cell = ET.SubElement(
         root,
         "mxCell",
         attrib={
             "id": title_id,
-            "value": f"{diagram.title} [{diagram.level}]",
+            "value": diagram_title,
             "style": (
-                f"text;html=1;align=center;verticalAlign=middle;"
-                f"fontColor={PALETTE['title']};fontSize=18;fontStyle=1;"
+                f"text;html=1;align=left;verticalAlign=middle;"
+                f"fontColor={PALETTE['btp_border']};fontSize=18;fontStyle=1;"
+                f"fontFamily=Helvetica;"
             ),
             "vertex": "1",
             "parent": "1",
@@ -778,13 +918,43 @@ def emit(
         title_cell,
         "mxGeometry",
         attrib={
-            "x": "48",
+            "x": "32",
             "y": "12",
             "width": str(title_w),
-            "height": "32",
+            "height": "30",
             "as": "geometry",
         },
     )
+
+    # Diagram level caption at bottom-left ("Diagram Level: L2") — SAP
+    # convention seen in SAP_Private_Link_Service_L2 and Task Center L2.
+    if diagram.level in ("L0", "L1", "L2", "L3"):
+        level_cell = ET.SubElement(
+            root,
+            "mxCell",
+            attrib={
+                "id": _stable_id("dlevel", diagram.title),
+                "value": f"Diagram Level: {diagram.level}",
+                "style": (
+                    f"text;html=1;align=left;verticalAlign=middle;"
+                    f"fontColor={PALETTE['title']};fontSize=11;"
+                    f"fontFamily=Helvetica;"
+                ),
+                "vertex": "1",
+                "parent": "1",
+            },
+        )
+        ET.SubElement(
+            level_cell,
+            "mxGeometry",
+            attrib={
+                "x": "32",
+                "y": str(canvas_h - 28),
+                "width": "180",
+                "height": "20",
+                "as": "geometry",
+            },
+        )
 
     # 2. Groups — top-level FIRST (so they sit behind sub-groups in z-order),
     #    then nested sub-groups on top. Use real drawio parenting: a nested
@@ -1012,11 +1182,10 @@ def emit(
         tgt_geom = node_abs_geom.get(e.target)
         edge_id = _stable_id("e", e.id)
         # For pill-rendered kinds (trust, authenticate, authorize,
-        # generic_protocol), the visible label sits in a separate rounded
-        # vertex child (drawio does NOT honour arcSize on inline labels).
-        # The edge cell itself carries an empty value so the label isn't
-        # duplicated.
-        has_pill = e.kind in _EDGE_KIND_PILL
+        # generic_protocol, annotation), the visible label sits in a
+        # separate rounded vertex child. drawio does NOT honour arcSize on
+        # inline edge labels, so the multi-cell pattern is the only way.
+        has_pill = e.kind in _EDGE_KIND_PILL or e.kind == "annotation"
         inline_value = "" if has_pill else e.label
         e_cell = ET.SubElement(
             root,
@@ -1054,7 +1223,10 @@ def emit(
         # relative=1 with offset so it centres on the edge's midpoint
         # regardless of the edge's actual length or routing.
         if has_pill and e.label:
-            pill_def = _EDGE_KIND_PILL[e.kind]
+            if e.kind == "annotation":
+                pill_def = _ANNOTATION_PILL_PALETTE.get(e.pillColor, _ANNOTATION_PILL_PALETTE["purple"])
+            else:
+                pill_def = _EDGE_KIND_PILL[e.kind]
             # Width adapts to label length (rough heuristic: ~6.5 px/char +
             # padding) so longer labels like "Generic Protocol" don't get
             # clipped, while short ones like "Trust" stay tight.
@@ -1089,7 +1261,173 @@ def emit(
                 attrib={"x": str(-pill_w // 2), "y": "-13", "as": "offset"},
             )
 
+    # 5. Legend molecule (bottom-right) — SAP-canonical convention seen in
+    # SAP_Private_Link_Service_L2.drawio. Auto-detects which line styles
+    # and edge kinds are present and includes only the relevant rows.
+    _emit_legend(root, diagram, canvas_w, canvas_h)
+
     return _serialize(mxfile)
+
+
+def _emit_legend(root: ET.Element, diagram: Diagram, canvas_w: int, canvas_h: int) -> None:
+    """Append a SAP-canonical legend molecule at the bottom-right of the
+    canvas, listing only the line styles + edge kinds actually used.
+
+    Layout: a rounded container with title "Legend" (font 12 bold blue) +
+    one row per element. Each row has a 36×8 sample line on the left and
+    a label on the right. Total size adapts to row count.
+    """
+    used_styles = {e.style for e in diagram.edges}
+    used_kinds = {e.kind for e in diagram.edges if e.kind != "default"}
+
+    # Build legend rows in a stable, SAP-canonical order.
+    rows: list[tuple[str, str, str]] = []  # (label, sample_style_kind, color)
+
+    # Line-style rows
+    if "solid" in used_styles:
+        rows.append(("Direct (sync)", "line-solid", PALETTE["non_sap_border"]))
+    if "dashed" in used_styles:
+        rows.append(("Indirect (async)", "line-dashed", PALETTE["non_sap_border"]))
+    if "dotted" in used_styles:
+        rows.append(("Optional", "line-dotted", PALETTE["non_sap_border"]))
+    if "thick" in used_styles:
+        rows.append(("Firewall", "line-thick", PALETTE["non_sap_border"]))
+
+    # Pill-kind rows
+    kind_labels = {
+        "trust":            ("Trust",            "#CC00DC"),
+        "authenticate":     ("Authenticate",     "#188918"),
+        "authorize":        ("Authorize",        "#470bed"),
+        "generic_protocol": ("Protocol",         "#475F75"),
+        "annotation":       ("Annotation",       "#5D36FF"),
+        "positive":         ("Positive",         "#188918"),
+        "critical":         ("Critical",         "#C35500"),
+        "negative":         ("Negative",         "#D20A0A"),
+    }
+    for kind in ("trust", "authenticate", "authorize", "generic_protocol", "annotation",
+                 "positive", "critical", "negative"):
+        if kind in used_kinds:
+            label, color = kind_labels[kind]
+            rows.append((label, f"pill-{kind}", color))
+
+    if not rows:
+        return  # nothing to legend
+
+    # Geometry: 220 wide, 32 (title) + 18 per row + 16 padding bottom.
+    legend_w = 220
+    row_h = 18
+    legend_h = 32 + len(rows) * row_h + 12
+    legend_x = canvas_w - legend_w - 32
+    legend_y = canvas_h - legend_h - 40  # leave room for "Diagram Level" caption
+
+    legend_id = _stable_id("legend", diagram.title)
+    legend_box = ET.SubElement(
+        root,
+        "mxCell",
+        attrib={
+            "id": legend_id,
+            "value": "Legend",
+            "style": (
+                "rounded=1;whiteSpace=wrap;html=1;arcSize=6;absoluteArcSize=1;"
+                "strokeColor=#475F75;fillColor=#FFFFFF;strokeWidth=1.5;"
+                "fontColor=#0070F2;fontSize=12;fontStyle=1;"
+                "verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;"
+            ),
+            "vertex": "1",
+            "parent": "1",
+        },
+    )
+    ET.SubElement(
+        legend_box,
+        "mxGeometry",
+        attrib={
+            "x": str(legend_x),
+            "y": str(legend_y),
+            "width": str(legend_w),
+            "height": str(legend_h),
+            "as": "geometry",
+        },
+    )
+
+    for idx, (label, kind, color) in enumerate(rows):
+        row_y = 30 + idx * row_h  # relative to legend box
+        # Sample line / pill on left
+        if kind.startswith("line-"):
+            line_style_map = {
+                "line-solid":  "endArrow=none;strokeColor=" + color + ";strokeWidth=1.5;dashed=0;",
+                "line-dashed": "endArrow=none;strokeColor=" + color + ";strokeWidth=1.5;dashed=1;dashPattern=8 4;",
+                "line-dotted": "endArrow=none;strokeColor=" + color + ";strokeWidth=1.5;dashed=1;dashPattern=1 4;",
+                "line-thick":  "endArrow=none;strokeColor=" + color + ";strokeWidth=3;dashed=0;",
+            }
+            sample = ET.SubElement(
+                root,
+                "mxCell",
+                attrib={
+                    "id": _stable_id("legline", f"{diagram.title}-{idx}"),
+                    "value": "",
+                    "style": line_style_map[kind],
+                    "edge": "1",
+                    "parent": legend_id,
+                },
+            )
+            geom = ET.SubElement(sample, "mxGeometry", attrib={"relative": "1", "as": "geometry"})
+            ET.SubElement(geom, "mxPoint", attrib={"x": "12", "y": str(row_y + 6), "as": "sourcePoint"})
+            ET.SubElement(geom, "mxPoint", attrib={"x": "52", "y": str(row_y + 6), "as": "targetPoint"})
+        else:
+            # Pill sample
+            pill_def = (_EDGE_KIND_PILL.get(kind.removeprefix("pill-"))
+                        or _ANNOTATION_PILL_PALETTE.get("purple"))
+            ET.SubElement(
+                root,
+                "mxCell",
+                attrib={
+                    "id": _stable_id("legpill", f"{diagram.title}-{idx}"),
+                    "value": "",
+                    "style": (
+                        f"rounded=1;whiteSpace=wrap;html=1;arcSize=50;"
+                        f"strokeColor={pill_def['stroke']};"
+                        f"fillColor={pill_def['fill']};strokeWidth=1.5;"
+                    ),
+                    "vertex": "1",
+                    "parent": legend_id,
+                    "connectable": "0",
+                },
+            ).append(ET.Element(
+                "mxGeometry",
+                attrib={
+                    "x": "12",
+                    "y": str(row_y),
+                    "width": "40",
+                    "height": "12",
+                    "as": "geometry",
+                },
+            ))
+        # Label text on right
+        label_cell = ET.SubElement(
+            root,
+            "mxCell",
+            attrib={
+                "id": _stable_id("leglbl", f"{diagram.title}-{idx}"),
+                "value": label,
+                "style": (
+                    f"text;html=1;align=left;verticalAlign=middle;"
+                    f"fontColor={PALETTE['title']};fontSize=10;"
+                ),
+                "vertex": "1",
+                "parent": legend_id,
+            },
+        )
+        ET.SubElement(
+            label_cell,
+            "mxGeometry",
+            attrib={
+                "x": "62",
+                "y": str(row_y - 3),
+                "width": "150",
+                "height": "16",
+                "as": "geometry",
+            },
+        )
 
 
 def _serialize(root: ET.Element) -> str:

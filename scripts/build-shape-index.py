@@ -224,6 +224,81 @@ def _aliases_for(name: str) -> list[str]:
     return sorted(aliases)
 
 
+def _parse_generic_icons(libs_dir: Path) -> list[dict]:
+    """Parse the 20-03-generic-icons libraries (User, Mobile, Desktop,
+    Cloud Connector, On-Premise, Third Party, Adapter, Admin, AI, ...).
+
+    These use a DIFFERENT JSON schema from service icons + standalone libs:
+    each entry is `{data: <SVG-base64-URI>, w, h, title, aspect}` rather
+    than the mxCell-wrapped XML used elsewhere. We synthesise the
+    drawioStyle the way drawio would when the shape is dragged from the
+    sidebar: `shape=image;...image=<data>` with `aspect=fixed`.
+    """
+    out: list[dict] = []
+    set_dir = libs_dir / "20-03-generic-icons"
+    if not set_dir.exists():
+        return out
+    # Loosened size regex — generic-icons files use `-size-M-200302.xml`
+    # (extra numeric suffix) rather than the `-size-M.xml` pattern of
+    # service-icon libraries.
+    size_pat = re.compile(r"-size-(?P<size>[SML])\b", re.IGNORECASE)
+    for xml_file in sorted(set_dir.glob("*.xml")):
+        m = size_pat.search(xml_file.name)
+        if not m:
+            continue
+        size = m.group("size").upper()
+        # The generic-icons libraries embed JSON inline (not wrapped in
+        # <mxlibrary>...</mxlibrary> with mxCell entries — the outer XML
+        # is `<mxlibrary>[{data:..., title:..., w:..., h:..., aspect:...}]
+        # </mxlibrary>`). Use raw split to retrieve the JSON array
+        # because ElementTree's text decoding is lossy on long base64.
+        try:
+            raw = xml_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if "<mxlibrary>" not in raw or "</mxlibrary>" not in raw:
+            continue
+        body = raw.split("<mxlibrary>", 1)[1].split("</mxlibrary>", 1)[0]
+        try:
+            entries = json.loads(body)
+        except json.JSONDecodeError:
+            continue
+        for entry in entries:
+            title = (entry.get("title") or "").strip()
+            data = entry.get("data") or ""
+            w = entry.get("w") or 24
+            h = entry.get("h") or 24
+            aspect = entry.get("aspect") or "fixed"
+            if not data:
+                continue
+            # drawio synthesises this style for image shapes:
+            style = (
+                "shape=image;verticalLabelPosition=bottom;verticalAlign=top;"
+                f"imageAspect=0;aspect={aspect};image={data};"
+                "fontStyle=0;fontSize=12;fontColor=#1D2D3E;"
+            )
+            # Normalize the title into a base concept + variant flag:
+            # "User Non-SAP Size M" → base="User", variant="non-sap"
+            base = re.sub(r"\s*(Highlight|SAP|Non-SAP)[\s-]+Size\s*[SML]$", "", title).strip()
+            variant = "highlight"
+            if "Non-SAP" in title:
+                variant = "non-sap"
+            elif " SAP " in title or "-SAP-" in title or title.endswith(" SAP"):
+                variant = "sap"
+            out.append(
+                {
+                    "name": title,
+                    "base": base,
+                    "variant": variant,
+                    "size": size,
+                    "width": w,
+                    "height": h,
+                    "drawioStyle": style,
+                }
+            )
+    return out
+
+
 def _parse_standalone_libraries(libs_dir: Path) -> dict[str, list[dict]]:
     """Parse the 8 top-level XML files in draw.io/ (connectors, annotations,
     area_shapes, default_shapes, numbers, brand_names, essentials,
@@ -325,6 +400,10 @@ def build_index(cache: Path, overrides_path: Path = DEFAULT_OVERRIDES_CSV) -> di
     standalone = _parse_standalone_libraries(libs_dir)
     standalone_total = sum(len(v) for v in standalone.values())
 
+    # Generic-icons set (User, Mobile, Desktop, Cloud Connector, …) — uses
+    # a different JSON schema, parsed separately.
+    generic_icons = _parse_generic_icons(libs_dir)
+
     repo_dir = cache / "btp-solution-diagrams"
     return {
         "meta": {
@@ -333,11 +412,13 @@ def build_index(cache: Path, overrides_path: Path = DEFAULT_OVERRIDES_CSV) -> di
             "generatedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "totalServices": len(services),
             "totalStandalone": standalone_total,
-            "schemaVersion": "1.2.0",
+            "totalGenericIcons": len(generic_icons),
+            "schemaVersion": "1.3.0",
             "overridesApplied": len(overrides),
         },
         "sets": sets,
         "services": services,
+        "genericIcons": generic_icons,
         "connectors": standalone["connectors"],
         "annotations": standalone["annotations"],
         "areaShapes": standalone["area_shapes"],
