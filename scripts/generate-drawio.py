@@ -156,6 +156,22 @@ class Node:
     icon: str | None = None
     group: str | None = None
     tier: str | None = None
+    # Optional box variant (sourced from area_shapes.xml + default_shapes.xml).
+    # Only applied when the node is NOT resolved to a SAP icon. Vocabulary:
+    #   btp-filled, btp-outline, btp-dashed, btp-dotted (blue family)
+    #   non-sap-filled, non-sap-outline, non-sap-dashed, non-sap-dotted (grey)
+    #   accent-teal, accent-purple, accent-pink (highlights, with -dashed /
+    #     -dotted suffixes available)
+    boxStyle: str = "btp-outline"
+    # Interface badge rendered as a small rounded pill at the top of the
+    # node ("Interface" or custom label). Values: "sap" | "generic" | None.
+    interface: str | None = None
+    # Optional sequence number (1-9 typical). Placed as a circle at the
+    # top-left corner of the node.
+    step: int | None = None
+    # Step circle colour (matches numbers.xml variants):
+    #   default (dark grey gradient), blue, purple, pink, green, yellow, teal
+    stepKind: str = "default"
 
 
 @dataclass
@@ -285,6 +301,10 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
             icon=n.get("icon"),
             group=n.get("group"),
             tier=n.get("tier"),
+            boxStyle=n.get("boxStyle", "btp-outline"),
+            interface=n.get("interface"),
+            step=n.get("step"),
+            stepKind=n.get("stepKind", "default"),
         )
         nodes.append(node)
         if node.group and node.group in group_map:
@@ -461,25 +481,19 @@ def _group_style(g: Group, is_nested: bool = False) -> str:
 def _node_style(n: Node, shape_index: "ShapeIndex") -> tuple[str, bool, str]:
     """Return (style_string, is_sap_icon, display_label).
 
-    When the node's ``service`` resolves in the shape index, we use the SAP
-    icon's drawioStyle directly (an SVG inline base64 image). The display
-    label becomes the SAP canonical name unless the JSON intermediate
-    explicitly overrides it via Node.label.
+    Resolution order:
+      1. SAP service icon — use the SVG-inline drawioStyle from the index.
+      2. Plain box — use the variant from ``Node.boxStyle`` (defaults to
+         btp-outline, the most common SAP pattern for nodes without a
+         dedicated icon).
     """
     svc = shape_index.resolve(n.service)
     if svc and svc.get("drawioStyle"):
-        # SAP icon found — use the official style.
         canonical = svc.get("name") or n.label
-        # Prefer user-provided label; fall back to canonical SAP name.
         label = n.label if n.label and n.label != n.id else canonical
         return svc["drawioStyle"], True, label
-    # Fallback: clean styled box that respects the Horizon palette.
-    style = (
-        f"rounded=1;whiteSpace=wrap;html=1;"
-        f"strokeColor={PALETTE['btp_border']};fillColor=#FFFFFF;"
-        f"arcSize=8;absoluteArcSize=1;strokeWidth=1.5;"
-        f"fontColor={PALETTE['title']};fontSize=11;align=center;verticalAlign=middle;"
-    )
+    # Plain box — pick from the area_shapes-derived catalogue.
+    style = _BOX_STYLES.get(n.boxStyle, _BOX_STYLES["btp-outline"])
     return style, False, n.label
 
 
@@ -519,6 +533,68 @@ _EDGE_KIND_PILL = {
         "fill":   "#f5f6f7",
         "fontColor": "#1D2D3E",
     },
+}
+
+# Box style variants (for nodes WITHOUT a SAP icon). Sourced from
+# area_shapes.xml + default_shapes.xml. Each entry yields a complete
+# drawio style string. "filled" uses the colour family's tinted fill;
+# "outline" uses white. dashed/dotted apply the SAP convention.
+def _box_style_def(stroke: str, fill: str, dashed_attr: str = "") -> str:
+    return (
+        f"rounded=1;whiteSpace=wrap;html=1;"
+        f"strokeColor={stroke};fillColor={fill};"
+        f"arcSize=24;absoluteArcSize=1;strokeWidth=1.5;"
+        f"fontColor={PALETTE['title']};fontSize=11;"
+        f"align=center;verticalAlign=middle;{dashed_attr}"
+    )
+
+
+_BOX_STYLES: dict[str, str] = {
+    # BTP blue family
+    "btp-filled":  _box_style_def("#0070F2", "#EBF8FF"),
+    "btp-outline": _box_style_def("#0070F2", "#FFFFFF"),
+    "btp-dashed":  _box_style_def("#0070F2", "#EBF8FF", "dashed=1;dashPattern=8 4;"),
+    "btp-dotted":  _box_style_def("#0070F2", "#EBF8FF", "dashed=1;dashPattern=1 4;"),
+
+    # Non-SAP grey family
+    "non-sap-filled":  _box_style_def("#475E75", "#F5F6F7"),
+    "non-sap-outline": _box_style_def("#475E75", "#FFFFFF"),
+    "non-sap-dashed":  _box_style_def("#475E75", "#F5F6F7", "dashed=1;dashPattern=8 4;"),
+    "non-sap-dotted":  _box_style_def("#475E75", "#F5F6F7", "dashed=1;dashPattern=1 4;"),
+
+    # Accent teal (highlight new / brand-new component)
+    "accent-teal":         _box_style_def("#07838f", "#dafdf5"),
+    "accent-teal-outline": _box_style_def("#07838f", "#FFFFFF"),
+    "accent-teal-dashed":  _box_style_def("#07838f", "#dafdf5", "dashed=1;dashPattern=8 4;"),
+
+    # Accent purple (AI / GenAI emphasis)
+    "accent-purple":         _box_style_def("#5d36ff", "#f1ecff"),
+    "accent-purple-outline": _box_style_def("#5d36ff", "#FFFFFF"),
+    "accent-purple-dashed":  _box_style_def("#5d36ff", "#f1ecff", "dashed=1;dashPattern=8 4;"),
+
+    # Accent pink (experimental / beta)
+    "accent-pink":         _box_style_def("#cc00dc", "#FFF0FA"),
+    "accent-pink-outline": _box_style_def("#cc00dc", "#FFFFFF"),
+    "accent-pink-dashed":  _box_style_def("#cc00dc", "#FFF0FA", "dashed=1;dashPattern=8 4;"),
+
+    # Semantic: positive / critical / negative (use sparingly)
+    "positive": _box_style_def("#188918", "#F5FAE5"),
+    "critical": _box_style_def("#C35500", "#FFF8D6"),
+    "negative": _box_style_def("#D20A0A", "#FFEAF4"),
+}
+
+# Step number circles (sourced from numbers.xml). Each variant yields a
+# 30x30 circle with gradient fill + bold white centred number. SAP ships
+# 7 colour variants in numbers.xml; we expose them here.
+_STEP_KIND_GRADIENT = {
+    # (gradientColor, fillColor)
+    "default": ("#223548", "#5b738b"),  # dark grey gradient
+    "blue":    ("#0040A0", "#0070F2"),
+    "purple":  ("#3220BF", "#5D36FF"),
+    "pink":    ("#A0008C", "#CC00DC"),
+    "green":   ("#0E5C0E", "#188918"),
+    "yellow":  ("#9F8500", "#E0B400"),
+    "teal":    ("#066068", "#07838F"),
 }
 
 
@@ -819,11 +895,12 @@ def emit(
             gx, gy, _, _ = group_geo[n.group]
             rel_x, rel_y = x - gx, y - gy
 
+        node_cell_id = _stable_id("n", n.id)
         n_cell = ET.SubElement(
             root,
             "mxCell",
             attrib={
-                "id": _stable_id("n", n.id),
+                "id": node_cell_id,
                 "value": label,
                 "style": style,
                 "vertex": "1",
@@ -841,6 +918,93 @@ def emit(
                 "as": "geometry",
             },
         )
+
+        # Interface badge — small rounded pill placed at the top-centre of
+        # the node, sized 56×16 per annotations_and_interfaces.xml. Two
+        # variants:
+        #   "sap"     → SAP blue #0070f3 with default fill
+        #   "generic" → SAP grey #475f75 with default fill
+        # Label text is "Interface" (or whatever Node.interface_label says
+        # in future). The pill has parent=node_cell_id so it moves with
+        # the node when the user drags it in drawio.
+        if n.interface in ("sap", "generic"):
+            badge_stroke = "#0070f3" if n.interface == "sap" else "#475f75"
+            badge_label = "Interface"
+            badge_w, badge_h = 56, 16
+            badge = ET.SubElement(
+                root,
+                "mxCell",
+                attrib={
+                    "id": _stable_id("if", n.id),
+                    "value": badge_label,
+                    "style": (
+                        f"rounded=1;whiteSpace=wrap;html=1;arcSize=50;"
+                        f"strokeColor={badge_stroke};fillColor=default;"
+                        f"strokeWidth=1.5;fontColor={badge_stroke};"
+                        f"fontStyle=1;fontSize=9;align=center;verticalAlign=middle;"
+                    ),
+                    "vertex": "1",
+                    "parent": node_cell_id,
+                    "connectable": "0",
+                },
+            )
+            # Position the badge at the top of the node, slightly above
+            # the icon so it overlaps the border (SAP-canonical).
+            ET.SubElement(
+                badge,
+                "mxGeometry",
+                attrib={
+                    "x": str((w - badge_w) // 2),
+                    "y": str(-badge_h // 2),
+                    "width": str(badge_w),
+                    "height": str(badge_h),
+                    "as": "geometry",
+                },
+            )
+
+        # Step number circle — 30×30 ellipse with gradient fill + bold
+        # white digit. Placed at the top-LEFT corner of the node, half
+        # off the border (visual badge convention). Sourced from
+        # numbers.xml.
+        if n.step is not None and 1 <= n.step <= 99:
+            grad, fill = _STEP_KIND_GRADIENT.get(
+                n.stepKind, _STEP_KIND_GRADIENT["default"]
+            )
+            step_w, step_h = 30, 30
+            step_cell = ET.SubElement(
+                root,
+                "mxCell",
+                attrib={
+                    "id": _stable_id("st", n.id),
+                    "value": (
+                        f"<p style=\"line-height: 100%;\"><b>"
+                        f"<font face=\"arial black\" "
+                        f"style=\"font-size: 16px;\" color=\"#ffffff\">"
+                        f"{n.step}</font></b></p>"
+                    ),
+                    "style": (
+                        f"ellipse;whiteSpace=wrap;html=1;aspect=fixed;"
+                        f"gradientColor={grad};strokeColor=none;"
+                        f"gradientDirection=east;fillColor={fill};rounded=0;"
+                        f"fontFamily=Helvetica;fontSize=12;fontColor=#FFFFFF;"
+                        f"align=center;verticalAlign=middle;"
+                    ),
+                    "vertex": "1",
+                    "parent": node_cell_id,
+                    "connectable": "0",
+                },
+            )
+            ET.SubElement(
+                step_cell,
+                "mxGeometry",
+                attrib={
+                    "x": str(-step_w // 2),
+                    "y": str(-step_h // 2),
+                    "width": str(step_w),
+                    "height": str(step_h),
+                    "as": "geometry",
+                },
+            )
 
     # 4. Edges — exit/entry anchors + optional waypoints from dot.
     for e in diagram.edges:

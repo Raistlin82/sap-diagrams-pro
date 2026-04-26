@@ -43,6 +43,7 @@ HORIZON_BORDERS = {
     "#07838F",                             # accent teal
     "#5D36FF", "#470BED", "#4628EC",       # accent purple (3 variants in SAP libraries)
     "#CC00DC",                             # accent pink (Trust)
+    "NONE", "none",                        # step number circles use no stroke (intentional)
 }
 HORIZON_FILLS = {
     "#EBF8FF",                              # BTP fill
@@ -54,6 +55,17 @@ HORIZON_FILLS = {
     "#DAFDF5",                              # accent teal fill
     "#F1ECFF", "#F1EDFF",                   # accent purple fill (Authorize pill)
     "#FFF0FA",                              # accent pink fill (Trust pill)
+    # Step number circle fills (numbers.xml — 30×30 ellipse with gradient).
+    # Each corresponds to a stepKind colour variant.
+    "#5B738B",                              # default (grey) step
+    "#E0B400",                              # yellow step
+    # Step circles can also reuse the border palette as their fill
+    # (the white digit stays legible on any of these saturated colours).
+    "#0070F2", "#0070F3",                  # blue step (BTP)
+    "#5D36FF", "#470BED",                  # purple step (Authorize family)
+    "#CC00DC",                             # pink step (Trust family)
+    "#188918",                             # green step (Authenticate family)
+    "#07838F",                             # teal step
     "none",
 }
 # Text colors: title/body grey + the 4 pill kinds whose label uses the
@@ -67,6 +79,7 @@ HORIZON_TEXT = {
     "#CC00DC",                              # Trust pill text
     "#470BED",                              # Authorize pill text
     "#475F75", "#475E75",                   # Generic Protocol pill text
+    "#FFFFFF",                              # step number circles use white text on coloured fill
 }
 
 SEVERITY_RANK = {"CRITICAL": 0, "WARNING": 1, "INFO": 2}
