@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: 2026 Gabriele Capparelli
+# SPDX-License-Identifier: Apache-2.0
+#
+# Engine smoke test — regenerate L0/L1/L2 .drawio from committed JSON
+# examples and validate them against the SAP guideline. No untrusted input
+# (event payloads, PR bodies, commit messages) is read or shell-interpolated.
+
+name: engine-smoke-test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c
+        with:
+          python-version: '3.12'
+
+      - name: Verify shebangs + SPDX headers on scripts
+        run: |
+          set -eu
+          for f in scripts/*.py scripts/*.sh; do
+            head -1 "$f" | grep -q '^#!' || { echo "missing shebang $f"; exit 1; }
+            head -3 "$f" | grep -q 'SPDX-License-Identifier' || { echo "missing SPDX $f"; exit 1; }
+          done
+          echo "OK: shebangs and SPDX headers present"
+
+      - name: Generate L0 / L1 / L2 .drawio from committed examples
+        run: |
+          set -eu
+          mkdir -p out
+          for level in L0 L1 L2; do
+            python3 scripts/generate-drawio.py \
+              "skills/sap-diagram-generate/examples/${level}-example.json" \
+              --out "out/${level}.drawio"
+          done
+          ls -la out/
+
+      - name: Validate generated .drawio files in strict mode
+        run: |
+          set -eu
+          for level in L0 L1 L2; do
+            python3 scripts/validate-drawio.py "out/${level}.drawio" --strict
+          done
+          echo "OK: all levels pass strict validation"
+
+      - name: Verify shape-index.json schema integrity
+        run: python3 scripts/_ci_check_index.py
+
+      - name: Verify SKILL.md frontmatter
+        run: python3 scripts/_ci_check_skills.py

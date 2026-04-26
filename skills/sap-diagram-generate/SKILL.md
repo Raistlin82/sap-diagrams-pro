@@ -2,7 +2,7 @@
 name: sap-diagram-generate
 description: Generate one or more SAP-compliant draw.io architecture diagrams from a natural-language description, after walking the user through an interactive confirmation flow that consults SAP-domain skills (sap-btp-best-practices, sap-btp-connectivity, sap-pce-expert, etc.) for best-practice validation. Use when the user asks to create, draw, generate, build a SAP architecture diagram, BTP solution diagram, reference architecture, or mentions levels (L0/L1/L2/L3) and SAP services like CAP, S/4HANA, BTP, Integration Suite, DOX, AI Core, Build Process Automation, Event Mesh, PCE, RISE.
 argument-hint: "[L0|L1|L2|L3|combo] <description of the architecture>"
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Skill
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 version: 0.1.0
 ---
 
