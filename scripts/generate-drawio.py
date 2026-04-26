@@ -137,6 +137,7 @@ class Group:
     type: str
     label: str
     position: str = "center"
+    parent: str | None = None  # id of parent group; None = top-level (3x3 grid)
     nodes: list[str] = field(default_factory=list)
 
 
@@ -257,6 +258,7 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
             type=g.get("type", "btp-layer"),
             label=g.get("label", gid),
             position=g.get("position", "center"),
+            parent=g.get("parent"),
             nodes=[],
         )
 
@@ -312,16 +314,33 @@ def _stable_id(prefix: str, key: str) -> str:
 
 
 def layout_groups(groups: list[Group]) -> dict[str, tuple[int, int, int, int]]:
-    """Return mapping group_id → (x, y, w, h) on the 3×3 canvas grid.
+    """Two-pass layout: top-level groups on 3×3 canvas grid, nested
+    sub-groups inside their parent's geometry.
 
-    Groups sharing the same grid cell are stacked vertically inside the cell.
+    Pass 1 — top-level (parent=None): groups sharing the same grid cell stack
+    vertically inside the cell.
+
+    Pass 2 — nested (parent set): children flow inside parent's inner area.
+      • 1-2 children → horizontal split.
+      • 3 children   → horizontal split (matches the SAP "Inbound | Core |
+                        Outbound" convention).
+      • 4 children   → 2×2 grid.
+      • 5+ children  → 2-column grid (rows = ceil(n/2)).
     """
-    by_cell: dict[tuple[int, int], list[Group]] = {}
+    layout: dict[str, tuple[int, int, int, int]] = {}
+
+    top_level = [g for g in groups if not g.parent]
+    children_by_parent: dict[str, list[Group]] = {}
     for g in groups:
+        if g.parent:
+            children_by_parent.setdefault(g.parent, []).append(g)
+
+    # Pass 1 — top-level on 3x3 grid.
+    by_cell: dict[tuple[int, int], list[Group]] = {}
+    for g in top_level:
         cell = GRID_POSITIONS.get(g.position, (1, 1))
         by_cell.setdefault(cell, []).append(g)
 
-    layout: dict[str, tuple[int, int, int, int]] = {}
     for (cx, cy), group_list in by_cell.items():
         share = max(1, len(group_list))
         cell_h = CELL_H // share
@@ -331,6 +350,41 @@ def layout_groups(groups: list[Group]) -> dict[str, tuple[int, int, int, int]]:
             w = CELL_W - 2 * GROUP_PADDING
             h = cell_h - 2 * GROUP_PADDING
             layout[g.id] = (x, y, w, h)
+
+    # Pass 2 — nested sub-groups inside their parent.
+    NESTED_INNER_PAD = 8
+    NESTED_LABEL_RESERVE = 32  # space at top for parent's own label
+
+    for parent_id, children in children_by_parent.items():
+        if parent_id not in layout:
+            # Orphan child (parent missing) — place in center cell as fallback.
+            cx, cy = (1 * CELL_W) + GROUP_PADDING, (1 * CELL_H) + GROUP_PADDING
+            layout[children[0].id] = (cx, cy, 200, 100)
+            continue
+        px, py, pw, ph = layout[parent_id]
+        n = len(children)
+        inner_x = px + NESTED_INNER_PAD
+        inner_y = py + NESTED_LABEL_RESERVE
+        inner_w = pw - 2 * NESTED_INNER_PAD
+        inner_h = ph - NESTED_LABEL_RESERVE - NESTED_INNER_PAD
+
+        if n <= 3:
+            # Horizontal split (Inbound | Core | Outbound pattern).
+            cols, rows = n, 1
+        elif n == 4:
+            cols, rows = 2, 2
+        else:
+            cols, rows = 2, (n + 1) // 2
+
+        cell_w = (inner_w - (cols - 1) * NESTED_INNER_PAD) // cols
+        cell_h = (inner_h - (rows - 1) * NESTED_INNER_PAD) // rows
+        for idx, child in enumerate(children):
+            col = idx % cols
+            row = idx // cols
+            cx = inner_x + col * (cell_w + NESTED_INNER_PAD)
+            cy = inner_y + row * (cell_h + NESTED_INNER_PAD)
+            layout[child.id] = (cx, cy, cell_w, cell_h)
+
     return layout
 
 
@@ -359,15 +413,23 @@ def layout_nodes(
 # ─────────────────────────────────────────────────────────────────────────────
 # XML emission
 # ─────────────────────────────────────────────────────────────────────────────
-def _group_style(g: Group) -> str:
+def _group_style(g: Group, is_nested: bool = False) -> str:
     border, fill = GROUP_STYLES.get(g.type, GROUP_STYLES["btp-layer"])
+    if is_nested:
+        # Sub-group inside a parent organism: keep the same border for visual
+        # cohesion, but use white fill so the parent's #EBF8FF reads as the
+        # "BTP territory" and the sub-groups read as lanes inside it.
+        fill = "#FFFFFF"
+        font_size = 11  # smaller than the parent's 13
+    else:
+        font_size = 13
     return (
         f"rounded=1;whiteSpace=wrap;html=1;"
         f"strokeColor={border};fillColor={fill};"
         f"arcSize=12;absoluteArcSize=1;strokeWidth=1.5;"
         f"verticalAlign=top;align=left;"
-        f"fontColor={PALETTE['title']};fontStyle=1;fontSize=13;"
-        f"spacingLeft=12;spacingTop=8;"
+        f"fontColor={PALETTE['title']};fontStyle=1;fontSize={font_size};"
+        f"spacingLeft=12;spacingTop=6;"
     )
 
 
@@ -483,8 +545,12 @@ def emit(diagram: Diagram, shape_index: "ShapeIndex | None" = None) -> str:
         },
     )
 
-    # 2. Groups
-    for g in diagram.groups:
+    # 2. Groups — top-level FIRST (so they sit behind sub-groups in z-order),
+    #    then nested sub-groups on top.
+    top_level_groups = [g for g in diagram.groups if not g.parent]
+    nested_groups = [g for g in diagram.groups if g.parent]
+
+    for g in top_level_groups + nested_groups:
         if g.id not in group_geo:
             continue
         x, y, w, h = group_geo[g.id]
@@ -494,7 +560,7 @@ def emit(diagram: Diagram, shape_index: "ShapeIndex | None" = None) -> str:
             attrib={
                 "id": _stable_id("g", g.id),
                 "value": g.label,
-                "style": _group_style(g),
+                "style": _group_style(g, is_nested=bool(g.parent)),
                 "vertex": "1",
                 "parent": "1",
             },
