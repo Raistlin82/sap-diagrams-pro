@@ -1,0 +1,25 @@
+{
+  "name": "sap-diagrams-pro",
+  "version": "0.1.0",
+  "description": "Generate SAP-compliant draw.io architecture diagrams using the official SAP BTP Solution Diagram Guideline (atomic design + Horizon palette) and SAP Architecture Center reference architectures. Supports L0 (executive), L1 (architect), L2 (technical) levels.",
+  "author": {
+    "name": "Gabriele Capparelli",
+    "email": "gabriele@key2.it",
+    "url": "https://github.com/Raistlin82"
+  },
+  "homepage": "https://github.com/Raistlin82/sap-diagrams-pro",
+  "repository": "https://github.com/Raistlin82/sap-diagrams-pro",
+  "license": "Apache-2.0",
+  "keywords": [
+    "sap",
+    "btp",
+    "drawio",
+    "architecture",
+    "diagram",
+    "horizon",
+    "solution-diagram",
+    "reference-architecture",
+    "sap-architecture-center",
+    "atomic-design"
+  ]
+}

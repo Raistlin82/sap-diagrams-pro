@@ -1,0 +1,20 @@
+version = 1
+SPDX-PackageName = "sap-diagrams-pro"
+SPDX-PackageSupplier = "Gabriele Capparelli <gabriele@key2.it>"
+SPDX-PackageDownloadLocation = "https://github.com/Raistlin82/sap-diagrams-pro"
+
+[[annotations]]
+path = [
+    "**/*.md",
+    "**/*.json",
+    "**/*.py",
+    "**/*.sh",
+    "**/*.drawio",
+    ".gitignore",
+    "REUSE.toml",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Gabriele Capparelli"
+SPDX-License-Identifier = "Apache-2.0"

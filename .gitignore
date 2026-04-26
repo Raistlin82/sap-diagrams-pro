@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Gabriele Capparelli
+# SPDX-License-Identifier: Apache-2.0
+
+# Local user config
+.claude/*.local.md
+.env
+.env.local
+
+# Plugin runtime cache (downloaded SAP repos + parsed shape-index)
+~/.cache/sap-diagrams-pro/
+.cache/
+
+# Generated diagrams (output of /sap-diagram-generate)
+diagrams/
+*.drawio.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Node (for any future tooling)
+node_modules/
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+dist/
+build/
+*.tgz

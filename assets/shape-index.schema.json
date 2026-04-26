@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Raistlin82/sap-diagrams-pro/schemas/shape-index.schema.json",
+  "title": "SAP Diagrams Pro — Shape Index",
+  "description": "Catalog of SAP BTP draw.io shapes extracted from the official btp-solution-diagrams repo. Used by sap-icons-resolve and sap-diagram-generate to look up the correct icon style for a named SAP service.",
+  "type": "object",
+  "required": ["meta", "sets", "services"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["sourceCommit", "generatedAt", "totalServices"],
+      "properties": {
+        "sourceCommit": {
+          "type": "string",
+          "description": "Git short SHA of btp-solution-diagrams at index build time."
+        },
+        "sourceRepo": {
+          "type": "string",
+          "format": "uri",
+          "default": "https://github.com/SAP/btp-solution-diagrams"
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "totalServices": {"type": "integer", "minimum": 0},
+        "schemaVersion": {"type": "string", "default": "1.0.0"}
+      }
+    },
+    "sets": {
+      "type": "array",
+      "description": "The 7 official SAP shape library sets.",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "fileBasename"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "foundational",
+              "app-dev-automation",
+              "data-analytics",
+              "ai",
+              "btp-saas",
+              "integration-suite",
+              "generic"
+            ]
+          },
+          "name": {"type": "string"},
+          "fileBasename": {"type": "string"},
+          "serviceCount": {"type": "integer"}
+        }
+      }
+    },
+    "services": {
+      "type": "array",
+      "description": "Flat list of services with their draw.io shape style snippets (S/M/L sizes).",
+      "items": {
+        "type": "object",
+        "required": ["name", "set", "size"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Canonical SAP service name (e.g. 'SAP Build Process Automation')."
+          },
+          "aliases": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Common aliases / abbreviations (BPA, Build Apps, ...)."
+          },
+          "set": {
+            "type": "string",
+            "enum": [
+              "foundational",
+              "app-dev-automation",
+              "data-analytics",
+              "ai",
+              "btp-saas",
+              "integration-suite",
+              "generic"
+            ]
+          },
+          "size": {
+            "type": "string",
+            "enum": ["S", "M", "L"]
+          },
+          "drawioStyle": {
+            "type": "string",
+            "description": "The full draw.io style attribute string (e.g. 'shape=mxgraph.sap.icons.bpa;...')."
+          },
+          "iconUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "Optional: URL to the SVG icon."
+          },
+          "tags": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      }
+    }
+  }
+}

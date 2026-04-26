@@ -1,0 +1,22 @@
+{
+  "_comment": "SPDX-FileCopyrightText: 2026 Gabriele Capparelli — SPDX-License-Identifier: Apache-2.0",
+  "metadata": {
+    "title": "NOVA Invoice Suite — L0 Overview",
+    "level": "L0",
+    "author": "Gabriele Capparelli"
+  },
+  "groups": [
+    {"id": "user", "type": "user", "label": "AP Team", "position": "top-left"},
+    {"id": "nova", "type": "btp-layer", "label": "NOVA Solution (SAP BTP)", "position": "center"},
+    {"id": "s4", "type": "sap-app", "label": "S/4HANA Cloud", "position": "bottom-right"}
+  ],
+  "nodes": [
+    {"id": "ap-clerk", "label": "AP Clerk", "group": "user"},
+    {"id": "core", "label": "Invoice Processing", "group": "nova"},
+    {"id": "s4hana", "label": "S/4HANA", "group": "s4"}
+  ],
+  "edges": [
+    {"id": "e1", "source": "ap-clerk", "target": "core", "style": "solid", "label": "scan invoice"},
+    {"id": "e2", "source": "core", "target": "s4hana", "style": "solid", "label": "post"}
+  ]
+}

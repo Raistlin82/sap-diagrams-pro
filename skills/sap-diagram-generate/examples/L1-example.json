@@ -1,0 +1,46 @@
+{
+  "_comment": "SPDX-FileCopyrightText: 2026 Gabriele Capparelli — SPDX-License-Identifier: Apache-2.0",
+  "metadata": {
+    "title": "NOVA Invoice Suite — L1 Architecture",
+    "level": "L1",
+    "author": "Gabriele Capparelli"
+  },
+  "groups": [
+    {"id": "users", "type": "user", "label": "AP Team", "position": "top-left"},
+    {"id": "external", "type": "third-party", "label": "External Systems", "position": "top-right"},
+    {"id": "btp", "type": "btp-layer", "label": "SAP BTP — NOVA Solution", "position": "center"},
+    {"id": "s4-app", "type": "sap-app", "label": "S/4HANA Cloud", "position": "bottom-right"},
+    {"id": "ops", "type": "non-sap", "label": "Operations", "position": "bottom-left"}
+  ],
+  "nodes": [
+    {"id": "ap-clerk", "label": "AP Clerk", "group": "users"},
+    {"id": "approver", "label": "Finance Approver", "group": "users"},
+    {"id": "sdi", "label": "Italian SDI", "group": "external"},
+    {"id": "supplier", "label": "Supplier Email", "group": "external"},
+    {"id": "cap", "label": "CAP Backend", "service": "Cloud Foundry Runtime", "group": "btp"},
+    {"id": "dox", "label": "DOX", "service": "Document Information Extraction", "group": "btp"},
+    {"id": "event-mesh", "label": "Event Mesh", "service": "Event Mesh", "group": "btp"},
+    {"id": "bpa", "label": "BPA Workflow", "service": "Build Process Automation", "group": "btp"},
+    {"id": "is", "label": "Integration Suite", "service": "Cloud Integration", "group": "btp"},
+    {"id": "ai-core", "label": "AI Core", "service": "AI Core", "group": "btp"},
+    {"id": "logging", "label": "Cloud Logging", "service": "Cloud Logging", "group": "btp"},
+    {"id": "audit", "label": "Audit Log", "service": "Audit Log Service", "group": "btp"},
+    {"id": "s4hana", "label": "S/4HANA Cloud", "group": "s4-app"},
+    {"id": "alm", "label": "Cloud ALM", "service": "Cloud ALM", "group": "ops"}
+  ],
+  "edges": [
+    {"id": "e1", "source": "ap-clerk", "target": "cap", "style": "solid", "label": "Fiori UI"},
+    {"id": "e2", "source": "approver", "target": "bpa", "style": "solid", "label": "approve"},
+    {"id": "e3", "source": "sdi", "target": "is", "style": "dashed", "label": "FatturaPA in"},
+    {"id": "e4", "source": "supplier", "target": "is", "style": "dashed", "label": "PDF email"},
+    {"id": "e5", "source": "is", "target": "cap", "style": "dashed", "label": "inbound"},
+    {"id": "e6", "source": "cap", "target": "dox", "style": "solid", "label": "OCR"},
+    {"id": "e7", "source": "cap", "target": "ai-core", "style": "solid", "label": "risk score"},
+    {"id": "e8", "source": "cap", "target": "event-mesh", "style": "dashed", "label": "events", "direction": "bidirectional"},
+    {"id": "e9", "source": "event-mesh", "target": "bpa", "style": "dashed", "label": "kickoff workflow"},
+    {"id": "e10", "source": "cap", "target": "s4hana", "style": "solid", "label": "OData v4 (Released C1)"},
+    {"id": "e11", "source": "cap", "target": "logging", "style": "dashed", "label": "logs"},
+    {"id": "e12", "source": "cap", "target": "audit", "style": "dashed", "label": "audit"},
+    {"id": "e13", "source": "logging", "target": "alm", "style": "dashed", "label": "metrics"}
+  ]
+}
