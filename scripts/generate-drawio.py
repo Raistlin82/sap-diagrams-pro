@@ -176,6 +176,13 @@ CANVAS_H = 827
 # SAP uses the proprietary "72 Brand" font in their assets. We declare the
 # font family chain so drawio falls back gracefully on machines without it.
 SAP_FONT_FAMILY = "72,Helvetica,Arial,sans-serif"
+
+# Generic icons (from 20-03-generic-icons set) are SVG 24×24 in source.
+# Rendering at 80×80 stretches and looks blurry. We render them at native
+# size × 2 = 48×48 for crisp output. The label sits below via
+# verticalLabelPosition=bottom in the style string.
+GENERIC_ICON_W = 48
+GENERIC_ICON_H = 48
 CELL_W = CANVAS_W // 3
 CELL_H = CANVAS_H // 3
 GROUP_PADDING = 24
@@ -1148,12 +1155,23 @@ def emit(
         style, is_icon, label = _node_style(n, shape_index)
         # When dot layout is in effect, node_geo provides exact positions and
         # sizes. Otherwise fall back to the greedy node_xy + ICON/PLAIN
-        # default sizes.
+        # default sizes. Generic icons (User, Mobile, Desktop, etc.) are
+        # rendered smaller because their SVG source is only 24×24 — at
+        # ICON_W=80 they look stretched. 48×48 keeps them crisp without
+        # crowding the surrounding layout.
         if n.id in node_geo:
             x, y, w, h = node_geo[n.id]
+            # Override dot's calculated size for generic icons.
+            if n.genericIcon:
+                w, h = GENERIC_ICON_W, GENERIC_ICON_H
         else:
             x, y = node_xy.get(n.id, (0, 0))
-            w, h = (ICON_W, ICON_H) if is_icon else (NODE_W, NODE_H)
+            if n.genericIcon:
+                w, h = GENERIC_ICON_W, GENERIC_ICON_H
+            elif is_icon:
+                w, h = ICON_W, ICON_H
+            else:
+                w, h = NODE_W, NODE_H
         node_abs_geom[n.id] = (x, y, w, h)
 
         # Real drawio parenting: if the node belongs to a (sub-)group, parent
@@ -1232,15 +1250,16 @@ def emit(
                 },
             )
 
-        # Step number circle — 30×30 ellipse with gradient fill + bold
-        # white digit. Placed at the top-LEFT corner of the node, half
-        # off the border (visual badge convention). Sourced from
-        # numbers.xml.
+        # Step number circle — 24×24 ellipse with gradient fill + bold
+        # white digit. Placed FULLY OUTSIDE the top-left corner of the
+        # node (not overlapping the icon body). Smaller than 30×30 so it
+        # stays readable but doesn't dominate small generic icons.
+        # Sourced from numbers.xml SAP convention.
         if n.step is not None and 1 <= n.step <= 99:
             grad, fill = _STEP_KIND_GRADIENT.get(
                 n.stepKind, _STEP_KIND_GRADIENT["default"]
             )
-            step_w, step_h = 30, 30
+            step_w, step_h = 24, 24
             step_cell = ET.SubElement(
                 root,
                 "mxCell",
@@ -1249,14 +1268,14 @@ def emit(
                     "value": (
                         f"<p style=\"line-height: 100%;\"><b>"
                         f"<font face=\"arial black\" "
-                        f"style=\"font-size: 16px;\" color=\"#ffffff\">"
+                        f"style=\"font-size: 13px;\" color=\"#ffffff\">"
                         f"{n.step}</font></b></p>"
                     ),
                     "style": (
                         f"ellipse;whiteSpace=wrap;html=1;aspect=fixed;"
                         f"gradientColor={grad};strokeColor=none;"
                         f"gradientDirection=east;fillColor={fill};rounded=0;"
-                        f"fontFamily=Helvetica;fontSize=12;fontColor=#FFFFFF;"
+                        f"fontFamily=Helvetica;fontSize=10;fontColor=#FFFFFF;"
                         f"align=center;verticalAlign=middle;"
                     ),
                     "vertex": "1",
@@ -1264,12 +1283,17 @@ def emit(
                     "connectable": "0",
                 },
             )
+            # Position FULLY OUTSIDE the node's top-left corner: shift by
+            # the full step radius (12px) plus a small gap (4px) so the
+            # circle is just touching the corner, not overlapping the
+            # icon body. Same offset works for both small generic icons
+            # (48×48) and full SAP icons (80×80).
             ET.SubElement(
                 step_cell,
                 "mxGeometry",
                 attrib={
-                    "x": str(-step_w // 2),
-                    "y": str(-step_h // 2),
+                    "x": "-16",
+                    "y": "-16",
                     "width": str(step_w),
                     "height": str(step_h),
                     "as": "geometry",

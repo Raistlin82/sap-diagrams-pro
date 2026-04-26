@@ -1,0 +1,70 @@
+{
+  "_comment": "CORRECTED categorization: Build Work Zone, Task Center, IAS, XSUAA, HANA Cloud, Cloud ALM are ALL BTP services and belong inside the BTP container, NOT in 'SAP Cloud Apps' or 'Operations' or separate 'Database' groups. SAP Cloud Apps group is for SaaS products like S/4HANA Cloud / SuccessFactors / Ariba — none of which are in this scenario. PCE remains its own group as it's customer-managed.",
+  "metadata": {
+    "title": "CAP App with Build Work Zone and Process Automation",
+    "level": "L1",
+    "author": "sap-diagrams-pro"
+  },
+  "presets": [],
+  "groups": [
+    {"id": "users", "type": "user", "label": "Users", "position": "top-left"},
+
+    {"id": "btp", "type": "btp-layer", "label": "SAP BTP", "position": "center"},
+    {"id": "btp-app", "type": "btp-layer", "label": "Application", "parent": "btp"},
+    {"id": "btp-portal", "type": "btp-layer", "label": "Portal + Workflow", "parent": "btp"},
+    {"id": "btp-identity", "type": "btp-layer", "label": "Identity", "parent": "btp"},
+    {"id": "btp-storage", "type": "btp-layer", "label": "Storage", "parent": "btp"},
+    {"id": "btp-ops", "type": "btp-layer", "label": "Operations", "parent": "btp"},
+
+    {"id": "pce", "type": "sap-app", "label": "On-Prem (PCE)", "position": "bottom-left"}
+  ],
+  "nodes": [
+    {"id": "end-user", "label": "End User", "group": "users", "genericIcon": "user", "step": 1, "stepKind": "default"},
+    {"id": "approver", "label": "Approver", "group": "users", "genericIcon": "user"},
+
+    {"id": "cap",     "label": "CAP Backend",  "service": "Cloud Foundry Runtime",     "group": "btp-app", "interface": "sap", "step": 3, "stepKind": "blue"},
+    {"id": "fiori",   "label": "Fiori App",    "service": "Build Apps",                "group": "btp-app"},
+    {"id": "em",      "label": "Event Mesh",   "service": "Event Mesh",                "group": "btp-app"},
+
+    {"id": "bwz",     "label": "Build Work Zone",        "service": "Build Work Zone",         "group": "btp-portal", "step": 2, "stepKind": "blue"},
+    {"id": "bpa",     "label": "BPA Workflow",           "service": "Build Process Automation","group": "btp-portal", "step": 4, "stepKind": "purple"},
+    {"id": "tc",      "label": "Task Center",            "service": "Task Center",             "group": "btp-portal"},
+
+    {"id": "ias",     "label": "Identity Authentication","service": "Identity Authentication", "group": "btp-identity"},
+    {"id": "xsuaa",   "label": "XSUAA",                  "service": "Authorization and Trust Management Service", "group": "btp-identity"},
+
+    {"id": "hana",    "label": "HANA Cloud",             "service": "HANA Cloud",              "group": "btp-storage"},
+
+    {"id": "logging", "label": "Cloud Logging",          "service": "Cloud Logging",           "group": "btp-ops"},
+    {"id": "audit",   "label": "Audit Log",              "service": "Audit Log Service",       "group": "btp-ops"},
+    {"id": "alm",     "label": "Cloud ALM",              "service": "Cloud ALM",               "group": "btp-ops"},
+
+    {"id": "cloud-conn", "label": "Cloud Connector",     "service": "Cloud Connector",         "group": "pce"},
+    {"id": "s4-pce",     "label": "S/4HANA PCE",         "group": "pce", "boxStyle": "btp-outline", "interface": "generic", "step": 5, "stepKind": "blue"}
+  ],
+  "edges": [
+    {"id": "e1",  "source": "end-user", "target": "bwz",  "style": "solid", "label": "Authenticate", "kind": "annotation"},
+    {"id": "e2",  "source": "approver", "target": "tc",   "style": "solid", "label": "Authenticate", "kind": "annotation"},
+
+    {"id": "e3",  "source": "bwz",      "target": "fiori","style": "solid", "label": "SAML2/OIDC",   "kind": "annotation"},
+    {"id": "e4",  "source": "fiori",    "target": "cap",  "style": "solid", "label": "REST/OData",   "kind": "annotation", "direction": "bidirectional"},
+
+    {"id": "e5",  "source": "cap",      "target": "bpa",  "style": "solid", "label": "HTTPS",        "kind": "annotation"},
+    {"id": "e6",  "source": "cap",      "target": "em",   "style": "dashed","label": "events",       "direction": "bidirectional"},
+    {"id": "e7",  "source": "em",       "target": "bpa",  "style": "dashed","label": "kickoff"},
+    {"id": "e8",  "source": "bpa",      "target": "tc",   "style": "solid", "label": "tasks"},
+
+    {"id": "e9",  "source": "cap",      "target": "hana", "style": "solid", "label": "JDBC"},
+
+    {"id": "e10", "source": "cap",      "target": "cloud-conn", "style": "solid", "label": "via Trust"},
+    {"id": "e11", "source": "cloud-conn","target": "s4-pce",    "style": "solid", "label": "REST/OData", "kind": "annotation"},
+
+    {"id": "e12", "source": "ias",      "target": "xsuaa","style": "solid", "label": "Trust",        "kind": "trust"},
+    {"id": "e13", "source": "cap",      "target": "xsuaa","style": "solid", "label": "Authorize",    "kind": "authorize"},
+    {"id": "e14", "source": "cap",      "target": "ias",  "style": "solid", "label": "OIDC",         "kind": "annotation"},
+
+    {"id": "e15", "source": "cap",      "target": "logging","style": "dashed","label": "stdout"},
+    {"id": "e16", "source": "cap",      "target": "audit",  "style": "dashed","label": "audit events"},
+    {"id": "e17", "source": "logging",  "target": "alm",    "style": "dashed","label": "metrics"}
+  ]
+}

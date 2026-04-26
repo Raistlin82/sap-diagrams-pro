@@ -56,11 +56,41 @@ For L2 diagrams, decompose the BTP Layer into sub-groups by capability:
 
 ### 4. SAP application layer
 
-**Purpose**: SAP cloud or on-premise applications consumed by the solution.
+**Purpose**: SAP **SaaS applications** (full products, not BTP services) consumed by the solution.
+
+**⚠️ Critical distinction — what is and isn't an SAP application**:
+
+✅ **Goes in `sap-app` group**:
+- S/4HANA Cloud (the product, not the runtime)
+- S/4HANA on-premise / Private Cloud Edition (PCE)
+- SAP ECC
+- SAP SuccessFactors
+- SAP Ariba
+- SAP Fieldglass
+- SAP Concur
+- SAP Customer Experience (C4C)
+- SAP Commerce Cloud
+- SAP Signavio
+- SAP MDG (Master Data Governance)
+
+❌ **Does NOT go in `sap-app`** — these are BTP services and belong in the `btp-layer` group:
+- SAP Build Work Zone (BTP service: portal/launchpad)
+- SAP Task Center (BTP service)
+- SAP Build Apps / Build Code / Build Process Automation (BTP services)
+- SAP HANA Cloud (BTP service: database)
+- SAP Cloud ALM (BTP service: monitoring)
+- SAP Cloud Logging / Audit Log Service (BTP services)
+- SAP Identity Authentication (IAS) (BTP service)
+- SAP Authorization and Trust Management Service (XSUAA) (BTP service)
+- SAP Cloud Connector (BTP service)
+- SAP Integration Suite / Cloud Integration / Event Mesh (BTP services)
+- SAP AI Core / Joule / Generative AI Hub (BTP services)
+- SAP Datasphere / Analytics Cloud / Data Intelligence (BTP services — though Analytics Cloud is borderline)
+
+**Rule of thumb**: if it's listed at <https://discovery-center.cloud.sap/serviceCatalog> as a **service** (subscription/instance under a BTP subaccount), it goes in `btp-layer`. If it's a standalone **product** (separate subscription, separate URL, separate UI), it goes in `sap-app`.
 
 **Style**: rounded rectangle, BTP border `#0070F2`, white fill `#FFFFFF` (BTP-affiliated but distinguishable from BTP services).
-**Position by convention**: bottom-left or bottom-center for on-premise apps; top-right for SAP cloud apps.
-**Typical contents**: S/4HANA Cloud, S/4HANA on-premise, ECC, SuccessFactors, Ariba, Fieldglass, Concur, C4C.
+**Position by convention**: bottom-left or bottom-center for on-premise apps; top-right for SAP cloud apps. PCE in particular often goes bottom-left because of its on-prem character despite being managed.
 
 ### 5. Non-SAP system layer
 
