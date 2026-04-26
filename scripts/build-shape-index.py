@@ -43,6 +43,20 @@ DEFAULT_OVERRIDES_CSV = (
     Path(__file__).resolve().parent.parent / "assets" / "service-name-overrides.csv"
 )
 
+# Standalone library files (top-level of draw.io/) → category bucket they
+# populate. These were missing from the original parser which only walked
+# the 20-02-* and 20-03-* sub-directories.
+STANDALONE_LIBRARIES = {
+    "connectors.xml": "connectors",
+    "annotations_and_interfaces.xml": "annotations",
+    "area_shapes.xml": "area_shapes",
+    "default_shapes.xml": "default_shapes",
+    "numbers.xml": "numbers",
+    "sap_brand_names.xml": "brand_names",
+    "essentials.xml": "essentials",
+    "text_elements.xml": "text_elements",
+}
+
 # Acronyms that must stay uppercase when normalizing tech IDs.
 UPPERCASE_TERMS = {
     "sap", "btp", "ai", "api", "edi", "iot", "mdg", "sac", "cap",
@@ -210,6 +224,37 @@ def _aliases_for(name: str) -> list[str]:
     return sorted(aliases)
 
 
+def _parse_standalone_libraries(libs_dir: Path) -> dict[str, list[dict]]:
+    """Parse the 8 top-level XML files in draw.io/ (connectors, annotations,
+    area_shapes, default_shapes, numbers, brand_names, essentials,
+    text_elements) into category-keyed lists."""
+    catalog: dict[str, list[dict]] = {cat: [] for cat in STANDALONE_LIBRARIES.values()}
+    for filename, category in STANDALONE_LIBRARIES.items():
+        path = libs_dir / filename
+        if not path.exists():
+            continue
+        entries = _parse_library(path)
+        for entry in entries:
+            title = (entry.get("title") or "").strip()
+            xml_snippet = entry.get("xml") or ""
+            # Pull the FIRST style we find (these libraries use single-cell or
+            # group-prefixed shapes; always-take-first works for both).
+            m = re.search(r'style="([^"]*)"', xml_snippet)
+            style = m.group(1) if m else ""
+            display = title or _extract_display_name(xml_snippet) or "(unnamed)"
+            catalog[category].append(
+                {
+                    "name": display,
+                    "title": title,
+                    "drawioStyle": style,
+                    "rawXml": xml_snippet,
+                    "width": entry.get("w"),
+                    "height": entry.get("h"),
+                }
+            )
+    return catalog
+
+
 def build_index(cache: Path, overrides_path: Path = DEFAULT_OVERRIDES_CSV) -> dict:
     libs_dir = cache / LIB_SUBPATH
     if not libs_dir.exists():
@@ -276,6 +321,10 @@ def build_index(cache: Path, overrides_path: Path = DEFAULT_OVERRIDES_CSV) -> di
             }
         )
 
+    # Standalone catalogs — what was completely missing before.
+    standalone = _parse_standalone_libraries(libs_dir)
+    standalone_total = sum(len(v) for v in standalone.values())
+
     repo_dir = cache / "btp-solution-diagrams"
     return {
         "meta": {
@@ -283,11 +332,20 @@ def build_index(cache: Path, overrides_path: Path = DEFAULT_OVERRIDES_CSV) -> di
             "sourceCommit": _git_short_sha(repo_dir) or "unknown",
             "generatedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "totalServices": len(services),
-            "schemaVersion": "1.1.0",
+            "totalStandalone": standalone_total,
+            "schemaVersion": "1.2.0",
             "overridesApplied": len(overrides),
         },
         "sets": sets,
         "services": services,
+        "connectors": standalone["connectors"],
+        "annotations": standalone["annotations"],
+        "areaShapes": standalone["area_shapes"],
+        "defaultShapes": standalone["default_shapes"],
+        "numbers": standalone["numbers"],
+        "brandNames": standalone["brand_names"],
+        "essentials": standalone["essentials"],
+        "textElements": standalone["text_elements"],
     }
 
 

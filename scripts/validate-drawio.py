@@ -25,31 +25,49 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
-# Horizon palette (subset that we actively check). Source:
-# btp-solution-diagrams/guideline/docs/btp_guideline/foundation.md
+# Horizon palette. Sources:
+#   - btp-solution-diagrams/guideline/docs/btp_guideline/foundation.md
+#   - btp-solution-diagrams/.../annotations_and_interfaces.xml
+#   - btp-solution-diagrams/.../connectors.xml
+#
+# SAP's own libraries use minor variants (e.g. #475E75 in the guideline doc
+# vs #475F75 in connectors.xml — same intent, 1-digit-off green channel).
+# We accept both so generated diagrams using the live library colours
+# don't get spurious WARNING reports.
 HORIZON_BORDERS = {
-    "#0070F2",  # BTP border
-    "#475E75",  # non-SAP border
-    "#188918",  # positive
-    "#C35500",  # critical
-    "#D20A0A",  # negative
-    "#07838F",  # accent teal
-    "#5D36FF",  # accent purple
-    "#CC00DC",  # accent pink
+    "#0070F2", "#0070F3",                  # BTP border (guideline + Interface SAP variant)
+    "#475E75", "#475F75",                  # non-SAP border (guideline + connectors variant)
+    "#188918",                             # positive
+    "#C35500",                             # critical
+    "#D20A0A",                             # negative
+    "#07838F",                             # accent teal
+    "#5D36FF", "#470BED", "#4628EC",       # accent purple (3 variants in SAP libraries)
+    "#CC00DC",                             # accent pink (Trust)
 }
 HORIZON_FILLS = {
-    "#EBF8FF",  # BTP fill
-    "#F5F6F7",  # non-SAP fill
-    "#FFFFFF",  # white (allowed for inner nodes)
-    "#F5FAE5",  # positive fill
-    "#FFF8D6",  # critical fill
-    "#FFEAF4",  # negative fill
-    "#DAFDF5",  # accent teal fill
-    "#F1ECFF",  # accent purple fill
-    "#FFF0FA",  # accent pink fill
+    "#EBF8FF",                              # BTP fill
+    "#F5F6F7",                              # non-SAP fill
+    "#FFFFFF", "default",                   # white / drawio default
+    "#F5FAE5",                              # positive fill (Authenticate pill)
+    "#FFF8D6",                              # critical fill
+    "#FFEAF4",                              # negative fill
+    "#DAFDF5",                              # accent teal fill
+    "#F1ECFF", "#F1EDFF",                   # accent purple fill (Authorize pill)
+    "#FFF0FA",                              # accent pink fill (Trust pill)
     "none",
 }
-HORIZON_TEXT = {"#1D2D3E", "#556B82"}
+# Text colors: title/body grey + the 4 pill kinds whose label uses the
+# stroke color (Trust pink, Authenticate green, Authorize purple, Generic
+# Protocol grey).
+HORIZON_TEXT = {
+    "#1D2D3E", "#1D2D3D",                   # title (guideline + 1-off variant)
+    "#556B82",                              # body
+    "#266F3A",                              # SAP pill body green
+    "#188918",                              # Authenticate pill text
+    "#CC00DC",                              # Trust pill text
+    "#470BED",                              # Authorize pill text
+    "#475F75", "#475E75",                   # Generic Protocol pill text
+}
 
 SEVERITY_RANK = {"CRITICAL": 0, "WARNING": 1, "INFO": 2}
 

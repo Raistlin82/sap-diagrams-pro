@@ -77,21 +77,28 @@ GROUP_STYLES = {
     "external": (PALETTE["non_sap_border"], PALETTE["non_sap_fill"]),
 }
 
-# Line styles per the guideline. The base style matches the SAP convention
-# observed in the official editable examples (orthogonalEdgeStyle, blockThin
-# arrow head, jettySize=auto). The "dashed" variants override `dashed`/
-# `dashPattern`, and "thick" reserves strokeWidth=4 for firewalls only.
+# Line styles match the SAP `connectors.xml` taxonomy:
+#   direct (solid)   → synchronous data flow
+#   indirect (dashed)→ asynchronous / event-driven
+#   optional (dotted)→ conditional flow
+#   firewall (thick) → boundary marker only
+# Mandatory drawio attributes per the SAP convention observed across all 11
+# editable example diagrams: bendable=1 (lets users tweak waypoints
+# manually), rounded=0 (sharp orthogonal corners), endArrow=blockThin,
+# endFill=1, endSize=4. orthogonalEdgeStyle is the most common routing
+# (123/238 SAP edges sampled).
 _EDGE_BASE = (
     "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
     "html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;"
-    "strokeColor={stroke};strokeWidth=1.5;"
+    "strokeColor={stroke};strokeWidth=1.5;bendable=1;startArrow=none;"
 )
 EDGE_STYLES = {
     "solid":  _EDGE_BASE + "dashed=0;",
     "dashed": _EDGE_BASE + "dashed=1;dashPattern=8 4;",
     "dotted": _EDGE_BASE + "dashed=1;dashPattern=1 4;",
-    "thick":  _EDGE_BASE.replace("strokeWidth=1.5", "strokeWidth=4")
+    "thick":  _EDGE_BASE.replace("strokeWidth=1.5", "strokeWidth=3")
                         .replace("endArrow=blockThin", "endArrow=none")
+                        .replace("endFill=1", "endFill=0")
                         + "dashed=0;",
 }
 
@@ -283,7 +290,10 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
         if node.group and node.group in group_map:
             group_map[node.group].nodes.append(node.id)
 
-    valid_kinds = {"default", "trust", "positive", "critical", "negative"}
+    valid_kinds = {
+        "default", "trust", "positive", "critical", "negative",
+        "authenticate", "authorize", "generic_protocol",
+    }
     edges: list[Edge] = []
     for e in raw_edges:
         style = e.get("style", "solid")
@@ -473,12 +483,42 @@ def _node_style(n: Node, shape_index: "ShapeIndex") -> tuple[str, bool, str]:
     return style, False, n.label
 
 
+# Edge kind colours sourced verbatim from
+# btp-solution-diagrams/assets/.../annotations_and_interfaces.xml so the
+# rendered pills match the SAP shape library output pixel-for-pixel.
 _EDGE_KIND_STROKE = {
-    "default":  PALETTE["non_sap_border"],
-    "trust":    PALETTE["accent_pink_border"],   # #CC00DC
-    "positive": PALETTE["positive_border"],      # #188918
-    "critical": PALETTE["critical_border"],      # #C35500
-    "negative": PALETTE["negative_border"],      # #D20A0A
+    "default":          PALETTE["non_sap_border"],     # #475E75
+    "trust":            PALETTE["accent_pink_border"], # #CC00DC
+    "positive":         PALETTE["positive_border"],    # #188918
+    "critical":         PALETTE["critical_border"],    # #C35500
+    "negative":         PALETTE["negative_border"],    # #D20A0A
+    "authenticate":     "#188918",                      # SAP green pill
+    "authorize":        "#470bed",                      # SAP purple pill
+    "generic_protocol": "#475f75",                      # SAP grey pill
+}
+
+# Per-kind pill (label) styling. Empty string = no pill, use inline label.
+_EDGE_KIND_PILL = {
+    "trust": {
+        "stroke": "#CC00DC",
+        "fill":   "#fff0fa",
+        "fontColor": "#CC00DC",
+    },
+    "authenticate": {
+        "stroke": "#188918",
+        "fill":   "#f5fae5",
+        "fontColor": "#188918",
+    },
+    "authorize": {
+        "stroke": "#470bed",
+        "fill":   "#f1edff",
+        "fontColor": "#470bed",
+    },
+    "generic_protocol": {
+        "stroke": "#475f75",
+        "fill":   "#f5f6f7",
+        "fontColor": "#1D2D3E",
+    },
 }
 
 
@@ -497,8 +537,9 @@ def _edge_style(
     stroke = _EDGE_KIND_STROKE.get(e.kind, PALETTE["non_sap_border"])
     base = EDGE_STYLES[e.style].format(stroke=stroke)
     direction = e.direction
+    # Trust is canonically a two-way relationship (IAS ↔ XSUAA / IDP).
+    # Authenticate and authorize are one-directional by SAP convention.
     if e.kind == "trust" and direction == "forward":
-        # Trust is canonically a two-way relationship (IAS ↔ XSUAA).
         direction = "bidirectional"
     if direction == "bidirectional":
         base += "startArrow=blockThin;startFill=1;"
@@ -806,11 +847,13 @@ def emit(
         src_geom = node_abs_geom.get(e.source)
         tgt_geom = node_abs_geom.get(e.target)
         edge_id = _stable_id("e", e.id)
-        # For kind=trust, the visible label is rendered as a separate
-        # rounded-pill vertex child of the edge (drawio doesn't support
-        # arcSize on inline edge labels). The edge cell itself carries
-        # an empty value to avoid a duplicate label.
-        inline_value = "" if e.kind == "trust" else e.label
+        # For pill-rendered kinds (trust, authenticate, authorize,
+        # generic_protocol), the visible label sits in a separate rounded
+        # vertex child (drawio does NOT honour arcSize on inline labels).
+        # The edge cell itself carries an empty value so the label isn't
+        # duplicated.
+        has_pill = e.kind in _EDGE_KIND_PILL
+        inline_value = "" if has_pill else e.label
         e_cell = ET.SubElement(
             root,
             "mxCell",
@@ -840,11 +883,18 @@ def emit(
                     attrib={"x": str(int(round(wx))), "y": str(int(round(wy)))},
                 )
 
-        # Trust pill label — rendered as a child mxCell with rounded pill
-        # styling (arcSize=50). drawio anchors it at the relative position
-        # (0.5, 0) along the edge midpoint.
-        if e.kind == "trust" and e.label:
-            stroke = _EDGE_KIND_STROKE["trust"]
+        # Pill labels for the 4 SAP-canonical edge kinds (trust,
+        # authenticate, authorize, generic_protocol). Each kind has its
+        # own stroke + fill + fontColor sourced from the SAP
+        # annotations_and_interfaces.xml library. The pill's geometry uses
+        # relative=1 with offset so it centres on the edge's midpoint
+        # regardless of the edge's actual length or routing.
+        if has_pill and e.label:
+            pill_def = _EDGE_KIND_PILL[e.kind]
+            # Width adapts to label length (rough heuristic: ~6.5 px/char +
+            # padding) so longer labels like "Generic Protocol" don't get
+            # clipped, while short ones like "Trust" stay tight.
+            pill_w = max(64, min(180, len(e.label) * 7 + 24))
             pill = ET.SubElement(
                 root,
                 "mxCell",
@@ -853,9 +903,11 @@ def emit(
                     "value": e.label,
                     "style": (
                         f"rounded=1;whiteSpace=wrap;html=1;arcSize=50;"
-                        f"strokeColor={stroke};fillColor={PALETTE['accent_pink_fill']};"
-                        f"fontColor={stroke};fontStyle=1;strokeWidth=1.5;"
-                        f"fontSize=11;align=center;verticalAlign=middle;"
+                        f"strokeColor={pill_def['stroke']};"
+                        f"fillColor={pill_def['fill']};"
+                        f"fontColor={pill_def['fontColor']};"
+                        f"fontStyle=1;strokeWidth=1.5;fontSize=11;"
+                        f"align=center;verticalAlign=middle;"
                     ),
                     "vertex": "1",
                     "parent": edge_id,
@@ -865,15 +917,12 @@ def emit(
             pill_geom = ET.SubElement(
                 pill,
                 "mxGeometry",
-                attrib={"width": "72", "height": "26", "relative": "1", "as": "geometry"},
+                attrib={"width": str(pill_w), "height": "26", "relative": "1", "as": "geometry"},
             )
-            # Centre the pill on the edge: x=-36, y=-13 offsets the cell so
-            # its midpoint coincides with the edge midpoint (relative=1
-            # references the edge's midpoint as origin).
             ET.SubElement(
                 pill_geom,
                 "mxPoint",
-                attrib={"x": "-36", "y": "-13", "as": "offset"},
+                attrib={"x": str(-pill_w // 2), "y": "-13", "as": "offset"},
             )
 
     return _serialize(mxfile)

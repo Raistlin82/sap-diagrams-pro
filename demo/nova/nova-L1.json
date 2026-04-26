@@ -48,7 +48,7 @@
     {"id": "e2", "source": "supplier-email", "target": "is", "style": "dashed", "label": "PDF email"},
     {"id": "e3", "source": "edi", "target": "is", "style": "solid", "label": "EDIFACT"},
     {"id": "e4", "source": "is", "target": "cap", "style": "dashed", "label": "inbound msg"},
-    {"id": "e5", "source": "ap-clerk", "target": "fiori", "style": "solid", "label": "Fiori UI"},
+    {"id": "e5", "source": "ap-clerk", "target": "fiori", "style": "solid", "label": "Authenticate", "kind": "authenticate"},
     {"id": "e6", "source": "approver", "target": "task-center", "style": "solid", "label": "tasks"},
     {"id": "e7", "source": "task-center", "target": "bpa", "style": "solid", "label": "approve/reject"},
     {"id": "e8", "source": "auditor", "target": "audit", "style": "solid", "label": "review"},
@@ -57,7 +57,7 @@
     {"id": "e11", "source": "cap", "target": "ai-core", "style": "solid", "label": "risk score + GenAI"},
     {"id": "e12", "source": "cap", "target": "event-mesh", "style": "dashed", "label": "events", "direction": "bidirectional"},
     {"id": "e13", "source": "event-mesh", "target": "bpa", "style": "dashed", "label": "kickoff"},
-    {"id": "e14", "source": "cap", "target": "s4hana-cloud", "style": "solid", "label": "API_SUPPLIERINVOICE (Released C1)"},
+    {"id": "e14", "source": "cap", "target": "s4hana-cloud", "style": "solid", "label": "OData", "kind": "generic_protocol"},
     {"id": "e15", "source": "cap", "target": "cloud-conn", "style": "solid", "label": "via Trust"},
     {"id": "e16", "source": "cloud-conn", "target": "s4hana-onprem", "style": "solid", "label": "RFC/OData"},
     {"id": "e17", "source": "cap", "target": "postgres", "style": "solid", "label": "JDBC"},
@@ -69,6 +69,6 @@
     {"id": "e23", "source": "scheduler", "target": "cap", "style": "dashed", "label": "12 cron jobs"},
     {"id": "e24", "source": "logging", "target": "alm", "style": "dashed", "label": "metrics"},
     {"id": "e25", "source": "ias", "target": "xsuaa", "style": "solid", "label": "Trust", "kind": "trust"},
-    {"id": "e26", "source": "cap", "target": "xsuaa", "style": "solid", "label": "JWT validation"}
+    {"id": "e26", "source": "cap", "target": "xsuaa", "style": "solid", "label": "Authorize", "kind": "authorize"}
   ]
 }

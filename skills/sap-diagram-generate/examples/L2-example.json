@@ -52,7 +52,7 @@
     {"id": "xsuaa", "label": "XSUAA", "service": "XSUAA", "group": "ops"}
   ],
   "edges": [
-    {"id": "e1", "source": "u1", "target": "is", "style": "solid", "label": "submit"},
+    {"id": "e1", "source": "u1", "target": "is", "style": "solid", "label": "Authenticate", "kind": "authenticate"},
     {"id": "e2", "source": "sdi", "target": "is", "style": "dashed", "label": "FatturaPA"},
     {"id": "e3", "source": "edi", "target": "apim", "style": "solid", "label": "EDIFACT"},
     {"id": "e4", "source": "is", "target": "cap", "style": "dashed", "label": "msg"},
@@ -63,7 +63,7 @@
     {"id": "e9", "source": "em", "target": "bpa", "style": "dashed", "label": "kickoff"},
     {"id": "e10", "source": "u2", "target": "tc", "style": "solid", "label": "tasks"},
     {"id": "e11", "source": "tc", "target": "bpa", "style": "solid", "label": "approve"},
-    {"id": "e12", "source": "cap", "target": "s4hc", "style": "solid", "label": "API_SUPPLIERINVOICE (C1)"},
+    {"id": "e12", "source": "cap", "target": "s4hc", "style": "solid", "label": "OData (C1)", "kind": "generic_protocol"},
     {"id": "e13", "source": "cap", "target": "cc", "style": "solid", "label": "via Trust"},
     {"id": "e14", "source": "cc", "target": "s4op", "style": "solid", "label": "OData"},
     {"id": "e15", "source": "cap", "target": "pg", "style": "solid", "label": "JDBC"},
@@ -72,6 +72,6 @@
     {"id": "e18", "source": "cap", "target": "log", "style": "dashed", "label": "stdout"},
     {"id": "e19", "source": "cap", "target": "audit", "style": "dashed", "label": "audit"},
     {"id": "e20", "source": "ias", "target": "xsuaa", "style": "solid", "label": "Trust", "kind": "trust"},
-    {"id": "e21", "source": "cap", "target": "xsuaa", "style": "solid", "label": "JWT"}
+    {"id": "e21", "source": "cap", "target": "xsuaa", "style": "solid", "label": "Authorize", "kind": "authorize"}
   ]
 }

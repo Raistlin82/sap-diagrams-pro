@@ -79,7 +79,7 @@
     {"id": "e7", "source": "is-open-conn", "target": "cap", "style": "solid", "label": "SaaS conn"},
     {"id": "e8", "source": "dox", "target": "cap", "style": "solid", "label": "OCR result"},
 
-    {"id": "e9", "source": "ap-clerk", "target": "fiori-9", "style": "solid", "label": "Fiori"},
+    {"id": "e9", "source": "ap-clerk", "target": "fiori-9", "style": "solid", "label": "Authenticate", "kind": "authenticate"},
     {"id": "e10", "source": "approver", "target": "task-center", "style": "solid", "label": "tasks"},
     {"id": "e11", "source": "task-center", "target": "bpa", "style": "solid", "label": "approve/reject"},
     {"id": "e12", "source": "auditor", "target": "audit", "style": "solid", "label": "SOX query"},
@@ -93,7 +93,7 @@
 
     {"id": "e19", "source": "cap", "target": "s4-bp", "style": "solid", "label": "BP API"},
     {"id": "e20", "source": "cap", "target": "s4-po", "style": "solid", "label": "PO API"},
-    {"id": "e21", "source": "cap", "target": "s4-si", "style": "solid", "label": "SI API (C1)"},
+    {"id": "e21", "source": "cap", "target": "s4-si", "style": "solid", "label": "OData (C1)", "kind": "generic_protocol"},
     {"id": "e22", "source": "cap", "target": "s4-edoc", "style": "solid", "label": "eDoc API"},
     {"id": "e23", "source": "s4-bp", "target": "s4hana-cloud", "style": "solid", "label": "OData"},
     {"id": "e24", "source": "s4-po", "target": "s4hana-cloud", "style": "solid", "label": "OData"},
@@ -116,7 +116,7 @@
 
     {"id": "e38", "source": "ias", "target": "xsuaa", "style": "solid", "label": "Trust", "kind": "trust"},
     {"id": "e39", "source": "keycloak", "target": "cap", "style": "solid", "label": "OIDC (on-prem)"},
-    {"id": "e40", "source": "cap", "target": "xsuaa", "style": "solid", "label": "JWT validation"},
+    {"id": "e40", "source": "cap", "target": "xsuaa", "style": "solid", "label": "Authorize", "kind": "authorize"},
     {"id": "e41", "source": "ctms", "target": "kyma", "style": "dashed", "label": "deploy"},
     {"id": "e42", "source": "build-work-zone", "target": "fiori-9", "style": "solid", "label": "FLP shell"}
   ]

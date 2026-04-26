@@ -24,13 +24,16 @@ The plugin's `EDGE_STYLES` dict in `generate-drawio.py` encodes exactly these fo
 
 Beyond the line style, an edge can declare a semantic ``kind`` that switches its stroke colour and (for `trust`) the label rendering. The default is `"default"` (Horizon non-SAP grey `#475E75`). Set ``kind`` on the JSON edge object alongside ``style``, ``label`` and ``direction``.
 
-| `kind` | Stroke | Use case | Notes |
-|---|---|---|---|
-| `default` | `#475E75` (grey) | Standard data flow | Plain label with white background. |
-| `trust` | `#CC00DC` (pink) | IAS ↔ XSUAA, IAS ↔ identity provider, federation, OAuth trust | Auto-bidirectional. Label rendered as a pink pill (rounded rectangle with `arcSize=50`, fill `#FFF0FA`, bold pink text) — this is the SAP-canonical visualisation of a trust relationship and matches the `SAP_Private_Link_Service_L2.drawio` reference. |
-| `positive` | `#188918` (green) | Certified / success flow | Use sparingly. |
-| `critical` | `#C35500` (orange) | Degraded / at-risk flow | E.g. a circuit-breaker-open dependency. |
-| `negative` | `#D20A0A` (red) | Failed / deprecated flow | E.g. a removed integration. |
+| `kind` | Stroke | Pill colors | Use case | Notes |
+|---|---|---|---|---|
+| `default` | `#475E75` (grey) | — (plain label) | Standard data flow | White-background label, no pill. |
+| `trust` | `#CC00DC` (pink) | stroke `#CC00DC`, fill `#FFF0FA` | IAS ↔ XSUAA, identity federation, OAuth trust | Auto-bidirectional. SAP-canonical "Trust" pill from `annotations_and_interfaces.xml`. |
+| `authenticate` | `#188918` (green) | stroke `#188918`, fill `#F5FAE5` | User → app login flow, IAS authentication | One-directional. Matches the SAP "Authenticate" pill. |
+| `authorize` | `#470BED` (purple) | stroke `#470BED`, fill `#F1EDFF` | XSUAA / Authorization Service token validation | One-directional. Matches the SAP "Authorize" pill. |
+| `generic_protocol` | `#475F75` (grey) | stroke `#475F75`, fill `#F5F6F7` | Named protocol (OData, REST, GraphQL, RFC) | One-directional. Replaces verbose inline labels like "API_SUPPLIERINVOICE_PROCESS_SRV" with a clean pill. |
+| `positive` | `#188918` (green) | — (no pill, line only) | Certified / success flow | Use sparingly. |
+| `critical` | `#C35500` (orange) | — | Degraded / at-risk flow | E.g. circuit-breaker-open dependency. |
+| `negative` | `#D20A0A` (red) | — | Failed / deprecated flow | E.g. removed integration. |
 
 Example trust edge in JSON:
 
