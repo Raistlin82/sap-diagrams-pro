@@ -1,0 +1,22 @@
+{
+  "name": "sap-diagrams-pro",
+  "owner": {
+    "name": "Gabriele Capparelli (Key2)",
+    "email": "gabriele@key2.it",
+    "url": "https://github.com/Raistlin82"
+  },
+  "metadata": {
+    "description": "Key2 marketplace for the sap-diagrams-pro Claude Code plugin (SAP-compliant draw.io diagram generation).",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "sap-diagrams-pro",
+      "source": ".",
+      "description": "Generate SAP-compliant draw.io architecture diagrams: deterministic zone-composition layout + content grounding via the SAP Discovery Center (mcp-sap-docs — a community-operated MCP, not SAP) and the SAP-domain skills.",
+      "version": "0.2.0",
+      "license": "Apache-2.0",
+      "keywords": ["sap", "btp", "drawio", "architecture", "diagram", "solution-diagram"]
+    }
+  ]
+}

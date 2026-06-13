@@ -60,14 +60,14 @@ ln -s ~/github/sap-diagrams-pro ~/.claude/plugins/sap-diagrams-pro
 /sap-diagrams-pro:sap-diagram-generate L1 NOVA Invoice Suite — CAP backend on Kyma, S/4HANA proxies, DOX inbound, Integration Suite for FatturaPA
 ```
 
-The plugin:
+The plugin grounds the content **before** it draws:
 
-1. Parses your description and identifies SAP services / non-SAP components.
-2. Picks the closest reference architecture from `~/.cache/sap-diagrams-pro/architecture-center/` as the layout starting point.
-3. Resolves each named service to the correct draw.io icon from the SAP shape library.
-4. Generates a JSON intermediate representation (nodes + edges + level + layout hints).
-5. Runs `scripts/generate-drawio.py` to produce a deterministic, valid `.drawio` XML file.
-6. Saves to `./diagrams/<title>.drawio` (configurable).
+1. **Preflight** — verifies the reference skills (`secondsky/sap-skills`, `sap-pce-expert`) and the documentation MCP (`mcp-sap-docs`) are installed; prints install hints for any gap (`scripts/preflight.py`).
+2. **Ground** — looks up every component in the SAP Discovery Center (via the MCP) for its canonical name, category (BTP-service vs SaaS-product) and deprecation status.
+3. **Consult** — invokes the SAP-domain skills for best-practice completeness (missing logging, Cloud Connector, identity trust, …).
+4. **Interview** — asks a focused set of questions (level, runtime, identity, integration style, backends) derived from what the docs/skills surfaced, then confirms the inventory.
+5. **Generate** — builds the JSON IR and runs `scripts/generate-drawio.py`; the deterministic **zone-composition engine** lays out consumers→BTP→systems horizontally with auto-sized containers and canonical molecules (no graphviz dependency).
+6. **Verify & save** — `validate-drawio.py` (palette/XML) + `check-composition.py` (zones/overlaps) + `render-preview.py` (PNG). Saves to `./diagrams/<title>-<level>.drawio`.
 
 ### Validate an existing diagram
 

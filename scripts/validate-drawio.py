@@ -25,6 +25,13 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
+# Prefer defusedxml for parsing untrusted .drawio (guards XXE / billion-laughs);
+# fall back to the stdlib parser when defusedxml isn't installed.
+try:
+    from defusedxml.ElementTree import parse as _xml_parse
+except Exception:  # pragma: no cover - defusedxml optional
+    from xml.etree.ElementTree import parse as _xml_parse
+
 # Horizon palette. Sources:
 #   - btp-solution-diagrams/guideline/docs/btp_guideline/foundation.md
 #   - btp-solution-diagrams/.../annotations_and_interfaces.xml
@@ -73,6 +80,7 @@ HORIZON_FILLS = {
 # Protocol grey).
 HORIZON_TEXT = {
     "#1D2D3E", "#1D2D3D",                   # title (guideline + 1-off variant)
+    "#0070F2", "#0070F3",                   # title / SAP-blue label (canonical)
     "#556B82",                              # body
     "#266F3A",                              # SAP pill body green
     "#188918",                              # Authenticate pill text
@@ -125,8 +133,8 @@ def _parse_style(style: str) -> dict[str, str]:
 def validate(path: Path) -> list[Issue]:
     issues: list[Issue] = []
     try:
-        tree = ET.parse(path)
-    except (ET.ParseError, FileNotFoundError) as exc:
+        tree = _xml_parse(path)
+    except Exception as exc:  # ParseError, FileNotFoundError, or defusedxml guards
         return [Issue("CRITICAL", "PARSE", f"cannot parse XML: {exc}")]
 
     root = tree.getroot()

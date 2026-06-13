@@ -18,7 +18,7 @@ The smallest building blocks. Atoms have no semantic meaning on their own — th
 - **Colors** (Horizon palette — see [`horizon-palette.md`](horizon-palette.md))
 - **Line styles** (solid, dashed, dotted, thick — see [`line-styles-spacing.md`](line-styles-spacing.md))
 - **Icons** (from the 7 SAP shape libraries + the generic-icons set)
-- **Text** (font: SAP 72; sizes: 18 for title, 13 for group labels, 11 for node labels, 10 for edge labels)
+- **Text** (font: Helvetica/Arial; sizes: 16 for title, 14 for group labels, 12 for node labels, 10 for edge labels)
 
 **Rule**: never invent a new atom. Use only colors / lines / icons / fonts from the catalog.
 
@@ -85,7 +85,7 @@ The `groups[].type` field selects the right organism style:
 ## Common mistakes
 
 - **Drawing freeform shapes**: any star / cloud / hexagon outside the SAP shape libraries breaks the system.
-- **Inconsistent stroke widths**: keep `strokeWidth=1.5` for all molecules and organisms. The only exception is the firewall (`strokeWidth=4`).
+- **Inconsistent stroke widths**: keep `strokeWidth=1.5` for all molecules and organisms. The only exception is the firewall (`strokeWidth=3`).
 - **Mixing icon sizes (S/M/L) inside one organism**: pick one size per organism. Mixing reads as visual noise.
 - **Using gradients**: Horizon is flat. Skip drop-shadows and gradients.
-- **Custom rounded-corner radii**: the standard arc is `arcSize=8` (nodes) or `arcSize=12` (groups). Don't deviate.
+- **Custom rounded-corner radii**: with `absoluteArcSize=1`, the standard arc is `arcSize=16` (inner boxes/lanes), `arcSize=24` (top-level areas) or `arcSize=32` (BTP base layer). Don't deviate.

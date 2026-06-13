@@ -36,6 +36,17 @@ Never silently take over a single-skill task — be transparent about whether yo
 
 ## Standard playbook
 
+### Phase 0 — Preflight (dependency gate)
+
+Before anything, confirm the content sources are present — diagrams must be grounded in authoritative SAP data, not guessed:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py --need <concern-tags>
+```
+
+- Missing REQUIRED (`sap-btp-best-practices` skill or the `sap-docs` MCP) → surface the install command (`npx skills add secondsky/sap-skills`; `mcp-sap-docs` via `claude mcp add`, see https://github.com/marianfoo/mcp-sap-docs) and stop — or proceed in a clearly-labelled degraded mode only with explicit consent.
+- A config-only MCP check is not proof of reachability: confirm an `mcp__sap-docs__*` tool actually returns before relying on it.
+
 ### Phase 1 — Understand the input
 
 Read all the inputs the user provided:
@@ -50,8 +61,8 @@ Build an internal mental model: who uses the system, what BTP services are invol
 
 Produce a structured component list (User / Third-party / BTP / SAP Apps / Non-SAP / Cross-cutting). For each:
 
-- Canonical name (resolve via `sap-icons-resolve` if needed).
-- Group membership.
+- Canonical name + category — **ground in the SAP Discovery Center**: `mcp__sap-docs__sap_discovery_center_search(query=…)` returns the authoritative `name` (→ IR `service`) and `category` (→ BTP-service vs standalone-SaaS classification, and which icon set). Use `mcp__sap-docs__search`/`fetch` for architecture facts. Never invent service names; fall back to a plain box only when truly absent from both the MCP and `shape-index.json`.
+- Group membership (organism: User / Third-party / BTP / SAP App / Non-SAP / Cross-cutting).
 - Known data flows in/out.
 
 If the input is a codebase, look for tell-tales:

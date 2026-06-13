@@ -25,7 +25,7 @@ A 8th aggregate set `all` exists in the SAP repo but is intentionally **skipped*
 
 ## Sizes
 
-Each shape exists in three sizes (S = 24px, M = 48px, L = 96px). The plugin defaults to **M** for L0 / L1 and **S** for L2 (more compact when many services are present).
+Each shape exists in three sizes (S = 24px, M = 32px, L = 48px). The plugin's zone engine renders service icons at **48px (L) for L0 / L1** and **32px (M) for L2** (more compact when many services are present).
 
 The selected size is recorded in the `size` field of each `services[]` entry in `shape-index.json`. To change the default size in the generator, set `metadata.iconSize` to `"S"`, `"M"` or `"L"`.
 
@@ -75,6 +75,6 @@ The `sap-icons-resolve` skill encapsulates this logic. From within `sap-diagram-
 ## Common mistakes
 
 - **Hardcoding service names**: the SAP catalog evolves. Always look up via `assets/shape-index.json`, never bake names into prompts/templates.
-- **Using L-size icons in L2 diagrams**: L (96px) icons crowd the canvas. Use S or M.
+- **Using L-size icons in L2 diagrams**: L (48px) icons crowd the canvas. Use S or M.
 - **Mixing sets visually**: don't switch between the redesigned (current) and legacy icon styles in the same diagram.
 - **Missing services**: if `assets/shape-index.json` doesn't contain a service the user named, fall back to a labelled box (no icon) and report the gap to the user — don't fabricate an icon.

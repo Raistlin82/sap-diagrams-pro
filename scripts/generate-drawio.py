@@ -176,28 +176,19 @@ CANVAS_H = 827
 
 # SAP uses the proprietary "72 Brand" font in their assets. We declare the
 # font family chain so drawio falls back gracefully on machines without it.
-SAP_FONT_FAMILY = "72,Helvetica,Arial,sans-serif"
+# SAP solution diagrams use Helvetica/Arial for diagram elements — the "72"
+# brand font is for the SAP website, not the diagrams (per the guideline assets,
+# every mxGraph style string in the official libraries uses fontFamily=Helvetica).
+SAP_FONT_FAMILY = "Helvetica,Arial,sans-serif"
 
-# Generic icons (from 20-03-generic-icons set) are SVG 24×24 in source.
-# Rendering at 80×80 stretches and looks blurry. We render them at native
-# size × 2 = 48×48 for crisp output. The label sits below via
-# verticalLabelPosition=bottom in the style string.
-# Generic icons (User, Mobile, Cloud Connector, …) — slightly smaller
-# than SAP service icons since their source SVG is 24×24 native (vs 48
-# native for service icons). 48×48 = 2× native, crisp without crowding.
-GENERIC_ICON_W = 48
-GENERIC_ICON_H = 48
+# Greedy-fallback geometry only. Icon sizing in the default (zone) path comes
+# from `_zone_layout.icon_size(level)` (48px for L0/L1, 32px for L2).
 CELL_W = CANVAS_W // 3
 CELL_H = CANVAS_H // 3
 GROUP_PADDING = 24
 # Plain (no SAP icon) box sizing — used for users, non-SAP, unresolved services.
 NODE_W = 160
 NODE_H = 80
-# SAP icon node sizing — exact SAP-canonical size 61.24×57 px observed
-# in the official editable example diagrams. Floats are preserved
-# verbatim in mxGeometry (drawio supports sub-pixel values).
-ICON_W = 61.24
-ICON_H = 57
 NODE_GAP_X = 24
 NODE_GAP_Y = 36  # extra vertical room because labels sit below SAP icons
 
@@ -211,7 +202,10 @@ class Group:
     type: str
     label: str
     position: str = "center"
-    parent: str | None = None  # id of parent group; None = top-level (3x3 grid)
+    parent: str | None = None  # id of parent group; None = top-level
+    # Optional layout overrides honoured by the zone engine:
+    flow: str | None = None    # "row" | "col" | "grid" — intra-group packing
+    zone: str | None = None    # "left" | "center" | "right" — column override
     nodes: list[str] = field(default_factory=list)
 
 
@@ -246,6 +240,9 @@ class Node:
     # where variant is sap | non-sap | highlight (default: non-sap).
     # Example: "user", "mobile:sap", "third-party"
     genericIcon: str | None = None
+    # Optional one-line caption under the title in a backend-box molecule
+    # (RIGHT-zone systems, e.g. "Mobile or Desktop"). Ignored for bare icons.
+    subtitle: str | None = None
 
 
 @dataclass
@@ -410,7 +407,15 @@ class ShapeIndex:
 
     def resolve(self, query: str | None) -> dict[str, Any] | None:
         """Lookup priority: exact name → exact alias (case-insensitive) →
-        exact techId → fuzzy substring on name. Returns None on miss."""
+        exact techId → safe word-level match. Returns None on miss.
+
+        The fuzzy step requires EVERY query word to appear as a word in the
+        canonical name (e.g. "HANA Cloud" → "SAP HANA Cloud"), then picks the
+        candidate with the fewest extra words — deterministic and immune to the
+        dangerous substring matches the old code allowed (e.g. "AI" matching
+        anything containing those letters, or a short query swallowing a wrong
+        service). Wrong-icon picks were a root cause of bad "block types".
+        """
         if not query:
             return None
         if query in self._by_name:
@@ -419,12 +424,20 @@ class ShapeIndex:
             return self._by_alias[query.lower()]
         if query in self._by_techid:
             return self._by_techid[query]
-        # Fuzzy: case-insensitive substring on canonical names.
-        ql = query.lower()
-        for name, svc in self._by_name.items():
-            if ql in name.lower() or name.lower() in ql:
-                return svc
-        return None
+        ql = query.strip().lower()
+        if len(ql) < 3:
+            return None
+        q_tokens = set(re.findall(r"[a-z0-9]+", ql))
+        if not q_tokens:
+            return None
+        best, best_extra = None, 1 << 30
+        for name, svc in sorted(self._by_name.items()):
+            n_tokens = set(re.findall(r"[a-z0-9]+", name.lower()))
+            if q_tokens <= n_tokens:  # every query word is a word in the name
+                extra = len(n_tokens - q_tokens)
+                if extra < best_extra:
+                    best, best_extra = svc, extra
+        return best
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -457,6 +470,8 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
             label=g.get("label", gid),
             position=g.get("position", "center"),
             parent=g.get("parent"),
+            flow=g.get("flow"),
+            zone=g.get("zone"),
             nodes=[],
         )
 
@@ -474,6 +489,7 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
             step=n.get("step"),
             stepKind=n.get("stepKind", "default"),
             genericIcon=n.get("genericIcon"),
+            subtitle=n.get("subtitle"),
         )
         nodes.append(node)
         if node.group and node.group in group_map:
@@ -650,17 +666,20 @@ def layout_nodes(
 def _group_style(g: Group, is_nested: bool = False) -> str:
     border, fill = GROUP_STYLES.get(g.type, GROUP_STYLES["btp-layer"])
     if is_nested:
-        # Sub-group inside a parent organism: keep the same border for visual
-        # cohesion, but use white fill so the parent's #EBF8FF reads as the
-        # "BTP territory" and the sub-groups read as lanes inside it.
+        # Sub-group (lane / "Subaccount" inner frame): white fill so the parent's
+        # #EBF8FF reads as the "BTP territory". Canonical inner arc = 16.
         fill = "#FFFFFF"
-        font_size = 11  # smaller than the parent's 13
+        font_size = 12
+        arc = 16
     else:
-        font_size = 13
+        font_size = 14
+        # Canonical area radii: the BTP base layer uses 32, other top-level
+        # areas 24 (absoluteArcSize) per the SAP shape libraries.
+        arc = 32 if g.type == "btp-layer" else 24
     return (
         f"rounded=1;whiteSpace=wrap;html=1;"
         f"strokeColor={border};fillColor={fill};"
-        f"arcSize=12;absoluteArcSize=1;strokeWidth=1.5;"
+        f"arcSize={arc};absoluteArcSize=1;strokeWidth=1.5;"
         f"verticalAlign=top;align=left;"
         f"fontColor={PALETTE['title']};fontStyle=1;fontSize={font_size};"
         f"spacingLeft=12;spacingTop=6;"
@@ -682,15 +701,115 @@ def _node_style(n: Node, shape_index: "ShapeIndex") -> tuple[str, bool, str]:
     if n.genericIcon:
         gen = shape_index.resolve_generic(n.genericIcon)
         if gen and gen.get("drawioStyle"):
-            return gen["drawioStyle"], True, n.label
+            return _safe_img(gen["drawioStyle"]), True, n.label
     svc = shape_index.resolve(n.service)
     if svc and svc.get("drawioStyle"):
         canonical = svc.get("name") or n.label
         label = n.label if n.label and n.label != n.id else canonical
-        return svc["drawioStyle"], True, label
+        return _safe_img(svc["drawioStyle"]), True, label
     # Plain box — pick from the area_shapes-derived catalogue.
     style = _BOX_STYLES.get(n.boxStyle, _BOX_STYLES["btp-outline"])
     return style, False, n.label
+
+
+# Group types whose member nodes render as the RIGHT-zone "backend box"
+# molecule (white rounded box with an icon on the left + title), per the SAP
+# big-picture (e.g. "SAP On-Premise Solutions", "3rd Party Applications").
+BACKEND_GROUP_TYPES = {"sap-app", "non-sap", "third-party", "external"}
+
+
+def _safe_img(style: str | None) -> str | None:
+    """draw.io style strings are ';'-delimited, so a ``;base64,`` inside an
+    image data-URI silently breaks style parsing (the image truncates and the
+    shape renders blank — this is why generic icons like the user/database
+    glyphs were invisible). draw.io accepts the comma form
+    ``data:image/...,<base64>`` (the official SAP service icons use exactly
+    that, which is why they rendered). Normalise to the comma form.
+    """
+    return style.replace(";base64,", ",") if style else style
+
+
+def _extract_image_uri(style: str | None) -> str | None:
+    """Pull the ``image=...`` data-URI out of an icon shape style string."""
+    if not style:
+        return None
+    m = re.search(r"image=([^;]+)", _safe_img(style))
+    return m.group(1) if m else None
+
+
+def _node_icon_uri(n: Node, shape_index: "ShapeIndex") -> str | None:
+    """Resolve a node's icon (generic first, then service) to its data-URI."""
+    if n.genericIcon:
+        g = shape_index.resolve_generic(n.genericIcon)
+        if g:
+            uri = _extract_image_uri(g.get("drawioStyle"))
+            if uri:
+                return uri
+    if n.service:
+        svc = shape_index.resolve(n.service)
+        if svc:
+            return _extract_image_uri(svc.get("drawioStyle"))
+    return None
+
+
+def _backend_box(n: Node, group_type: str, shape_index: "ShapeIndex") -> tuple[str, str]:
+    """Return (style, value) for a RIGHT-zone backend box.
+
+    SAP apps get the BTP-blue border; 3rd-party / non-SAP get the grey border
+    (Horizon ``(border, fill=white)`` per component-groups.md). When the node
+    resolves to an icon it is embedded on the left via ``shape=label``; the
+    title (and optional subtitle) sit to its right. This is the single-cell
+    equivalent of the official "On-Premise" / "Cloud solutions" essentials.
+    """
+    stroke = PALETTE["btp_border"] if group_type == "sap-app" else PALETTE["non_sap_border"]
+    base = (
+        f"rounded=1;whiteSpace=wrap;html=1;arcSize=16;absoluteArcSize=1;"
+        f"strokeColor={stroke};fillColor=#FFFFFF;strokeWidth=1.5;"
+        f"fontColor={PALETTE['title']};fontSize=12;verticalAlign=middle;"
+    )
+    uri = _node_icon_uri(n, shape_index)
+    if uri:
+        style = (
+            base
+            + "shape=label;imageAlign=left;imageVerticalAlign=middle;"
+            + "imageWidth=28;imageHeight=28;spacingLeft=44;spacingRight=8;align=left;"
+            + f"image={uri};"
+        )
+    else:
+        style = base + "align=center;spacingLeft=6;spacingRight=6;"
+    if n.subtitle:
+        value = (
+            f'<b>{n.label}</b>'
+            f'<div style="font-size:9px;color:#556B82;line-height:13px;">{n.subtitle}</div>'
+        )
+    else:
+        value = n.label
+    return style, value
+
+
+def _emit_sap_btp_badge(root: ET.Element, parent_cell_id: str) -> None:
+    """Small 'SAP BTP' logo chip at the container's top-left (gold standard)."""
+    badge = ET.SubElement(
+        root,
+        "mxCell",
+        attrib={
+            "id": _stable_id("btpbadge", parent_cell_id),
+            "value": "SAP BTP",
+            "style": (
+                "rounded=1;whiteSpace=wrap;html=1;arcSize=40;absoluteArcSize=1;"
+                "fillColor=#0070F2;strokeColor=none;fontColor=#FFFFFF;fontStyle=1;"
+                "fontSize=11;align=center;verticalAlign=middle;"
+            ),
+            "vertex": "1",
+            "parent": parent_cell_id,
+            "connectable": "0",
+        },
+    )
+    ET.SubElement(
+        badge,
+        "mxGeometry",
+        attrib={"x": "12", "y": "8", "width": "60", "height": "22", "as": "geometry"},
+    )
 
 
 # Edge kind colours sourced verbatim from
@@ -834,8 +953,8 @@ _STEP_KIND_GRADIENT = {
 
 def _edge_style(
     e: Edge,
-    src_geom: tuple[int, int, int, int] | None = None,
-    tgt_geom: tuple[int, int, int, int] | None = None,
+    exit_a: tuple[float, float] | None = None,
+    entry_a: tuple[float, float] | None = None,
 ) -> str:
     """Build the SAP-canonical edge style.
 
@@ -877,12 +996,12 @@ def _edge_style(
         f"verticalAlign=middle;align=center;"
     )
 
-    # Compute exit/entry anchors when both endpoints' geometries are known.
-    if src_geom and tgt_geom:
-        exit_anchor, entry_anchor = _compute_anchors(src_geom, tgt_geom)
+    # Distributed exit/entry anchors (computed once across all edges so that
+    # connectors sharing a node side fan out instead of stacking on the midpoint).
+    if exit_a and entry_a:
         style += (
-            f"exitX={exit_anchor[0]};exitY={exit_anchor[1]};exitDx=0;exitDy=0;"
-            f"entryX={entry_anchor[0]};entryY={entry_anchor[1]};entryDx=0;entryDy=0;"
+            f"exitX={exit_a[0]};exitY={exit_a[1]};exitDx=0;exitDy=0;"
+            f"entryX={entry_a[0]};entryY={entry_a[1]};entryDx=0;entryDy=0;"
         )
     return style
 
@@ -915,6 +1034,67 @@ def _compute_anchors(
     return (0.5, 0.0), (0.5, 1.0)          # source-top    → target-bottom
 
 
+def _distribute_anchors(
+    edges: list[Edge],
+    geom: dict[str, tuple[int, int, int, int]],
+) -> dict[str, tuple[tuple[float, float] | None, tuple[float, float] | None]]:
+    """Spread edges that share the same node side across that side so parallel
+    connectors fan out instead of stacking on one midpoint (the cause of the
+    "arrows pile up" look). Anchor side is chosen by dominant axis between
+    centres (same rule as ``_compute_anchors``); within a side the edges are
+    ordered by the *other* endpoint's position to minimise crossings.
+
+    Engine-level behaviour: applies to every generated diagram.
+    """
+    from collections import defaultdict
+
+    def sides(src, tgt) -> tuple[str, str]:
+        sx, sy, sw, sh = src
+        tx, ty, tw, th = tgt
+        dx = (tx + tw / 2) - (sx + sw / 2)
+        dy = (ty + th / 2) - (sy + sh / 2)
+        if abs(dx) >= abs(dy):
+            return ("R", "L") if dx >= 0 else ("L", "R")
+        return ("B", "T") if dy >= 0 else ("T", "B")
+
+    def center(g, axis: str) -> float:
+        x, y, w, h = g
+        return x + w / 2 if axis == "x" else y + h / 2
+
+    def coord(side: str, frac: float) -> tuple[float, float]:
+        return {"R": (1.0, frac), "L": (0.0, frac),
+                "T": (frac, 0.0), "B": (frac, 1.0)}[side]
+
+    info: dict[str, tuple[str, str, tuple, tuple]] = {}
+    src_groups: dict[tuple[str, str], list[str]] = defaultdict(list)
+    tgt_groups: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for e in edges:
+        sg, tg = geom.get(e.source), geom.get(e.target)
+        if not sg or not tg:
+            continue
+        ss, ts = sides(sg, tg)
+        info[e.id] = (ss, ts, sg, tg)
+        src_groups[(e.source, ss)].append(e.id)
+        tgt_groups[(e.target, ts)].append(e.id)
+
+    exit_a: dict[str, tuple[float, float]] = {}
+    entry_a: dict[str, tuple[float, float]] = {}
+    for (_node, side), eids in src_groups.items():
+        axis = "y" if side in ("L", "R") else "x"
+        ordered = sorted(eids, key=lambda eid: center(info[eid][3], axis))
+        n = len(ordered)
+        for i, eid in enumerate(ordered):
+            exit_a[eid] = coord(side, round((i + 1) / (n + 1), 3))
+    for (_node, side), eids in tgt_groups.items():
+        axis = "y" if side in ("L", "R") else "x"
+        ordered = sorted(eids, key=lambda eid: center(info[eid][2], axis))
+        n = len(ordered)
+        for i, eid in enumerate(ordered):
+            entry_a[eid] = coord(side, round((i + 1) / (n + 1), 3))
+
+    return {e.id: (exit_a.get(e.id), entry_a.get(e.id)) for e in edges if e.id in info}
+
+
 def emit(
     diagram: Diagram,
     shape_index: "ShapeIndex | None" = None,
@@ -923,44 +1103,50 @@ def emit(
     """Render the diagram to .drawio XML.
 
     ``layout`` selects the positioning backend:
-      - ``"auto"``   — try graphviz dot, fall back to greedy if dot is missing
-      - ``"dot"``    — require dot; raise SystemExit if unavailable
-      - ``"greedy"`` — force the built-in 3×3 grid layout
+      - ``"auto"`` / ``"zone"`` — the deterministic zone-composition engine
+        (``_zone_layout.py``); the default, no external dependency.
+      - ``"greedy"`` — the legacy built-in 3×3 grid (debug only).
     """
     if shape_index is None:
         shape_index = ShapeIndex.load()
     nodes_by_id = {n.id: n for n in diagram.nodes}
 
-    dot_result = None
-    if layout in ("auto", "dot"):
-        # Load _dot_layout via importlib so the script works regardless of
-        # whether scripts/ is on sys.path.
-        import importlib.util as _ilu
-        _spec = _ilu.spec_from_file_location(
-            "_dot_layout", Path(__file__).resolve().parent / "_dot_layout.py"
-        )
-        _mod = _ilu.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-        _dot_compute_layout = _mod.compute_layout
-        dot_result = _dot_compute_layout(diagram, shape_index)
-        if dot_result is None and layout == "dot":
-            raise SystemExit(
-                "ERROR: --layout dot requested but graphviz `dot` is not "
-                "available, returned an error, or produced unparseable JSON. "
-                "Install with `brew install graphviz` (macOS) or "
-                "`apt install graphviz` (Debian/Ubuntu)."
-            )
+    # Give user-zone nodes a default person icon when they declared neither a
+    # service nor a generic icon — done BEFORE layout so the zone footprints
+    # match what the renderer draws (both then agree the node is an icon).
+    _group_type = {g.id: g.type for g in diagram.groups}
+    for _n in diagram.nodes:
+        if (
+            _group_type.get(_n.group) == "user"
+            and not _n.genericIcon
+            and not (_n.service and shape_index.resolve(_n.service))
+        ):
+            _n.genericIcon = "user"
 
-    if dot_result:
-        group_geo = dot_result["groups"]
-        node_geo = dot_result["nodes"]
-        edge_waypoints: dict[str, list[tuple[float, float]]] = dot_result["edges"]
-        canvas_w, canvas_h = dot_result["canvas"]
-    else:
+    # Layout backend. Default: the deterministic zone-composition engine
+    # (`_zone_layout.py`, no external dependency). `--layout greedy` forces the
+    # legacy 3×3 grid (debug only). The former graphviz `dot` backend has been
+    # removed — it ignored the SAP `position`/zone semantics; "auto"/"zone"/"dot"
+    # all route to the zone engine now.
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "_zone_layout", Path(__file__).resolve().parent / "_zone_layout.py"
+    )
+    _zl = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_zl)
+    icon_dim = _zl.icon_size(diagram.level)
+
+    if layout == "greedy":
         group_geo = layout_groups(diagram.groups)
         node_geo = {}
-        edge_waypoints = {}
+        edge_waypoints: dict[str, list[tuple[float, float]]] = {}
         canvas_w, canvas_h = CANVAS_W, CANVAS_H
+    else:
+        zone_result = _zl.compute_layout(diagram, shape_index)
+        group_geo = zone_result["groups"]
+        node_geo = zone_result["nodes"]
+        edge_waypoints = zone_result["edges"]
+        canvas_w, canvas_h = zone_result["canvas"]
 
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     mxfile = ET.Element(
@@ -1019,7 +1205,7 @@ def emit(
             "value": diagram_title,
             "style": (
                 f"text;html=1;align=left;verticalAlign=middle;"
-                f"fontColor={PALETTE['btp_border']};fontSize=20;fontStyle=1;"
+                f"fontColor={PALETTE['btp_border']};fontSize=16;fontStyle=1;"
                 f"fontFamily={SAP_FONT_FAMILY};"
             ),
             "vertex": "1",
@@ -1081,15 +1267,22 @@ def emit(
     for g in top_level_groups:
         if g.id not in group_geo:
             continue
+        # Users render as free icon+label molecules (no frame) per the SAP gold
+        # standard — skip the box; their nodes parent to the root at absolute
+        # coordinates (group_cell_ids stays without an entry for this group).
+        if g.type == "user":
+            continue
         x, y, w, h = group_geo[g.id]
         cell_id = _stable_id("g", g.id)
         group_cell_ids[g.id] = cell_id
+        # The BTP layer carries a "SAP BTP" logo chip instead of a text label.
+        g_value = "" if g.type == "btp-layer" else g.label
         g_cell = ET.SubElement(
             root,
             "mxCell",
             attrib={
                 "id": cell_id,
-                "value": g.label,
+                "value": g_value,
                 "style": _group_style(g, is_nested=False),
                 "vertex": "1",
                 "parent": "1",
@@ -1106,6 +1299,8 @@ def emit(
                 "as": "geometry",
             },
         )
+        if g.type == "btp-layer":
+            _emit_sap_btp_badge(root, cell_id)
 
     for g in nested_groups:
         if g.id not in group_geo or g.parent not in group_geo:
@@ -1157,39 +1352,30 @@ def emit(
     node_abs_geom: dict[str, tuple[int, int, int, int]] = {}
 
     for n in diagram.nodes:
-        style, is_icon, label = _node_style(n, shape_index)
-        # When dot layout is in effect, node_geo provides exact positions and
-        # sizes. Otherwise fall back to the greedy node_xy + ICON/PLAIN
-        # default sizes. Generic icons (User, Mobile, Desktop, etc.) are
-        # rendered smaller because their SVG source is only 24×24 — at
-        # ICON_W=80 they look stretched. 48×48 keeps them crisp without
-        # crowding the surrounding layout.
+        gtype = _group_type.get(n.group)
+        if gtype in BACKEND_GROUP_TYPES:
+            # RIGHT-zone backend system → white box with icon-left + title.
+            style, label = _backend_box(n, gtype, shape_index)
+            is_icon = False
+        else:
+            style, is_icon, label = _node_style(n, shape_index)
+        # The zone engine fills node_geo with exact footprint cells. Icon nodes
+        # are re-squared to the level icon size (icon_dim) and top-centred (the
+        # caption floats below); box/plain nodes keep their footprint. The
+        # greedy fallback path uses node_xy + default sizes.
         if n.id in node_geo:
             x, y, w, h = node_geo[n.id]
-            # Override dot's reserved-space size with the SAP-canonical
-            # exact icon dimensions. dot needs more space for layout
-            # (~76×79) but the rendered cell must be precisely
-            # 61.24×57 (SAP convention) for service icons, 48×48 for
-            # generic icons. Centre the actual cell within the reserved
-            # space so the layout doesn't shift.
-            if n.genericIcon:
-                offset_x = (w - GENERIC_ICON_W) / 2
-                offset_y = (h - GENERIC_ICON_H) / 2
-                x = x + offset_x
-                y = y + offset_y
-                w, h = GENERIC_ICON_W, GENERIC_ICON_H
-            elif is_icon:
-                offset_x = (w - ICON_W) / 2
-                offset_y = (h - ICON_H) / 2
-                x = x + offset_x
-                y = y + offset_y
-                w, h = ICON_W, ICON_H
+            if is_icon:
+                # Square icon at the top-centre of its footprint cell; the
+                # caption (verticalLabelPosition=bottom in the icon style)
+                # floats below it, in the space the zone layout reserved.
+                x = x + (w - icon_dim) / 2
+                w = h = icon_dim
+            # else: box / plain node → keep the footprint size from zone layout.
         else:
             x, y = node_xy.get(n.id, (0, 0))
-            if n.genericIcon:
-                w, h = GENERIC_ICON_W, GENERIC_ICON_H
-            elif is_icon:
-                w, h = ICON_W, ICON_H
+            if is_icon:
+                w = h = icon_dim
             else:
                 w, h = NODE_W, NODE_H
         node_abs_geom[n.id] = (x, y, w, h)
@@ -1270,16 +1456,14 @@ def emit(
                 },
             )
 
-        # Step number circle — 24×24 ellipse with gradient fill + bold
-        # white digit. Placed FULLY OUTSIDE the top-left corner of the
-        # node (not overlapping the icon body). Smaller than 30×30 so it
-        # stays readable but doesn't dominate small generic icons.
-        # Sourced from numbers.xml SAP convention.
+        # Step number circle — 28×28 ellipse with gradient fill + bold white
+        # digit (canonical numbers.xml is 30×30; 28 reads cleanly on 48px
+        # icons). Sits half-outside the node's top-left corner.
         if n.step is not None and 1 <= n.step <= 99:
             grad, fill = _STEP_KIND_GRADIENT.get(
                 n.stepKind, _STEP_KIND_GRADIENT["default"]
             )
-            step_w, step_h = 24, 24
+            step_w, step_h = 28, 28
             step_cell = ET.SubElement(
                 root,
                 "mxCell",
@@ -1303,27 +1487,23 @@ def emit(
                     "connectable": "0",
                 },
             )
-            # Position FULLY OUTSIDE the node's top-left corner: shift by
-            # the full step radius (12px) plus a small gap (4px) so the
-            # circle is just touching the corner, not overlapping the
-            # icon body. Same offset works for both small generic icons
-            # (48×48) and full SAP icons (80×80).
+            # Half-outside the node's top-left corner (centred on the corner).
             ET.SubElement(
                 step_cell,
                 "mxGeometry",
                 attrib={
-                    "x": "-16",
-                    "y": "-16",
+                    "x": "-14",
+                    "y": "-14",
                     "width": str(step_w),
                     "height": str(step_h),
                     "as": "geometry",
                 },
             )
 
-    # 4. Edges — exit/entry anchors + optional waypoints from dot.
+    # 4. Edges — anchors distributed across node sides so connectors fan out
+    #    instead of stacking on a single side-midpoint.
+    edge_anchors = _distribute_anchors(diagram.edges, node_abs_geom)
     for e in diagram.edges:
-        src_geom = node_abs_geom.get(e.source)
-        tgt_geom = node_abs_geom.get(e.target)
         edge_id = _stable_id("e", e.id)
         # For pill-rendered kinds (trust, authenticate, authorize,
         # generic_protocol, annotation), the visible label sits in a
@@ -1337,7 +1517,7 @@ def emit(
             attrib={
                 "id": edge_id,
                 "value": inline_value,
-                "style": _edge_style(e, src_geom, tgt_geom),
+                "style": _edge_style(e, *edge_anchors.get(e.id, (None, None))),
                 "edge": "1",
                 "parent": "1",
                 "source": _stable_id("n", e.source),
@@ -1389,7 +1569,7 @@ def emit(
             # Width adapts to label length (rough heuristic: ~6.5 px/char +
             # padding) so longer labels like "Generic Protocol" don't get
             # clipped, while short ones like "Trust" stay tight.
-            pill_w = max(64, min(180, len(e.label) * 7 + 24))
+            pill_w = max(56, min(168, len(e.label) * 6 + 18))
             pill = ET.SubElement(
                 root,
                 "mxCell",
@@ -1401,7 +1581,7 @@ def emit(
                         f"strokeColor={pill_def['stroke']};"
                         f"fillColor={pill_def['fill']};"
                         f"fontColor={pill_def['fontColor']};"
-                        f"fontStyle=1;strokeWidth=1.5;fontSize=11;"
+                        f"fontStyle=1;strokeWidth=1.5;fontSize=10;"
                         f"align=center;verticalAlign=middle;"
                     ),
                     "vertex": "1",
@@ -1412,12 +1592,12 @@ def emit(
             pill_geom = ET.SubElement(
                 pill,
                 "mxGeometry",
-                attrib={"width": str(pill_w), "height": "26", "relative": "1", "as": "geometry"},
+                attrib={"width": str(pill_w), "height": "22", "relative": "1", "as": "geometry"},
             )
             ET.SubElement(
                 pill_geom,
                 "mxPoint",
-                attrib={"x": str(-pill_w // 2), "y": "-13", "as": "offset"},
+                attrib={"x": str(-pill_w // 2), "y": "-11", "as": "offset"},
             )
 
     # 5. SAP essential presets — embed pre-composed organisms (User and
@@ -1716,12 +1896,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--layout",
-        choices=("auto", "dot", "greedy"),
+        choices=("auto", "zone", "greedy"),
         default="auto",
         help=(
-            "Layout backend. 'auto' uses graphviz dot if available else "
-            "the built-in greedy 3x3 grid. 'dot' requires graphviz. "
-            "'greedy' forces the built-in layout."
+            "Layout backend. 'auto'/'zone' use the deterministic "
+            "zone-composition engine (default). 'greedy' forces the legacy "
+            "3x3 grid (debug only)."
         ),
     )
     args = parser.parse_args(argv)

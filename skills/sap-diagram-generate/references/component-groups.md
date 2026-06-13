@@ -116,15 +116,15 @@ A node can be a member of **exactly one** group. Nested groups (organism inside 
 
 ### Spacing
 
-The "rule of thumb" from the guideline: spacing between organisms must be **at least the height of the SAP logo** (≈ 32px at the 1600×1000 canvas). The plugin's auto-layout enforces 24-32px padding by default.
+The "rule of thumb" from the guideline: spacing between organisms must be **at least the height of the SAP logo** (≈ 32px). The plugin's deterministic zone-composition engine (`scripts/_zone_layout.py`) lays organisms out along the horizontal axis — consumers LEFT → BTP CENTER → systems RIGHT — and auto-sizes each container to its content, enforcing even inter-zone padding by default.
 
 ### Group-internal arrangement
 
-Inside a group, nodes flow in rows (left-to-right, then top-to-bottom). Pack them tightly — the `NODE_GAP_X = 24` and `NODE_GAP_Y = 24` constants in `generate-drawio.py` define the gap.
+Inside a group, nodes flow in rows (left-to-right, then top-to-bottom). The zone engine (`scripts/_zone_layout.py`) packs them with even gaps and grows the container to fit.
 
 ### Overlap
 
-Groups must not overlap (the validator emits a `BOX_OVERLAP` info issue if they do). The plugin's 3×3 layout prevents this by design; orphan nodes (no group) are placed in the center cell.
+Groups must not overlap (the validator emits a `BOX_OVERLAP` info issue if they do). The plugin's zone-composition engine prevents this by design: each organism is placed in its own auto-sized zone along the horizontal axis (consumers LEFT → BTP CENTER → systems RIGHT), and nodes are attached to their group via real draw.io parenting. Orphan nodes (no group) fall back to the center zone.
 
 ## When in doubt
 

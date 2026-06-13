@@ -29,13 +29,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install graphviz (dot)
-        run: |
-          set -eu
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends graphviz
-          dot -V
-
       - name: Verify shebangs + SPDX headers on scripts
         run: |
           set -eu
@@ -45,15 +38,15 @@ jobs:
           done
           echo "OK: shebangs and SPDX headers present"
 
-      - name: Generate L0 / L1 / L2 .drawio with dot layout (primary)
+      - name: Generate L0 / L1 / L2 .drawio with the zone engine (primary)
         run: |
           set -eu
-          mkdir -p out/dot
+          mkdir -p out/zone
           for level in L0 L1 L2; do
             python3 scripts/generate-drawio.py \
               "skills/sap-diagram-generate/examples/${level}-example.json" \
-              --layout dot \
-              --out "out/dot/${level}.drawio"
+              --layout auto \
+              --out "out/zone/${level}.drawio"
           done
 
       - name: Generate L0 / L1 / L2 .drawio with greedy fallback
@@ -71,7 +64,7 @@ jobs:
         run: |
           set -eu
           mkdir -p out
-          cp out/dot/*.drawio out/
+          cp out/zone/*.drawio out/
           ls -la out/
 
       - name: Validate generated .drawio files in strict mode
@@ -81,6 +74,21 @@ jobs:
             python3 scripts/validate-drawio.py "out/${level}.drawio" --strict
           done
           echo "OK: all levels pass strict validation"
+
+      - name: Check composition (zone overlaps / title / legend) in strict mode
+        run: |
+          set -eu
+          for level in L0 L1 L2; do
+            python3 scripts/check-composition.py "out/${level}.drawio" --strict
+          done
+          echo "OK: all levels pass composition checks"
+
+      - name: Smoke-test preflight + render-preview helpers
+        run: |
+          set -eu
+          python3 scripts/preflight.py --json >/dev/null
+          python3 scripts/render-preview.py "out/L1.drawio" --out out/L1.png
+          echo "OK: helper scripts run (render-preview skips gracefully without draw.io)"
 
       - name: Verify shape-index.json schema integrity
         run: python3 scripts/_ci_check_index.py
