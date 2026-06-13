@@ -1,0 +1,11 @@
+{
+  "extraKnownMarketplaces": {
+    "sap-diagrams-pro": {
+      "source": { "source": "github", "repo": "Raistlin82/sap-diagrams-pro" },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "sap-diagrams-pro@sap-diagrams-pro": true
+  }
+}
