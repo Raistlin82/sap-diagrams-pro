@@ -37,7 +37,10 @@ Intune/GPO, Ansible, …):
 
 - `extraKnownMarketplaces` registers the marketplace (the `Raistlin82/sap-diagrams-pro` repo).
 - `enabledPlugins` force-installs **and** enables the plugin for everyone.
-- `autoUpdate` refreshes it from the repo on startup.
+- `autoUpdate` is deliberately **`false`**: `true` would grant the source repo's
+  maintainer arbitrary plugin/MCP-config trust on every managed machine at each
+  startup. Keep it closed and **promote versions deliberately** — pin a reviewed
+  tag/commit and bump it only after reviewing the release diff.
 
 > If you maintain other managed settings, **merge** these keys into the existing
 > file (it must remain a single valid JSON object).
@@ -55,6 +58,24 @@ The bundled `sap-docs` MCP needs only outbound HTTPS to
 To host the marketplace internally, fork the repo to your org (e.g.
 `your-org/sap-diagrams-pro`) and change the `repo` value above accordingly. For a
 private GitHub repo, developers' `gh`/git must be authenticated to it.
+
+## Trust & supply-chain
+
+Treat this like any third-party software pushed fleet-wide:
+
+- **Pin & review.** Keep `autoUpdate: false`, **fork** the repo to a Key2-controlled
+  org, promote a specific reviewed tag/commit, and review each release diff before
+  bumping. `autoUpdate: true` against any repo you don't control = standing
+  arbitrary-config trust on every machine.
+- **The grounding MCP is community-operated, NOT SAP.** The bundled `sap-docs`
+  MCP points to `https://mcp-sap-docs.marianzeis.de/mcp`, operated by an
+  independent community contributor (marianfoo) — not SAP. The skill sends only
+  **generic SAP product names** there for Discovery Center lookups (e.g. "Build
+  Process Automation"), not your architecture description or project content.
+  Still, for confidential engagements prefer to **self-host** it (open source:
+  <https://github.com/marianfoo/mcp-sap-docs>) on a Key2 domain and change the
+  `url` in `.mcp.json`, or make it **opt-in** by removing it from `.mcp.json` so
+  users add it explicitly after reviewing the third-party-trust implications.
 
 ## Notes & limits
 

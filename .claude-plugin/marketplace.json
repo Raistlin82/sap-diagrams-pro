@@ -13,7 +13,7 @@
     {
       "name": "sap-diagrams-pro",
       "source": ".",
-      "description": "Generate SAP-compliant draw.io architecture diagrams: deterministic zone-composition layout + content grounding via the SAP Discovery Center (mcp-sap-docs) and the SAP-domain skills.",
+      "description": "Generate SAP-compliant draw.io architecture diagrams: deterministic zone-composition layout + content grounding via the SAP Discovery Center (mcp-sap-docs — a community-operated MCP, not SAP) and the SAP-domain skills.",
       "version": "0.2.0",
       "license": "Apache-2.0",
       "keywords": ["sap", "btp", "drawio", "architecture", "diagram", "solution-diagram"]

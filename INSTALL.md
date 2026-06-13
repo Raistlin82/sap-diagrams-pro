@@ -31,6 +31,15 @@ wired automatically from `.mcp.json`.
 | **`sap-docs` MCP** | grounds component names/categories in the SAP Discovery Center | **bundled** (this plugin's `.mcp.json`) |
 | **`secondsky/sap-skills`** + **`sap-pce-expert`** | best-practice consultation | `npx skills add secondsky/sap-skills` |
 
+> **Third-party MCP — review before confidential use.** The bundled `sap-docs`
+> grounding server (`https://mcp-sap-docs.marianzeis.de/mcp`) is operated by an
+> independent community contributor (**marianfoo**), **not SAP**. The skill sends
+> it only generic SAP product names for Discovery Center lookups — not your
+> architecture or project content. For confidential work, **self-host** it
+> (open source: <https://github.com/marianfoo/mcp-sap-docs>) and change the `url`
+> in `.mcp.json`, or remove it from `.mcp.json` to make it **opt-in**. See
+> [`docs/enterprise/README.md`](docs/enterprise/README.md).
+
 Run the preflight any time to see what's missing:
 
 ```bash
