@@ -9,6 +9,15 @@ The plugin **does not** silently generate a diagram from a one-line description.
 
 This is the single most important quality gate. Skipping it produces beautiful but incorrect diagrams.
 
+## Step 0 — Preflight & content grounding (v0.2 — runs before everything)
+
+The interactive flow is only as good as the facts behind it. Before parsing, **gate on dependencies and ground the content**:
+
+1. **Preflight** — `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py --need <concern-tags>`. If a REQUIRED item is missing (the `sap-btp-best-practices` skill, or the `sap-docs` MCP) print the install command (`npx skills add secondsky/sap-skills`; `mcp-sap-docs` → `claude mcp add`, https://github.com/marianfoo/mcp-sap-docs) and stop, unless the user opts into a degraded mode.
+2. **Ground in the SAP Discovery Center** — for each component, `mcp__sap-docs__sap_discovery_center_search` gives the canonical `name`, `category` (→ BTP-service vs SaaS-product), and `isDeprecated`. `mcp__sap-docs__search`/`fetch` give capability/architecture facts. This is what lets the skill understand *all* the components a solution actually needs — it is not optional.
+
+Only once the dependencies are present and the inventory is grounded do you proceed to the steps below.
+
 ## Six-step interactive flow
 
 ### Step 1 — Parse and propose

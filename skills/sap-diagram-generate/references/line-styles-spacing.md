@@ -16,7 +16,7 @@ The SAP guideline assigns specific semantics to line styles. **Always include a 
 | **Solid** | `dashed=0;strokeWidth=1.5` | Direct, **synchronous** request-response data flow (HTTP / OData / RFC). |
 | **Dashed** | `dashed=1;dashPattern=8 4;strokeWidth=1.5` | Indirect, **asynchronous** flow (events, message queues, webhooks). |
 | **Dotted** | `dashed=1;dashPattern=1 4;strokeWidth=1.5` | Optional / conditional flow (only on certain configurations or scenarios). |
-| **Thick** | `strokeWidth=4` | Reserved for **firewall boundaries** only. Never use thick lines for emphasis on regular flows. |
+| **Thick** | `strokeWidth=3` | Reserved for **firewall boundaries** only. Never use thick lines for emphasis on regular flows. |
 
 The plugin's `EDGE_STYLES` dict in `generate-drawio.py` encodes exactly these four. Adding a new style requires updating both the generator and the validator.
 
@@ -59,8 +59,8 @@ Why a separate vertex for the pill: drawio does not honour `arcSize` on inline e
 
 | Direction | drawio attribute | Use when |
 |---|---|---|
-| **Forward** | `endArrow=classic; startArrow=none` | Default: data flows from source to target. |
-| **Bidirectional** | `endArrow=classic; startArrow=classic` | Symmetric flow (e.g. WebSocket, HTTP duplex). Use sparingly — most "bidirectional" flows are actually request-response, which is forward. |
+| **Forward** | `endArrow=blockThin; startArrow=none` | Default: data flows from source to target. |
+| **Bidirectional** | `endArrow=blockThin; startArrow=blockThin` | Symmetric flow (e.g. WebSocket, HTTP duplex). Use sparingly — most "bidirectional" flows are actually request-response, which is forward. |
 | **None** | `endArrow=none; startArrow=none` | Visual association only, no data flow (e.g. "is part of"). Rare — usually a group is a better choice. |
 
 ## Connectors and routing
@@ -93,7 +93,7 @@ In practice for a 1600×1000 canvas:
 | Title ↔ first group | 32px |
 | Edge label ↔ edge endpoint | 8-12px |
 
-The plugin's auto-layout (`generate-drawio.py`) enforces these spacings via `GROUP_PADDING`, `NODE_GAP_X`, `NODE_GAP_Y` constants.
+The plugin's deterministic zone-composition engine (`scripts/_zone_layout.py`) enforces these spacings while auto-sizing each container to its content.
 
 ## Common mistakes
 
@@ -101,7 +101,7 @@ The plugin's auto-layout (`generate-drawio.py`) enforces these spacings via `GRO
 - **Using thick lines for emphasis**: thick is firewall only. For emphasis, use color or position, not width.
 - **Crowded edges**: if you have 6+ edges crossing each other, the diagram is too dense. Split into multiple diagrams or move to a higher level.
 - **Edges crossing groups**: avoid routing edges through unrelated groups. drawio's auto-router can be told to avoid certain shapes via `noEdgeStyle=1`.
-- **Inconsistent stroke widths**: keep `1.5` for everything except firewalls. If your validator reports `strokeWidth` outside this range, regenerate.
+- **Inconsistent stroke widths**: keep `1.5` for everything except firewalls (`strokeWidth=3`). If your validator reports `strokeWidth` outside this range, regenerate.
 - **No legend in mixed-style diagrams**: a small text box "Legend: solid=sync, dashed=async" prevents misreadings.
 
 ## Legend template

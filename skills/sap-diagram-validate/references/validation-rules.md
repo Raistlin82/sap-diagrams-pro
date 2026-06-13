@@ -35,7 +35,7 @@ Exit codes (when `--strict` is passed): exit 1 if any CRITICAL is present.
 |---|---|---|
 | `PALETTE_BORDER` | An mxCell has `strokeColor` outside the Horizon border palette. | Use `#0070F2` (BTP), `#475E75` (non-SAP), or one of the semantic/accent borders. |
 | `PALETTE_FILL` | An mxCell has `fillColor` outside the Horizon fill palette. | Use `#EBF8FF` (BTP), `#F5F6F7` (non-SAP), `#FFFFFF` (inner), or one of the semantic/accent fills. |
-| `NO_TITLE` | No text cell with a `text;` style is found in the diagram. | Add a title cell with font size 18, color `#1D2D3E`, top-left of the canvas. |
+| `NO_TITLE` | No text cell with a `text;` style is found in the diagram. | Add a title cell with font size 16, color `#1D2D3E`, top-left of the canvas. |
 | `EMPTY` | Diagram has no `mxCell` elements. | Diagram is empty — populate it. |
 
 ### INFO rules
@@ -65,7 +65,7 @@ These are tracked for future versions:
 
 - `LEVEL_BUDGET` — warn if element count exceeds the budget for the declared level (L0 ≤ 10, L1 ≤ 30, L2 ≤ 80). Requires reading metadata.
 - `MISSING_LEGEND` — warn if a diagram uses ≥ 2 line styles without a legend molecule.
-- `INCONSISTENT_STROKE_WIDTH` — flag when the diagram uses more than 2 distinct stroke widths (1.5 normal + 4 for firewall is the only sanctioned pattern).
+- `INCONSISTENT_STROKE_WIDTH` — flag when the diagram uses more than 2 distinct stroke widths (1.5 normal + 3 for firewall is the only sanctioned pattern).
 - `UNNAMED_BTP_SERVICE` — flag a node inside a `btp-layer` group that has no `service` mapping in `shape-index.json` and no explicit label match.
 - `MULTI_PAGE_NOT_LABELLED` — warn if a multi-page `.drawio` has any unnamed page.
 
@@ -97,4 +97,4 @@ CI integration example (GitHub Actions step):
 - **Renderer-specific styles** are not validated. drawio supports many style attributes the validator ignores (e.g. `glass=1`, `shadow=1`). The guideline doesn't sanction these but doesn't forbid them either; we treat them as out-of-scope.
 - **Custom shape libraries** are not detected. If you embedded a non-SAP icon (e.g. PostgreSQL elephant), the validator only checks color compliance, not icon semantics.
 - **Cross-page consistency** is not checked. Multi-page diagrams are validated page-by-page in isolation.
-- **Group containment** is not strictly enforced. The plugin's generator places groups visually but doesn't use draw.io's `parent` mechanism for membership; the validator is permissive about this.
+- **Group containment** is not strictly enforced by `validate-drawio.py`. The plugin's zone-composition engine now attaches nodes to their group via draw.io's real `parent` mechanism, but this validator remains permissive about membership. A companion `check-composition.py` complements it by checking zone overlap, the title band, and legend presence.

@@ -7,6 +7,27 @@ SPDX-License-Identifier: Apache-2.0
 
 `sap-diagrams-pro` is a **drawing** plugin. It does not pretend to know everything about SAP architecture itself — instead, it composes its knowledge by consulting the canonical SAP-domain skills published by the community. This keeps the plugin focused (visual generation) and benefits from improvements in the SAP-domain skills without redeploying.
 
+## Preflight gate
+
+Both knowledge layers (skills + MCP) are checked up-front by `scripts/preflight.py`. If a REQUIRED dependency is missing — the `sap-btp-best-practices` skill, or the `sap-docs` MCP — the skill surfaces the install command and stops (or proceeds in a clearly-labelled degraded mode with the user's consent). Run it first:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py --need <concern-tags>
+```
+
+## Documentation MCP servers consulted (content grounding)
+
+Skills give *best-practice judgement*; the MCP servers give *authoritative facts* (canonical names, categories, deprecation, capabilities). Both are needed.
+
+| MCP server | When | What it provides |
+|---|---|---|
+| `sap-docs` (marianfoo/[mcp-sap-docs](https://github.com/marianfoo/mcp-sap-docs)) | **Always** | `sap_discovery_center_search` → canonical service `name`, `category` (BTP-service vs SaaS-product, icon set), `isDeprecated`; `search`/`fetch` → capability & architecture docs (ABAP/RAP/BTP/CAP); `sap_discovery_center_service` → pricing/roadmap. |
+| `sap-note-search` | When a fix/known-issue is relevant | SAP Notes lookup. |
+| `sap-cds-mcp` | When CAP / CDS modelling is in scope | CDS model + CAP docs. |
+| `sap-fiori-mcp` | When Fiori Elements / UI generation is in scope | Fiori tooling guidance. |
+
+**Grounding rule:** before classifying a component or assigning it an icon, look it up via `sap_discovery_center_search`. The returned `category` is the canonical signal for BTP-service-vs-SaaS classification (the single most common "wrong block type" mistake). Treat a config-only MCP presence as unconfirmed until a tool call actually returns.
+
 ## Skills consulted
 
 The plugin references the following skills (all under [skills.sh/secondsky/sap-skills](https://skills.sh/secondsky/sap-skills) and [skills.sh/secondsky/sap-pce-expert](https://skills.sh)):

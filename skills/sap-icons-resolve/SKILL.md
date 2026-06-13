@@ -88,11 +88,12 @@ If the caller wants ready-to-paste XML, wrap the resolved style:
 
 ```xml
 <mxCell id="<id>" value="<label>" style="<drawioStyle>" vertex="1" parent="1">
-  <mxGeometry x="0" y="0" width="80" height="80" as="geometry" />
+  <mxGeometry x="0" y="0" width="48" height="48" as="geometry" />
 </mxCell>
 ```
 
-Default geometry: 80×80 for `M` size. 40×40 for `S`. 160×160 for `L`.
+Canonical service-icon geometry (square): **S = 24×24, M = 32×32, L = 48×48**. The
+generator renders service icons at 48px for L0/L1 and 32px for L2.
 
 ## Common aliases
 
