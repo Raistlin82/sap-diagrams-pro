@@ -29,9 +29,37 @@ Do **not** invoke for: editing existing diagrams (use `sap-diagram-validate` the
 - **Optional title** — diagram title; default derives from the description.
 - **Optional `auto` flag** in the user's prompt — skip the interactive confirmation. Best-practice consultation still runs.
 
-## Procedure (10 steps)
+## Procedure (11 steps)
 
 The full flow is documented in [`references/interactive-workflow.md`](references/interactive-workflow.md). Summary:
+
+### Step 0 — Consult SAP authoritative documentation (MANDATORY)
+
+**Never** build an inventory from memory. Every named SAP component and every relationship in the user's description must be validated against SAP's own documentation *before* moving to Step 1. Skipping this step has produced wrong architectures in the past (e.g. placing SAP Convergent Charging *inside* S/4HANA, when SAP help.sap.com explicitly states "SAP CC is deployed and connected to the S/4HANA system").
+
+Use the `sap-docs` MCP server family (loaded in this Claude Code environment):
+
+```text
+mcp__sap-docs__search          # full-text across SAP Help, BTP docs, ABAP docs, Architecture Center
+mcp__sap-docs__fetch           # retrieve a specific document by id
+mcp__sap-docs__sap_search_objects     # released ABAP objects (CDS views, classes, BAdIs)
+mcp__sap-docs__sap_get_object_details # release state + Clean Core level for a specific object
+mcp__sap-docs__sap_community_search   # SAP Community blogs/Q&A (fallback)
+mcp__sap-notes__search                # SAP Notes for known issues / corrections
+```
+
+Minimum gate before proceeding to Step 1:
+
+1. **Identify the SAP solution name(s)** in the user's description (e.g. *BRIM*, *S/4HANA Cloud private edition*, *Build Process Automation*).
+2. For each, run `mcp__sap-docs__search` with the canonical product name.
+3. Pick the official help.sap.com page (or the corresponding architecture-center RA when applicable) and `fetch` it.
+4. Extract: which sub-components live *inside* the solution vs. *connected as separate systems*, the official component acronyms (FI-CA, FICAC_CORE, FICAC_CI, SOM, …), and the canonical integration points.
+5. Cross-check against the existing 30 reference architectures in `~/.cache/sap-diagrams-pro/architecture-center/docs/ref-arch/` — if an RA already covers the scenario, prefer its component naming and grouping.
+6. Note any discrepancy between user intent and SAP doc reality. Surface it to the user before generating, do not silently "fix" it.
+
+The detailed pattern (which sources to consult per topic family, how to phrase queries, when to fall back to `sap_community_search`) is in [`references/sap-docs-consultation.md`](references/sap-docs-consultation.md).
+
+> **Quality bar gate**: a diagram generated without Step 0 evidence in the inventory rationale is considered untrusted and must be regenerated.
 
 ### Step 1 — Bootstrap the cache (one-time)
 
@@ -48,17 +76,17 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/build-shape-index.py"
 
 ### Step 2 — Parse and propose component inventory
 
-From the user's description, extract:
+**Anchor every entry in the table on Step 0 evidence.** From the user's description plus the SAP docs you fetched in Step 0, extract:
 
 - **Actors / users** (group type `user`)
 - **Third-party / non-SAP systems** (group type `third-party` / `non-sap`)
-- **SAP applications** (group type `sap-app` — S/4HANA, SuccessFactors, Ariba)
+- **SAP applications** (group type `sap-app` — S/4HANA, SuccessFactors, Ariba, *standalone* SAP CC, …)
 - **BTP services** (group type `btp-layer` — CAP, DOX, Build Apps, …)
-- **Data flows** between them (sync vs async, request-response vs event-driven)
+- **Data flows** between them (sync vs async, request-response vs event-driven) — **with the SAP doc URL as the source of truth for each flow**
 
 For each named SAP service, look it up via the `sap-icons-resolve` skill (or directly in `assets/shape-index.json`). Resolve aliases (BPA → Build Process Automation; DOX → Document Information Extraction).
 
-Present the inventory as a structured table. **Do not generate the diagram yet.**
+Present the inventory as a structured table including a **"SAP doc reference"** column with the help.sap.com URL (or RA id) that justifies each component placement. **Do not generate the diagram yet.**
 
 ### Step 3 — Consult SAP-domain skills (best-practice gate)
 
@@ -184,6 +212,8 @@ Read project-local settings from `.claude/sap-diagrams-pro.local.md` or `~/.clau
 
 ## References
 
+- [`references/sap-docs-consultation.md`](references/sap-docs-consultation.md) — **Step 0 mandatory consultation**: when/how to invoke `sap-docs` / `sap-notes` / `sap-community` to validate components and relationships before building the inventory.
+- [`references/sap-corpus-learnings.md`](references/sap-corpus-learnings.md) — empirical findings from analyzing all 30 SAP/architecture-center reference architectures (137 .drawio).
 - [`references/horizon-palette.md`](references/horizon-palette.md) — Horizon palette + allowed combinations.
 - [`references/atomic-design.md`](references/atomic-design.md) — atoms / molecules / organisms.
 - [`references/levels-l0-l1-l2.md`](references/levels-l0-l1-l2.md) — when to use each level + budgets.
