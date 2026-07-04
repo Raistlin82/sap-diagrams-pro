@@ -29,6 +29,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install pytest dependencies
+        run: python3 -m pip install pytest pillow
+
+      - name: Run pytest (engine unit + smoke tests)
+        run: python3 -m pytest tests -q
+
       - name: Verify shebangs + SPDX headers on scripts
         run: |
           set -eu
