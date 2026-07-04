@@ -120,7 +120,10 @@ stale snapshot folders and cloud-only files needing hydration).
   (`identity|provisioning|master-data|transport|default` → colour + dash from
   the style contract).
 - `metadata.branding` (customer logo ref, partner watermark ref),
-  `metadata.badges` (hyperscalers, runtimes).
+  `metadata.badges` (hyperscalers, runtimes). Refs into
+  `assets/brand-pack.local/` that are absent on the current machine (CI,
+  Desktop bundle, other hosts) degrade gracefully: preflight WARNING and the
+  logo/watermark is omitted — never a hard fail.
 - NETWORK separator (double vertical bar) auto-inserted between the CENTER
   column and the **entire RIGHT tier stack** — both corpora place every
   external tier (Public/Private Cloud, Any-Premise, 3rd party) right of the
