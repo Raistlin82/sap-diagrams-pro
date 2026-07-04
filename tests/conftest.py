@@ -10,8 +10,16 @@ sys.path.insert(0, str(SCRIPTS))
 
 
 def load_script(name: str):
-    """Import a scripts/ module even when its filename contains dashes."""
+    """Import a scripts/ module even when its filename contains dashes.
+
+    Tests must load scripts/ modules exclusively via load_script (never plain
+    `import _zone_layout`) so a single mechanism owns module identity.
+    """
     mod_name = name.replace("-", "_")
+    # Memoize: re-executing a module would clobber sys.modules and break
+    # dataclass identity (isinstance/get_type_hints) across test files.
+    if mod_name in sys.modules:
+        return sys.modules[mod_name]
     spec = importlib.util.spec_from_file_location(
         mod_name, SCRIPTS / f"{name}.py")
     mod = importlib.util.module_from_spec(spec)

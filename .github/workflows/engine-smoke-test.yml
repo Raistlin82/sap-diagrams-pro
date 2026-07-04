@@ -30,7 +30,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install pytest dependencies
-        run: python3 -m pip install pytest pillow
+        run: python3 -m pip install 'pytest~=8.3' 'pillow~=11.0'
 
       - name: Run pytest (engine unit + smoke tests)
         run: python3 -m pytest tests -q
