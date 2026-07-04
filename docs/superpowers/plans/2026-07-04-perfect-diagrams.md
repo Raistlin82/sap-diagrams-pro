@@ -49,7 +49,7 @@ scripts/
   check-composition.py         # MODIFIED: v2 geometric gate (FAIL-blocking)
   render-preview.py            # MODIFIED: --engine auto|drawio|pure
 skills/sap-diagram-generate/
-  SKILL.md                     # MODIFIED: Step 8 = visual gate loop
+  SKILL.md                     # MODIFIED: Steps 6-8 — IR v2 authoring, validate-ir gate, visual loop
   references/visual-rubric.md  # ~25 binary checks + patch mapping
 tests/                         # pytest suite + fixtures
 ```
@@ -231,7 +231,7 @@ def test_no_style_literals_in_engine_sources():
 - [ ] **Step 2: Implement** — for each service/genericIcon in `shape-index.json`, decode the embedded SVG data-URI and rasterize at 96×96. Rasterizer resolution order: `resvg` CLI → `cairosvg` module → error with `brew install resvg` hint. `--only <name>` for incremental runs.
 - [ ] **Step 3: Dev run** → commit `assets/icon-atlas/` (expect ~600 files, ~2-3 MB) + REUSE entry. Run tests → PASS. **Commit** `feat(assets): pre-rasterized icon atlas for the pure renderer`.
 
-**Atlas ↔ renderer linkage (binding decision):** `index.json` maps BOTH the icon name AND `sha1(<exact data-URI string>)` → PNG file. The emitted `.drawio` keeps real data-URIs (draw.io needs them); `_pure_render.py` (Task 10) computes sha1 of each encountered `image=data:` URI and resolves the PNG via the atlas index — no emit-side changes, no SVG rasterization at render time.
+**Atlas ↔ renderer linkage (binding decision):** `index.json` maps BOTH the icon name AND `sha1(<exact data-URI string>)` → PNG file. The emitted `.drawio` keeps real data-URIs (draw.io needs them); `_pure_render.py` (Task 10) computes sha1 of each encountered `image=data:` URI and resolves the PNG via the atlas index — no emit-side changes, no SVG rasterization at render time. `build-icon-atlas.py` also rasterizes every SVG entry of `assets/brand-pack/` (and `.local` when present) into the same sha1-keyed index, so brand chips don't fall back to grey placeholders in pure renders.
 
 ---
 
@@ -370,7 +370,7 @@ def route(diagram, layout) -> RouteResult:
 
 **Files:** Create `scripts/_pure_render.py`, `tests/test_pure_render.py`.
 
-Renders OUR vocabulary only, from the emitted `.drawio` XML: rounded rects (absoluteArcSize honored), dash patterns (dashed 6-4, dotted 2-3 scaled), polylines + `blockThin` arrowheads (endSize 4 → triangle), ellipses, pills, text (PIL `ImageFont.truetype(DejaVuSans, size)`; horizontal/vertical align per style; `fontStyle=1` → bold variant), images (data-URIs + `@atlas:` names → `assets/icon-atlas/`), watermark opacity. CLI: `python3 scripts/_pure_render.py in.drawio --out out.png --scale 2`.
+Renders OUR vocabulary only, from the emitted `.drawio` XML: rounded rects (absoluteArcSize honored), dash patterns (dashed 6-4, dotted 2-3 scaled), polylines + `blockThin` arrowheads (endSize 4 → triangle), ellipses, pills, text (PIL `ImageFont.truetype(DejaVuSans, size)`; horizontal/vertical align per style; `fontStyle=1` → bold variant), images (data-URIs resolved to atlas PNGs by sha1 per the Task 3 binding decision), watermark opacity. CLI: `python3 scripts/_pure_render.py in.drawio --out out.png --scale 2`.
 
 - [ ] **Step 1: Failing tests** — render the v2 fixture output: PNG size == canvas×scale; pixel at title (x+4,y+4 of title cell) ≈ `#0070F2` (±20/channel); pixel on btp frame border ≈ `#0070F2`; icon region non-empty (stddev > 0); a dashed edge row has alternating background pixels; missing-atlas icon → grey placeholder circle, exit 0 with WARN on stderr.
 - [ ] **Step 2: Implement** (Pillow import guarded: exit 3 "pip install pillow" if absent — preflight recommended-item added).
@@ -392,7 +392,7 @@ Renders OUR vocabulary only, from the emitted `.drawio` XML: rounded rects (abso
 
 New FAIL-blocking checks (reuse `_geom_checks`): `EDGE_CROSS_BUDGET` (crossings > budget from metadata or default 8), `EDGE_THROUGH_BOX` (segment intersects a non-endpoint node/group rect), `TEXT_OVERLAP` (any two text-bearing cell rects), `CAPTION_OUT` (node caption outside its parent frame), `PILL_COLLISION`, `PORT_CONGESTION` (two edges same side same fraction), `CHANNEL_DISCIPLINE` (edge segment outside every channel rect ± tolerance — requires channels serialized into the XML as an invisible metadata cell `sapdp:channels` JSON; add that to emit in this task).
 
-- [ ] **Step 1: Failing tests** — `bad-nova-L1.drawio` → ≥3 distinct FAIL codes and exit code 1; freshly generated nova-L1 → 0 FAIL exit 0.
+- [ ] **Step 1: Failing tests** — `bad-nova-L1.drawio` → ≥3 distinct FAIL codes and exit code 2; freshly generated nova-L1 → 0 FAIL exit 0.
 - [ ] **Step 2: Implement**; FAILs must produce **exit 2** (aligning with the existing `--strict` convention; today the script exits 0 without `--strict` — make FAIL-level findings exit 2 unconditionally).
 - [ ] **Step 3: Commit** `feat(gate): geometric FAIL checks — crossings, overlaps, containment, channel discipline`.
 
