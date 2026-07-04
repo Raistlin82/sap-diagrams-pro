@@ -86,10 +86,18 @@ conventions**, defined by a reference corpus:
 
 ### Layer 0 — Assets & style contract
 
+All Layer 0 scripts are **dev-machine-only build steps with committed
+outputs** (they read the exemplars from the live OneDrive root
+`/Users/gabriele.rendina/Library/CloudStorage/OneDrive-LUTECHSPA/` — beware
+stale snapshot folders and cloud-only files needing hydration).
+
 - `scripts/harvest-brand-assets.py`: extract the base64 logos embedded in the
-  exemplars (Lutech, SNAM, RISE WITH SAP, Cloud Foundry, SAP chip) into
-  `assets/brand-pack/` as data-URIs; add curated AWS/Azure/GCP marks to replace
-  the fragile external URLs (logo.wine, wikimedia) found in the exemplars.
+  exemplars into data-URIs, split by confidentiality:
+  `assets/brand-pack/` (committed, public-safe: SAP chip, RISE WITH SAP,
+  Cloud Foundry badge, curated AWS/Azure/GCP marks replacing the fragile
+  external URLs found in the exemplars) and `assets/brand-pack.local/`
+  (**gitignored**: customer/partner logos — Lutech, SNAM, Brandart). REUSE
+  entries added for everything committed.
 - `scripts/build-style-contract.py`: extract the **exact mxGraph style string**
   of every molecule (subaccount frame, product box, capability chip, tier box,
   persona, pill, edge families, badges, title block) from the exemplars + the
@@ -105,20 +113,29 @@ conventions**, defined by a reference corpus:
 - Group types: `subaccount` (nestable; SAP BTP chip; badges), `governance`,
   `cloud-tier` (`kind: public|private|any-premise`), `custom-app`.
 - Node types: `product` with `capabilities: [{label, icon}]`, `chip`, `db`.
+  The asymmetry is intentional: `product` is a *leaf* molecule (a box whose
+  chips are data, not addressable nodes), while `custom-app` is a *group*
+  because it contains addressable service nodes and carries a runtime badge.
 - Edge: `pill` (protocol), `flowFamily`
   (`identity|provisioning|master-data|transport|default` → colour + dash from
   the style contract).
 - `metadata.branding` (customer logo ref, partner watermark ref),
   `metadata.badges` (hyperscalers, runtimes).
-- NETWORK separator auto-inserted between cloud columns and
-  any-premise/on-prem tiers (opt-out flag).
+- NETWORK separator (double vertical bar) auto-inserted between the CENTER
+  column and the **entire RIGHT tier stack** — both corpora place every
+  external tier (Public/Private Cloud, Any-Premise, 3rd party) right of the
+  bar; opt-out flag (e.g. Brandart omits it).
 - Preflight validates IR v2 with actionable errors.
 
 ### Layer 2a — Skeleton layout + flow ordering
 
 Typed slots replace free column packing: LEFT personas · TOP governance ·
-CENTER BTP with nested subaccounts · RIGHT tier stack · BOTTOM identity +
-legend + level caption · branding on top. Within each lane, nodes are ordered
+CENTER BTP with nested subaccounts · RIGHT tier stack · BOTTOM legend + level
+caption · branding on top. **Identity** gets a dedicated slot at the bottom of
+the CENTER column; whether it nests *inside* the BTP frame follows the IR
+parent (inside if parented to the `btp` group — the gold's convention — or
+just below the frame if top-level — the Lutech exemplars' convention). Both
+are canonical in the corpus. Within each lane, nodes are ordered
 **topologically along the main flow** (Kahn; stable tie-break = IR order;
 edge-less nodes keep IR order at the end). Containers keep auto-sizing
 bottom-up with per-molecule padding from the contract.
@@ -149,7 +166,8 @@ bottom-up with per-molecule padding from the contract.
   edge-crossing count vs budget, edge-through-node/container, text-text and
   text-edge overlap, caption-outside-container, port congestion, channel
   discipline, step/pill collision.
-- `references/visual-rubric.md`: ~25 binary checks derived from the corpus,
+- `skills/sap-diagram-generate/references/visual-rubric.md`: ~25 binary
+  checks derived from the corpus,
   each mapped to a **mechanical patch** (IR/layout-hint change: flow-order
   override, group `flow`, channel preference, label shift…). The skill renders,
   **looks at the PNG**, emits findings JSON `{rule, location, patch}`, applies
@@ -163,12 +181,14 @@ bottom-up with per-molecule padding from the contract.
 
 1. `demo/nova` L0/L1/L2 regenerated.
 2. **Brandart replica** from an inventory-only IR, judged side-by-side with the
-   original (must read as the same family).
+   original (must read as the same family). **Local-only exam** — the
+   Brandart-derived IR and logos never enter the public repo.
 3. **SAP_Task_Center_L1 replica** from IR (gold fidelity).
 
 Done = geometric gate + rubric green on all three **+ Gabriele's visual
-approval**. The three become golden tests in CI (generate → validate →
-geometric gate; no LLM in CI).
+approval**. Exams 1 and 3 become golden tests in CI. In CI the gate is pure
+render + geometric checks only; the vision rubric runs where an LLM is present
+(Claude Code, claude.ai) — never in CI.
 
 ## Implementation phases
 

@@ -43,3 +43,4 @@ build/
 *.drawio.dtmp
 .$*.dtmp
 .superpowers/
+assets/brand-pack.local/
