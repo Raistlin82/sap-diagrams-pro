@@ -58,22 +58,31 @@ def to_dot_source(diagram, shape_index) -> str:
     explicit width/height so dot can reserve space for both the SAP icon
     and the label below it.
     """
+    # Layout direction: SAP diagrams flow LEFT→RIGHT (Users → BTP → Backend),
+    # matching ~80% of the 137 official samples in SAP/architecture-center.
+    # rankdir=TB previously produced a vertical "ladder" with poor use of the
+    # horizontal axis when the inventory had >5 clusters.
     lines = ["digraph SAPDiagram {"]
-    lines.append("  rankdir=TB;")
+    lines.append("  rankdir=LR;")
     lines.append("  splines=ortho;")
-    # Larger pad gives the title and legend room. nodesep/ranksep tuned to
-    # match SAP example breathing room (matches typical 32-40px gaps in the
-    # 11 official samples). concentrate=true merges parallel edges that
-    # share a source/target side, eliminating duplicate-route clutter.
-    lines.append('  graph [pad="0.6", nodesep="0.8", ranksep="1.0", '
-                 'compound=true, concentrate=true, fontname="Helvetica"];')
+    # Layout breathing room — tuned against 22-node BRIM stress test.
+    # nodesep/ranksep open the gutters so cross-cluster orthogonal edges
+    # have routing space. mclimb (default 1.0) and searchsize (default 30)
+    # increase crossing-reduction iterations; both are CPU-cheap at L1
+    # density. newrank=true allows rank constraints across clusters,
+    # important when sap-app and btp-layer share the same horizontal band.
+    lines.append('  graph [pad="0.6", nodesep="1.0", ranksep="1.4", '
+                 'mclimb="4.0", searchsize="200", '
+                 'compound=true, concentrate=true, newrank=true, '
+                 'fontname="Helvetica"];')
     lines.append('  node [shape=box, fontname="Helvetica", fontsize=10, '
                  'fixedsize=true];')
     # forcelabels=true allows xlabel to position edge labels off the line
     # (avoids the SAP guideline's #1 readability issue: stacked labels on
-    # long horizontal edges).
+    # long horizontal edges). minlen=1 prevents dot from collapsing
+    # already-short edges onto a node boundary.
     lines.append('  edge [fontname="Helvetica", fontsize=9, '
-                 'labelfloat=true, labeldistance=2];')
+                 'labelfloat=true, labeldistance=2, minlen=1];')
     lines.append("")
 
     # Build helpers.

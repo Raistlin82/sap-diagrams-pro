@@ -836,6 +836,7 @@ def _edge_style(
     e: Edge,
     src_geom: tuple[int, int, int, int] | None = None,
     tgt_geom: tuple[int, int, int, int] | None = None,
+    anchors: tuple[tuple[float, float], tuple[float, float]] | None = None,
 ) -> str:
     """Build the SAP-canonical edge style.
 
@@ -877,9 +878,16 @@ def _edge_style(
         f"verticalAlign=middle;align=center;"
     )
 
-    # Compute exit/entry anchors when both endpoints' geometries are known.
-    if src_geom and tgt_geom:
+    # Exit/entry anchors. Prefer the distributed anchors computed across ALL
+    # edges (so parallel connectors fan out); fall back to the midpoint
+    # heuristic only when a distributed anchor wasn't supplied.
+    if anchors is not None:
+        exit_anchor, entry_anchor = anchors
+    elif src_geom and tgt_geom:
         exit_anchor, entry_anchor = _compute_anchors(src_geom, tgt_geom)
+    else:
+        exit_anchor = entry_anchor = None
+    if exit_anchor is not None and entry_anchor is not None:
         style += (
             f"exitX={exit_anchor[0]};exitY={exit_anchor[1]};exitDx=0;exitDy=0;"
             f"entryX={entry_anchor[0]};entryY={entry_anchor[1]};entryDx=0;entryDy=0;"
@@ -913,6 +921,101 @@ def _compute_anchors(
     if dy >= 0:
         return (0.5, 1.0), (0.5, 0.0)      # source-bottom → target-top
     return (0.5, 0.0), (0.5, 1.0)          # source-top    → target-bottom
+
+
+def _facing_sides(
+    src: tuple[int, int, int, int],
+    tgt: tuple[int, int, int, int],
+) -> tuple[str, str]:
+    """Which side of each box the edge attaches to, by dominant axis.
+
+    Same heuristic as :func:`_compute_anchors` but returns side *names*
+    ("left"/"right"/"top"/"bottom") so callers can distribute several edges
+    along one side instead of collapsing them onto its midpoint.
+    """
+    sx, sy, sw, sh = src
+    tx, ty, tw, th = tgt
+    src_cx, src_cy = sx + sw / 2, sy + sh / 2
+    tgt_cx, tgt_cy = tx + tw / 2, ty + th / 2
+    dx = tgt_cx - src_cx
+    dy = tgt_cy - src_cy
+    if abs(dx) >= abs(dy):
+        return ("right", "left") if dx >= 0 else ("left", "right")
+    return ("bottom", "top") if dy >= 0 else ("top", "bottom")
+
+
+def _anchor_for(side: str, frac: float) -> tuple[float, float]:
+    """Map a (side, fraction-along-side) pair to a drawio 0..1 anchor."""
+    if side == "right":
+        return (1.0, frac)
+    if side == "left":
+        return (0.0, frac)
+    if side == "top":
+        return (frac, 0.0)
+    return (frac, 1.0)  # bottom
+
+
+def _assign_edge_anchors(
+    diagram: "Diagram",
+    geom: dict[str, tuple[int, int, int, int]],
+) -> dict[str, tuple[tuple[float, float], tuple[float, float]]]:
+    """Give every edge a DISTINCT exit/entry anchor so parallel edges fan out.
+
+    The old behaviour attached every edge to the midpoint of a box side, so
+    N edges sharing a side collapsed onto one point (the "unified connectors"
+    bug). Here we:
+
+      1. decide which side each edge uses on its source and target
+         (:func:`_facing_sides`);
+      2. bucket edges by ``(node_id, side)`` — an endpoint acting as source
+         and another acting as target share the same physical side, so they
+         share one bucket;
+      3. within a bucket, order edges by the *other* endpoint's position on
+         the axis parallel to the side, so the top-most neighbour connects to
+         the top-most slot (this is what prevents lines from crossing);
+      4. spread k edges across the side at fractions 1/(k+1) … k/(k+1).
+
+    Returns ``{edge_id: ((exitX, exitY), (entryX, entryY))}``. Deterministic:
+    bucket iteration follows edge order, the sort is stable, and fractions are
+    rounded to 4 dp for byte-stable style strings.
+    """
+    edge_by_id = {e.id: e for e in diagram.edges}
+    sides: dict[str, tuple[str, str]] = {}
+    # bucket key → list of (edge_id, role) where role is "src" or "tgt"
+    buckets: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for e in diagram.edges:
+        s = geom.get(e.source)
+        t = geom.get(e.target)
+        if not s or not t or e.source == e.target:
+            continue
+        src_side, tgt_side = _facing_sides(s, t)
+        sides[e.id] = (src_side, tgt_side)
+        buckets.setdefault((e.source, src_side), []).append((e.id, "src"))
+        buckets.setdefault((e.target, tgt_side), []).append((e.id, "tgt"))
+
+    def _other_coord(edge_id: str, role: str, side: str) -> float:
+        e = edge_by_id[edge_id]
+        other_id = e.target if role == "src" else e.source
+        ox, oy, ow, oh = geom[other_id]
+        ocx, ocy = ox + ow / 2, oy + oh / 2
+        # For a vertical side (left/right) neighbours differ by Y; for a
+        # horizontal side (top/bottom) they differ by X.
+        return ocx if side in ("top", "bottom") else ocy
+
+    per_edge: dict[str, dict[str, tuple[float, float]]] = {}
+    for (node_id, side), members in buckets.items():
+        ordered = sorted(members, key=lambda m: (_other_coord(m[0], m[1], side), m[0]))
+        k = len(ordered)
+        for i, (eid, role) in enumerate(ordered):
+            frac = round((i + 1) / (k + 1), 4)
+            per_edge.setdefault(eid, {})[role] = _anchor_for(side, frac)
+
+    out: dict[str, tuple[tuple[float, float], tuple[float, float]]] = {}
+    for e in diagram.edges:
+        a = per_edge.get(e.id)
+        if a and "src" in a and "tgt" in a:
+            out[e.id] = (a["src"], a["tgt"])
+    return out
 
 
 def emit(
@@ -1320,7 +1423,12 @@ def emit(
                 },
             )
 
-    # 4. Edges — exit/entry anchors + optional waypoints from dot.
+    # 4. Edges — distributed exit/entry anchors so parallel connectors fan
+    # out instead of collapsing onto one shared side-midpoint. drawio's
+    # orthogonalEdgeStyle then routes cleanly between the distinct anchors,
+    # which is why we no longer embed dot's absolute waypoints (they were
+    # computed for dot's own ports and fought these anchors).
+    edge_anchor_map = _assign_edge_anchors(diagram, node_abs_geom)
     for e in diagram.edges:
         src_geom = node_abs_geom.get(e.source)
         tgt_geom = node_abs_geom.get(e.target)
@@ -1337,7 +1445,9 @@ def emit(
             attrib={
                 "id": edge_id,
                 "value": inline_value,
-                "style": _edge_style(e, src_geom, tgt_geom),
+                "style": _edge_style(
+                    e, src_geom, tgt_geom, edge_anchor_map.get(e.id)
+                ),
                 "edge": "1",
                 "parent": "1",
                 "source": _stable_id("n", e.source),
@@ -1347,18 +1457,13 @@ def emit(
         geom_el = ET.SubElement(
             e_cell, "mxGeometry", attrib={"relative": "1", "as": "geometry"}
         )
-        # When dot has computed waypoints for this edge, embed them so the
-        # final route follows the SAP-style L/U paths instead of straight
-        # diagonals.
-        wps = edge_waypoints.get(e.id, [])
-        if wps:
-            arr = ET.SubElement(geom_el, "Array", attrib={"as": "points"})
-            for wx, wy in wps:
-                ET.SubElement(
-                    arr,
-                    "mxPoint",
-                    attrib={"x": str(int(round(wx))), "y": str(int(round(wy)))},
-                )
+        # NOTE: dot's absolute waypoints are intentionally NOT embedded. They
+        # were computed for dot's own port placement and fought the
+        # distributed exit/entry anchors above (producing kinks and merged
+        # routes). With distinct anchors, drawio's orthogonalEdgeStyle router
+        # produces cleaner SAP-style L/U paths and re-routes when the user
+        # drags a box. (edge_waypoints is still returned by the dot backend;
+        # flip this if you ever want to opt back into fixed routes.)
 
         # Pill labels for the 4 SAP-canonical edge kinds (trust,
         # authenticate, authorize, generic_protocol). Each kind has its

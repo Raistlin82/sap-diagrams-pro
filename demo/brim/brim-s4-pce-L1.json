@@ -1,0 +1,329 @@
+{
+  "_comment": "SAP BRIM on S/4HANA Cloud, private edition \u2014 L1 architect view. CC standalone per help.sap.com/docs/Convergent_Charging/.../51f242b29e5a4804a59022a00f8457d9 (CC 'deployed and connected to' S/4HANA, NOT embedded). FICAC_CORE + FICAC_CI business functions per help.sap.com/docs/SAP_S4HANA_ON-PREMISE/.../c918bf4f27f44f71888040e6ae3add31.",
+  "metadata": {
+    "title": "SAP BRIM on S/4HANA Cloud, private edition \u2014 L1",
+    "level": "L1",
+    "author": "Gabriele Capparelli"
+  },
+  "groups": [
+    {
+      "id": "users",
+      "type": "user",
+      "label": "Users",
+      "position": "top-left"
+    },
+    {
+      "id": "third-party",
+      "type": "third-party",
+      "label": "3rd Party Services",
+      "position": "top-right"
+    },
+    {
+      "id": "btp",
+      "type": "btp-layer",
+      "label": "SAP BTP",
+      "position": "center"
+    },
+    {
+      "id": "charging",
+      "type": "sap-app",
+      "label": "SAP Convergent Charging (standalone)",
+      "position": "bottom-center"
+    },
+    {
+      "id": "s4pce",
+      "type": "sap-app",
+      "label": "SAP S/4HANA Cloud, private edition",
+      "position": "bottom-left"
+    },
+    {
+      "id": "infra",
+      "type": "non-sap",
+      "label": "Hyperscaler & Connectivity",
+      "position": "bottom-right"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "subscriber",
+      "label": "Customer",
+      "group": "users"
+    },
+    {
+      "id": "csr",
+      "label": "CSR Agent",
+      "group": "users"
+    },
+    {
+      "id": "finance-user",
+      "label": "Finance User",
+      "group": "users"
+    },
+    {
+      "id": "sales-rep",
+      "label": "Sales Rep",
+      "group": "users"
+    },
+    {
+      "id": "pay-gw",
+      "label": "Payment Gateway",
+      "group": "third-party"
+    },
+    {
+      "id": "tax-engine",
+      "label": "Tax Engine",
+      "group": "third-party"
+    },
+    {
+      "id": "ias",
+      "label": "Cloud Identity Services",
+      "service": "SAP Cloud Identity Services",
+      "group": "btp"
+    },
+    {
+      "id": "bwz",
+      "label": "Build Work Zone",
+      "service": "SAP Build Work Zone",
+      "group": "btp"
+    },
+    {
+      "id": "is",
+      "label": "Integration Suite",
+      "service": "SAP Integration Suite",
+      "group": "btp"
+    },
+    {
+      "id": "em",
+      "label": "Event Mesh",
+      "service": "Event Mesh",
+      "group": "btp"
+    },
+    {
+      "id": "bpa",
+      "label": "Process Automation",
+      "service": "SAP Build Process Automation",
+      "group": "btp"
+    },
+    {
+      "id": "tc",
+      "label": "Task Center",
+      "service": "SAP Task Center",
+      "group": "btp"
+    },
+    {
+      "id": "ds",
+      "label": "Datasphere",
+      "service": "SAP Datasphere",
+      "group": "btp"
+    },
+    {
+      "id": "cc",
+      "label": "Convergent Charging",
+      "group": "charging"
+    },
+    {
+      "id": "cm",
+      "label": "Convergent Mediation (optional)",
+      "group": "charging"
+    },
+    {
+      "id": "som",
+      "label": "Subscription Order Mgmt (SOM)",
+      "group": "s4pce"
+    },
+    {
+      "id": "ci",
+      "label": "Convergent Invoicing (FICAC_CI)",
+      "group": "s4pce"
+    },
+    {
+      "id": "ccac",
+      "label": "Convergent Contract Acctg (FICAC_CORE)",
+      "group": "s4pce"
+    },
+    {
+      "id": "fica",
+      "label": "FI-CA (FICAX)",
+      "group": "s4pce"
+    },
+    {
+      "id": "entitl",
+      "label": "Entitlement Management",
+      "group": "s4pce"
+    },
+    {
+      "id": "ccon",
+      "label": "Cloud Connector",
+      "group": "infra"
+    },
+    {
+      "id": "hsc",
+      "label": "Hyperscaler IaaS",
+      "group": "infra"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e01",
+      "source": "subscriber",
+      "target": "bwz",
+      "style": "solid",
+      "label": "HTTPS"
+    },
+    {
+      "id": "e02",
+      "source": "csr",
+      "target": "bwz",
+      "style": "solid",
+      "label": "HTTPS"
+    },
+    {
+      "id": "e03",
+      "source": "finance-user",
+      "target": "bwz",
+      "style": "solid",
+      "label": "HTTPS"
+    },
+    {
+      "id": "e04",
+      "source": "sales-rep",
+      "target": "bwz",
+      "style": "solid",
+      "label": "HTTPS"
+    },
+    {
+      "id": "e05",
+      "source": "bwz",
+      "target": "ias",
+      "style": "solid",
+      "label": "SAML2/OIDC"
+    },
+    {
+      "id": "e06",
+      "source": "bwz",
+      "target": "ccon",
+      "style": "solid",
+      "label": "Destination"
+    },
+    {
+      "id": "e07",
+      "source": "ccon",
+      "target": "som",
+      "style": "solid",
+      "label": "Principal Propagation"
+    },
+    {
+      "id": "e08",
+      "source": "som",
+      "target": "entitl",
+      "style": "solid",
+      "label": "provision"
+    },
+    {
+      "id": "e09",
+      "source": "som",
+      "target": "cc",
+      "style": "solid",
+      "label": "rating plan (RFC/REST)"
+    },
+    {
+      "id": "e10",
+      "source": "cm",
+      "target": "cc",
+      "style": "solid",
+      "label": "usage CDR"
+    },
+    {
+      "id": "e11",
+      "source": "cc",
+      "target": "ci",
+      "style": "solid",
+      "label": "consumption items"
+    },
+    {
+      "id": "e12a",
+      "source": "ci",
+      "target": "ccac",
+      "style": "solid",
+      "label": "contract item"
+    },
+    {
+      "id": "e12b",
+      "source": "ccac",
+      "target": "fica",
+      "style": "solid",
+      "label": "open item posting"
+    },
+    {
+      "id": "e13",
+      "source": "fica",
+      "target": "is",
+      "style": "solid",
+      "label": "iDoc / SOAP"
+    },
+    {
+      "id": "e14",
+      "source": "is",
+      "target": "pay-gw",
+      "style": "solid",
+      "label": "collect"
+    },
+    {
+      "id": "e15",
+      "source": "is",
+      "target": "tax-engine",
+      "style": "solid",
+      "label": "tax calc"
+    },
+    {
+      "id": "e16",
+      "source": "som",
+      "target": "em",
+      "style": "dashed",
+      "label": "subscription events",
+      "direction": "bidirectional"
+    },
+    {
+      "id": "e17",
+      "source": "em",
+      "target": "bpa",
+      "style": "dashed",
+      "label": "approval kickoff"
+    },
+    {
+      "id": "e18",
+      "source": "bpa",
+      "target": "tc",
+      "style": "dashed",
+      "label": "inbox"
+    },
+    {
+      "id": "e19",
+      "source": "bpa",
+      "target": "som",
+      "style": "solid",
+      "label": "write-back"
+    },
+    {
+      "id": "e20",
+      "source": "fica",
+      "target": "ds",
+      "style": "dashed",
+      "label": "replication"
+    },
+    {
+      "id": "e21",
+      "source": "ci",
+      "target": "ds",
+      "style": "dashed",
+      "label": "replication"
+    },
+    {
+      "id": "e22",
+      "source": "cc",
+      "target": "ds",
+      "style": "dashed",
+      "label": "replication"
+    }
+  ]
+}
