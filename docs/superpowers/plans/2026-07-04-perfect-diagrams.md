@@ -231,6 +231,8 @@ def test_no_style_literals_in_engine_sources():
 - [ ] **Step 2: Implement** — for each service/genericIcon in `shape-index.json`, decode the embedded SVG data-URI and rasterize at 96×96. Rasterizer resolution order: `resvg` CLI → `cairosvg` module → error with `brew install resvg` hint. `--only <name>` for incremental runs.
 - [ ] **Step 3: Dev run** → commit `assets/icon-atlas/` (expect ~600 files, ~2-3 MB) + REUSE entry. Run tests → PASS. **Commit** `feat(assets): pre-rasterized icon atlas for the pure renderer`.
 
+**Atlas ↔ renderer linkage (binding decision):** `index.json` maps BOTH the icon name AND `sha1(<exact data-URI string>)` → PNG file. The emitted `.drawio` keeps real data-URIs (draw.io needs them); `_pure_render.py` (Task 10) computes sha1 of each encountered `image=data:` URI and resolves the PNG via the atlas index — no emit-side changes, no SVG rasterization at render time.
+
 ---
 
 ## Phase 2 — IR v2 + molecules
@@ -316,7 +318,7 @@ def test_governance_above_center()
 ```
 
 - [ ] **Step 2: Implement `_skeleton_layout.compute_layout(diagram, shape_index)`** returning the same dict shape as before (`groups/nodes/edges/canvas`) + new `"meta": {"slots": {...}, "lanes": {...}}` consumed by the router. Measurement reuses `_pack`/`_footprint`; product/tier molecules get footprints from contract geometry.
-- [ ] **Step 3: Wire into `emit()`**, delete `_zone_layout.py`, fix imports (`icon_size` now from `_skeleton_layout`). Run FULL suite + `python3 scripts/generate-drawio.py demo/nova/nova-L1.json --out /tmp/n1.drawio` → generates.
+- [ ] **Step 3: Wire into `emit()`**, delete `_zone_layout.py`, fix imports (`icon_size` now from `_skeleton_layout`) — including `tests/test_smoke.py`, which loads `_zone_layout` and must now load `_skeleton_layout`. Run FULL suite + `python3 scripts/generate-drawio.py demo/nova/nova-L1.json --out /tmp/n1.drawio` → generates.
 - [ ] **Step 4: Commit** `feat(layout): skeleton slot layout with flow ordering (replaces zone layout)`.
 
 ### Task 7: NETWORK separator + branding placement
@@ -386,12 +388,12 @@ Renders OUR vocabulary only, from the emitted `.drawio` XML: rounded rects (abso
 
 ### Task 12: geometric gate v2
 
-**Files:** Modify `scripts/check-composition.py`; Create `tests/test_gate.py`, `tests/fixtures/bad-nova-L1.drawio` (generate once from current `main` engine BEFORE this branch's layout lands — `git stash` not needed: regenerate via `git show main:scripts/_zone_layout.py` copy in tmp, or simply commit the pre-existing bad output captured in scratch during the brainstorm).
+**Files:** Modify `scripts/check-composition.py`; Create `tests/test_gate.py`, `tests/fixtures/bad-nova-L1.drawio`. Generate the fixture with the OLD engine via a throwaway worktree: `git worktree add /tmp/sapdp-old main && python3 /tmp/sapdp-old/scripts/generate-drawio.py demo/nova/nova-L1.json --out tests/fixtures/bad-nova-L1.drawio && git worktree remove /tmp/sapdp-old` (the old engine needs its own repo copy — the new `generate-drawio.py` no longer imports `_zone_layout`).
 
 New FAIL-blocking checks (reuse `_geom_checks`): `EDGE_CROSS_BUDGET` (crossings > budget from metadata or default 8), `EDGE_THROUGH_BOX` (segment intersects a non-endpoint node/group rect), `TEXT_OVERLAP` (any two text-bearing cell rects), `CAPTION_OUT` (node caption outside its parent frame), `PILL_COLLISION`, `PORT_CONGESTION` (two edges same side same fraction), `CHANNEL_DISCIPLINE` (edge segment outside every channel rect ± tolerance — requires channels serialized into the XML as an invisible metadata cell `sapdp:channels` JSON; add that to emit in this task).
 
 - [ ] **Step 1: Failing tests** — `bad-nova-L1.drawio` → ≥3 distinct FAIL codes and exit code 1; freshly generated nova-L1 → 0 FAIL exit 0.
-- [ ] **Step 2: Implement**; ensure `sys.exit(1)` on any FAIL (verify current behavior, fix if only prints).
+- [ ] **Step 2: Implement**; FAILs must produce **exit 2** (aligning with the existing `--strict` convention; today the script exits 0 without `--strict` — make FAIL-level findings exit 2 unconditionally).
 - [ ] **Step 3: Commit** `feat(gate): geometric FAIL checks — crossings, overlaps, containment, channel discipline`.
 
 ### Task 13: visual rubric + patch application
@@ -418,11 +420,13 @@ Patches land in `diagram.layoutHints[]` (IR v2 field from Task 4); layout/router
 
 ### Task 14: SKILL loop rewrite
 
-**Files:** Modify `skills/sap-diagram-generate/SKILL.md` (Step 8), `agents/diagram-architect.md`, `skills/sap-diagram-generate/references/interactive-workflow.md`.
+**Files:** Modify `skills/sap-diagram-generate/SKILL.md` (Steps 6, 7 and 8), `agents/diagram-architect.md`, `skills/sap-diagram-generate/references/interactive-workflow.md`, `references/atomic-design.md`, `references/component-groups.md`.
 
-- [ ] **Step 1: Rewrite Step 8** as: `validate-drawio` → `check-composition` (FAIL ⇒ fix IR, regenerate — max 2) → `render-preview --engine auto` → **Read the PNG** → evaluate EVERY rubric check → findings JSON → `apply-rubric-patches.py` → regenerate → re-render; ≤3 vision iterations; deliver only when gate+rubric green, with a scorecard table (gate results, rubric pass count, crossings, iterations) in the final report; explicit user override allowed and logged.
-- [ ] **Step 2: Manual dry-run** of the SKILL text against the v2 fixture (follow the steps by hand once) — confirm no dead references, commands exist.
-- [ ] **Step 3: Commit** `docs(skill): Step 8 = visual gate loop with rubric findings and patches`.
+- [ ] **Step 1: Rewrite Step 6 (IR authoring)** — document the FULL v2 grammar the model authors from: `subaccount` (nesting Dev⊃Prod), `governance`, `cloud-tier`, `custom-app` groups; `product` nodes with `capabilities[]`; `pill` + `flowFamily` on edges; `metadata.branding`/`badges`; `layoutHints`. Update the worked JSON example to an archetype-A shape (governance strip + nested subaccounts + tiers). Update `atomic-design.md` and `component-groups.md` with the new molecules and the identity-placement rule. Remove the dead `scripts/_zone_layout.py` mention (now `_skeleton_layout.py`). Without this step the v2 molecules are unreachable in normal skill invocations.
+- [ ] **Step 2: Extend Step 7** — run `python3 scripts/validate-ir.py <ir.json>` before generating; on exit 2, fix the IR and re-validate.
+- [ ] **Step 3: Rewrite Step 8** as: `validate-drawio` → `check-composition` (FAIL ⇒ fix IR, regenerate — max 2) → `render-preview --engine auto` → **Read the PNG** → evaluate EVERY rubric check → findings JSON → `apply-rubric-patches.py` → regenerate → re-render; ≤3 vision iterations; deliver only when gate+rubric green, with a scorecard table (gate results, rubric pass count, crossings, iterations) in the final report; explicit user override allowed and logged. **Degrade path (spec Layer 3):** if NO render engine is available (no draw.io AND no Pillow), skip the vision loop, run the geometric gate only, and say so in the report with a WARNING — never dead-end.
+- [ ] **Step 4: Manual dry-run** of the SKILL text against the v2 fixture (follow the steps by hand once) — confirm no dead references, commands exist.
+- [ ] **Step 5: Commit** `docs(skill): IR v2 authoring + validate-ir gate + Step 8 visual loop with degrade path`.
 
 ---
 
@@ -446,7 +450,7 @@ Patches land in `diagram.layoutHints[]` (IR v2 field from Task 4); layout/router
 
 ### Task 19: bundle + docs + memory
 
-- [ ] Update `packaging/claude-desktop-skill/build.sh` manifest: add `_molecules.py`, `_skeleton_layout.py`, `_channel_router.py`, `_geom_checks.py`, `_pure_render.py`, `apply-rubric-patches.py`, `validate-ir.py`, `assets/style-contract.json`, `assets/brand-pack/`, `assets/icon-atlas/`, rubric reference; EXCLUDE `brand-pack.local`. Rebuild zip. Update `README.md`, `CHANGELOG.md`, `skills/sap-diagram-generate/references/*` touched by renames. Update the project memory file (`sap-diagrams-pro-quality-overhaul.md`) with the new pipeline + exam corpus. Commit `feat(dist): Desktop bundle with the perfect-diagrams engine`.
+- [ ] Update `packaging/claude-desktop-skill/build.sh` manifest: **remove `_zone_layout.py` from the copy loop** (deleted in Task 6 — the build would fail otherwise); add `_molecules.py`, `_skeleton_layout.py`, `_channel_router.py`, `_geom_checks.py`, `_pure_render.py`, `apply-rubric-patches.py`, `validate-ir.py`, `assets/style-contract.json`, `assets/brand-pack/`, `assets/icon-atlas/`, rubric reference; EXCLUDE `brand-pack.local`. Rebuild zip. Update `README.md`, `CHANGELOG.md`, `skills/sap-diagram-generate/references/*` touched by renames. Update the project memory file (`sap-diagrams-pro-quality-overhaul.md`) with the new pipeline + exam corpus. Commit `feat(dist): Desktop bundle with the perfect-diagrams engine`.
 
 ---
 
