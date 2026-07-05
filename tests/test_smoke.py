@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_zone_icon_size():
-    zl = load_script("_zone_layout")
+    zl = load_script("_skeleton_layout")
     assert zl.icon_size("L1") == 48
     assert zl.icon_size("L2") == 32
 

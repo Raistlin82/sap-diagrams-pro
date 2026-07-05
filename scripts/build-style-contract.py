@@ -530,7 +530,7 @@ def x_service_icon(c: Ctx):
     return _spec(img.get("style"), geom, "official",
                  "First service icon cell of the official all-services (size M) library; "
                  "square 32x32. image→@{service}. Per-level render size (L1=48, L2=32) is "
-                 "owned by _zone_layout, not this reference geometry.",
+                 "owned by _skeleton_layout, not this reference geometry.",
                  f"{Path(SERVICE_LIB).name}:service-icon", image_placeholder="service")
 
 

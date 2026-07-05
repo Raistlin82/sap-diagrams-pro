@@ -19,7 +19,11 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/scripts" "$STAGE/assets"
 
 cp "$HERE/SKILL.md" "$STAGE/SKILL.md"
-for f in generate-drawio.py _zone_layout.py validate-drawio.py check-composition.py; do
+# NOTE (Task 6): _zone_layout.py was replaced by _skeleton_layout.py (which
+# imports _molecules.py). The full Desktop-bundle refresh (contract + brand pack
+# + router assets) is Task 18; this copy loop is kept minimally correct here so
+# the build no longer references the deleted file.
+for f in generate-drawio.py _skeleton_layout.py _molecules.py validate-drawio.py check-composition.py; do
   cp "$ROOT/scripts/$f" "$STAGE/scripts/$f"
 done
 for f in shape-index.json canonical-pills.json; do

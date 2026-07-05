@@ -13,7 +13,7 @@ def load_script(name: str):
     """Import a scripts/ module even when its filename contains dashes.
 
     Tests must load scripts/ modules exclusively via load_script (never plain
-    `import _zone_layout`) so a single mechanism owns module identity.
+    `import _skeleton_layout`) so a single mechanism owns module identity.
     """
     mod_name = name.replace("-", "_")
     # Memoize: re-executing a module would clobber sys.modules and break

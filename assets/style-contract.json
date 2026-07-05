@@ -301,7 +301,7 @@
         "h": 32,
         "w": 32
       },
-      "notes": "First service icon cell of the official all-services (size M) library; square 32x32. image→@{service}. Per-level render size (L1=48, L2=32) is owned by _zone_layout, not this reference geometry.",
+      "notes": "First service icon cell of the official all-services (size M) library; square 32x32. image→@{service}. Per-level render size (L1=48, L2=32) is owned by _skeleton_layout, not this reference geometry.",
       "source": "official",
       "style": "shape=image;verticalLabelPosition=bottom;verticalAlign=top;imageAspect=0;aspect=fixed;image=@{service};fontStyle=0;fontSize=12;fontColor=#1D2D3E"
     },

@@ -181,8 +181,8 @@ CANVAS_H = 827
 # every mxGraph style string in the official libraries uses fontFamily=Helvetica).
 SAP_FONT_FAMILY = "Helvetica,Arial,sans-serif"
 
-# Greedy-fallback geometry only. Icon sizing in the default (zone) path comes
-# from `_zone_layout.icon_size(level)` (48px for L0/L1, 32px for L2).
+# Greedy-fallback geometry only. Icon sizing in the default (skeleton) path comes
+# from `_skeleton_layout.icon_size(level)` (48px for L0/L1, 32px for L2).
 CELL_W = CANVAS_W // 3
 CELL_H = CANVAS_H // 3
 GROUP_PADDING = 24
@@ -203,7 +203,7 @@ class Group:
     label: str
     position: str = "center"
     parent: str | None = None  # id of parent group; None = top-level
-    # Optional layout overrides honoured by the zone engine:
+    # Optional layout overrides honoured by the skeleton layout engine:
     flow: str | None = None    # "row" | "col" | "grid" — intra-group packing
     zone: str | None = None    # "left" | "center" | "right" — column override
     nodes: list[str] = field(default_factory=list)
@@ -1171,8 +1171,8 @@ MOLECULE_NODE_TYPES = {"product", "db", "chip"}
 
 
 def _molecules_module():
-    """Lazily import scripts/_molecules.py (same dashed-safe technique emit uses
-    for _zone_layout). Cached for the process."""
+    """Lazily import scripts/_molecules.py (same path-based technique emit uses
+    for _skeleton_layout). Cached for the process."""
     global _MOLECULES_MOD
     if _MOLECULES_MOD is None:
         import importlib.util as _ilu
@@ -1247,17 +1247,25 @@ def _place_molecule(
     return anchor_id
 
 
-def _group_molecule_cells(g: Group, contract: dict) -> list[dict] | None:
-    """Contract-driven frame cells for an IR v2 group type (or None for v1)."""
+def _group_molecule_cells(
+    g: Group, contract: dict, size: tuple[float, float] | None = None
+) -> list[dict] | None:
+    """Contract-driven frame cells for an IR v2 group type (or None for v1).
+
+    ``size`` is the FINAL frame size the skeleton layout computed (footprint of
+    the packed children clamped to the contract minimum). Passing it lets each
+    builder draw its decorations relative to the real frame edge — so a bottom-
+    anchored tier-box badge row reflows instead of floating at the contract's
+    reference height (Task 6 reflow)."""
     M = _molecules_module()
     if g.type == "subaccount":
-        return M.subaccount_frame(g, contract)
+        return M.subaccount_frame(g, contract, size)
     if g.type == "governance":
-        return M.governance_strip(g, contract)
+        return M.governance_strip(g, contract, size)
     if g.type == "cloud-tier":
-        return M.tier_box(g, contract)
+        return M.tier_box(g, contract, size)
     if g.type == "custom-app":
-        return M.custom_app_box(g, contract)
+        return M.custom_app_box(g, contract, size)
     return None
 
 
@@ -1368,8 +1376,8 @@ def emit(
     """Render the diagram to .drawio XML.
 
     ``layout`` selects the positioning backend:
-      - ``"auto"`` / ``"zone"`` — the deterministic zone-composition engine
-        (``_zone_layout.py``); the default, no external dependency.
+      - ``"auto"`` / ``"zone"`` — the deterministic skeleton slot engine
+        (``_skeleton_layout.py``); the default, no external dependency.
       - ``"greedy"`` — the legacy built-in 3×3 grid (debug only).
     """
     if shape_index is None:
@@ -1388,18 +1396,18 @@ def emit(
         ):
             _n.genericIcon = "user"
 
-    # Layout backend. Default: the deterministic zone-composition engine
-    # (`_zone_layout.py`, no external dependency). `--layout greedy` forces the
-    # legacy 3×3 grid (debug only). The former graphviz `dot` backend has been
-    # removed — it ignored the SAP `position`/zone semantics; "auto"/"zone"/"dot"
-    # all route to the zone engine now.
+    # Layout backend. Default: the deterministic skeleton slot engine
+    # (`_skeleton_layout.py`, no external dependency) — slot assignment (left /
+    # top / center / right / bottom), footprint-driven molecule frame sizing and
+    # flow-rank lane ordering. `--layout greedy` forces the legacy 3×3 grid
+    # (debug only). "auto"/"zone"/"dot" all route to the skeleton engine now.
     import importlib.util as _ilu
     _spec = _ilu.spec_from_file_location(
-        "_zone_layout", Path(__file__).resolve().parent / "_zone_layout.py"
+        "_skeleton_layout", Path(__file__).resolve().parent / "_skeleton_layout.py"
     )
-    _zl = _ilu.module_from_spec(_spec)
-    _spec.loader.exec_module(_zl)
-    icon_dim = _zl.icon_size(diagram.level)
+    _sl = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_sl)
+    icon_dim = _sl.icon_size(diagram.level)
 
     if layout == "greedy":
         group_geo = layout_groups(diagram.groups)
@@ -1407,11 +1415,13 @@ def emit(
         edge_waypoints: dict[str, list[tuple[float, float]]] = {}
         canvas_w, canvas_h = CANVAS_W, CANVAS_H
     else:
-        zone_result = _zl.compute_layout(diagram, shape_index)
-        group_geo = zone_result["groups"]
-        node_geo = zone_result["nodes"]
-        edge_waypoints = zone_result["edges"]
-        canvas_w, canvas_h = zone_result["canvas"]
+        layout_result = _sl.compute_layout(diagram, shape_index)
+        group_geo = layout_result["groups"]
+        node_geo = layout_result["nodes"]
+        edge_waypoints = layout_result["edges"]
+        canvas_w, canvas_h = layout_result["canvas"]
+        # layout_result["meta"] (slots / lanes / ranks) is the channel router's
+        # input — consumed when routing is wired in (Task 8).
 
     # Molecule emission context (IR v2): the style contract + brand packs + an
     # icon resolver reusing the ShapeIndex path. Molecule cell styles come only
@@ -1558,12 +1568,14 @@ def emit(
         # IR v2 group types → contract-driven molecule frames (grown to the
         # layout footprint, but never smaller than the contract frame).
         if g.type in MOLECULE_GROUP_TYPES:
-            cells = _group_molecule_cells(g, contract)
+            # The layout already sized the frame (footprint ≥ contract min); the
+            # builder reflows its decorations to that final size.
+            cells = _group_molecule_cells(g, contract, size=(float(w), float(h)))
             _place_molecule(
                 root, cells, anchor_id=cell_id, anchor_parent="1",
                 off_x=x, off_y=y, contract=contract, brand_packs=brand_packs,
                 icon_resolver=icon_resolver, warnings=mol_warnings,
-                anchor_size=(max(w, cells[0]["w"]), max(h, cells[0]["h"])),
+                anchor_size=(float(w), float(h)),
             )
             continue
         # The BTP layer carries a "SAP BTP" logo chip instead of a text label.
@@ -1605,12 +1617,12 @@ def emit(
         # IR v2 group types → contract-driven molecule frames (nested: relative
         # to the parent cell's origin).
         if g.type in MOLECULE_GROUP_TYPES:
-            cells = _group_molecule_cells(g, contract)
+            cells = _group_molecule_cells(g, contract, size=(float(w), float(h)))
             _place_molecule(
                 root, cells, anchor_id=cell_id, anchor_parent=parent_cell_id,
                 off_x=rel_x, off_y=rel_y, contract=contract, brand_packs=brand_packs,
                 icon_resolver=icon_resolver, warnings=mol_warnings,
-                anchor_size=(max(w, cells[0]["w"]), max(h, cells[0]["h"])),
+                anchor_size=(float(w), float(h)),
             )
             continue
         g_cell = ET.SubElement(
@@ -1690,7 +1702,7 @@ def emit(
             is_icon = False
         else:
             style, is_icon, label = _node_style(n, shape_index)
-        # The zone engine fills node_geo with exact footprint cells. Icon nodes
+        # The skeleton engine fills node_geo with exact footprint cells. Icon nodes
         # are re-squared to the level icon size (icon_dim) and top-centred (the
         # caption floats below); box/plain nodes keep their footprint. The
         # greedy fallback path uses node_xy + default sizes.
@@ -2276,7 +2288,7 @@ def main(argv: list[str] | None = None) -> int:
         default="auto",
         help=(
             "Layout backend. 'auto'/'zone' use the deterministic "
-            "zone-composition engine (default). 'greedy' forces the legacy "
+            "skeleton slot engine (default). 'greedy' forces the legacy "
             "3x3 grid (debug only)."
         ),
     )
