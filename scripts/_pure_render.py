@@ -5,13 +5,17 @@
 
 Renders a ``.drawio`` file to a PNG without draw.io / Electron: parse the XML
 with :mod:`scripts._drawio_io`, resolve each ``mxCell``'s geometry, and paint
-rounded rects, pills, ellipses, text, images and edges with Pillow. This is a
-*preview* renderer, not a draw.io clone — the goal is geometric fidelity
-(right shapes, right colors, right positions) for the specific, closed
-vocabulary ``generate-drawio.py`` emits (see ``assets/style-contract.json``),
-not pixel-parity with draw.io's own renderer. Only that vocabulary is
-supported; anything else falls back to the closest primitive (typically a
-plain rectangle) rather than raising.
+rounded rects, pills, ellipses, cylinders, text, images and edges with
+Pillow. This is a *preview* renderer, not a draw.io clone — the goal is
+geometric fidelity (right shapes, right colors, right positions) for the
+specific, closed vocabulary ``generate-drawio.py`` emits (see
+``assets/style-contract.json``), not pixel-parity with draw.io's own
+renderer. Only that vocabulary is supported; anything else falls back to the
+closest primitive (typically a plain rectangle, with a WARNING) rather than
+raising. A cell's ``image=`` icon is composited whenever present regardless
+of its ``shape=`` (a bare ``shape=image`` cell, or any other shape that
+embeds one, e.g. a backend box's service icon or a capability chip's icon
+grid entry) — never just for the one exact ``shape=image`` spelling.
 
 ────────────────────────────────────────────────────────────────────────────
 SHA1 CONTRACT — read scripts/build-icon-atlas.py's module docstring first
@@ -55,7 +59,16 @@ placement along the edge's path plus a pixel ``<mxPoint as="offset">``; see
 
 Determinism: no timestamps, no randomness; PNG bytes depend only on pixel
 content + Pillow's (deterministic) PNG encoder, exactly like
-build-icon-atlas.py's own PNGs.
+build-icon-atlas.py's own PNGs. Text is set in the bundled Arimo family
+(``assets/fonts/`` — Apache-2.0-repo-friendly metric-compatible Helvetica
+substitute, SIL OFL-1.1 licensed, see REUSE.toml) resolved by absolute
+path, so this holds ACROSS machines too, not just across repeated runs on
+one: rendering no longer depends on whichever TrueType fonts (if any)
+happen to be installed system-wide (previously ``DejaVuSans.ttf``, which
+Pillow does not bundle and macOS does not ship — silently degrading every
+render to ``ImageFont.load_default()``'s tiny bitmap font, tofu for
+non-ASCII glyphs like the em dash used in every diagram title, and no
+bold/italic distinction).
 
 Usage:
     python3 scripts/_pure_render.py diagram.drawio --out preview.png --scale 2
@@ -85,11 +98,10 @@ except ImportError:
 
 from _drawio_io import decode_diagram_pages  # noqa: E402 (after the Pillow guard, by design)
 
-SCRIPT_VERSION = "1.0.0"
-
 ROOT = Path(__file__).resolve().parent.parent
 ATLAS_DIR = ROOT / "assets" / "icon-atlas"
 ATLAS_INDEX_PATH = ATLAS_DIR / "index.json"
+FONTS_DIR = ROOT / "assets" / "fonts"
 
 DEFAULT_PAGE_W = 850.0
 DEFAULT_PAGE_H = 1100.0
@@ -496,41 +508,71 @@ def resolve_edge_child_rects(
 # ─────────────────────────────────────────────────────────────────────────
 # Fonts (deterministic: no timestamps, a fixed family resolution order)
 # ─────────────────────────────────────────────────────────────────────────
+# Arimo (SIL OFL-1.1 -- see REUSE.toml): a Google-Fonts family metric-
+# compatible with Arial/Helvetica, i.e. the same family our .drawio
+# vocabulary's own fontFamily=Helvetica styles ask for. Bundled under
+# assets/fonts/ so every environment renders from the SAME font bytes --
+# see the module docstring's Determinism paragraph.
 _FONT_CACHE: dict[tuple[str, int], "ImageFont.FreeTypeFont | ImageFont.ImageFont"] = {}
+_warned_no_bundled_font = False
 _warned_no_truetype = False
 
+_FONT_FILENAMES = {
+    (False, False): "Arimo-Regular.ttf",
+    (True, False): "Arimo-Bold.ttf",
+    (False, True): "Arimo-Italic.ttf",
+    (True, True): "Arimo-BoldItalic.ttf",
+}
 
-def _dejavu_filename(bold: bool, italic: bool) -> str:
-    if bold and italic:
-        return "DejaVuSans-BoldOblique.ttf"
-    if bold:
-        return "DejaVuSans-Bold.ttf"
-    if italic:
-        return "DejaVuSans-Oblique.ttf"
-    return "DejaVuSans.ttf"
+
+def _font_filename(bold: bool, italic: bool) -> str:
+    return _FONT_FILENAMES[(bool(bold), bool(italic))]
 
 
 def load_font(size_px: int, bold: bool = False, italic: bool = False):
-    """DejaVuSans ships with Pillow's FreeType font search path on most
-    platforms -- resolve it by bare filename (never a hardcoded system
-    path). When it isn't resolvable (e.g. no matching font on this
-    machine's search path), fall back to Pillow's bundled scalable default
-    font with a single one-time WARNING; text still renders (color/position
-    honored), just with approximate metrics and no bold/italic distinction.
+    """Resolve the bundled Arimo face for (bold, italic) by its ABSOLUTE
+    path under assets/fonts/ FIRST, so rendering is identical on every
+    machine (this repo ships the font; we never depend on what happens to
+    be installed system-wide). Only if that bundled file is somehow
+    missing/unreadable do we fall back to a bare-filename
+    ImageFont.truetype() lookup (in case the system's own FreeType search
+    path happens to resolve a same-named font) and, failing that, Pillow's
+    non-scalable ImageFont.load_default() with a one-time WARNING -- text
+    still renders (color/position honored), just with approximate metrics
+    and no bold/italic distinction.
     """
-    global _warned_no_truetype
+    global _warned_no_bundled_font, _warned_no_truetype
     size_px = max(1, size_px)
-    key = (_dejavu_filename(bold, italic), size_px)
+    filename = _font_filename(bold, italic)
+    key = (filename, size_px)
     cached = _FONT_CACHE.get(key)
     if cached is not None:
         return cached
+
+    font = None
+    bundled_path = FONTS_DIR / filename
     try:
-        font = ImageFont.truetype(key[0], size_px)
+        font = ImageFont.truetype(str(bundled_path), size_px)
     except Exception:
+        if not _warned_no_bundled_font:
+            print(
+                f"WARNING: bundled font {bundled_path} not resolvable via "
+                "ImageFont.truetype() (missing/corrupt assets/fonts/?); falling back "
+                "to a bare-filename lookup on this system's own font search path -- "
+                "renders may no longer be identical across environments.",
+                file=sys.stderr,
+            )
+            _warned_no_bundled_font = True
+        try:
+            font = ImageFont.truetype(filename, size_px)
+        except Exception:
+            font = None
+
+    if font is None:
         if not _warned_no_truetype:
             print(
-                "WARNING: DejaVuSans*.ttf not resolvable via ImageFont.truetype() on this "
-                "system; falling back to ImageFont.load_default() -- text will render with "
+                "WARNING: no usable TrueType font found (bundled or system); falling "
+                "back to ImageFont.load_default() -- text will render with "
                 "approximate metrics and no bold/italic distinction.",
                 file=sys.stderr,
             )
@@ -539,6 +581,7 @@ def load_font(size_px: int, bold: bool = False, italic: bool = False):
             font = ImageFont.load_default(size=size_px)
         except TypeError:
             font = ImageFont.load_default()  # Pillow < 10.1: no `size` kwarg
+
     _FONT_CACHE[key] = font
     return font
 
@@ -657,6 +700,29 @@ def draw_arrowhead(
     draw.polygon([to_pt, left, right], fill=color)
 
 
+def label_band_rect(rect: tuple[float, float, float, float], style: dict[str, str]) -> tuple[float, float, float, float]:
+    """The (unscaled) rect a cell's label should be drawn into, honoring
+    ``verticalLabelPosition`` (``top``/``bottom``: the label sits OUTSIDE
+    the shape, above/below it -- used by icon captions, e.g. a service
+    icon's name below it) as distinct from ``verticalAlign`` (alignment
+    INSIDE whatever rect it's given, already handled by ``draw_label``
+    itself). Anything else (unset, or draw.io's other ``verticalLabelPosition``
+    values, never emitted by our vocabulary) draws the label inside the
+    shape's own rect, unchanged. Our renderer doesn't auto-size text like
+    draw.io does (see the module docstring: geometric fidelity, not
+    pixel-parity), so the external band is a fixed height proportional to
+    fontSize rather than a true auto-grow box.
+    """
+    vlp = style.get("verticalLabelPosition")
+    if vlp not in ("top", "bottom"):
+        return rect
+    x, y, w, h = rect
+    band_h = max(16.0, _safe_float(style.get("fontSize"), 12.0) * 1.8)
+    if vlp == "bottom":
+        return (x, y + h, w, band_h)
+    return (x, y - band_h, w, band_h)
+
+
 def draw_label(draw: "ImageDraw.ImageDraw", rect: tuple[float, float, float, float],
                raw_value: str, style: dict[str, str], scale: float) -> None:
     """Render ``raw_value`` inside ``rect`` (unscaled x, y, w, h) honoring
@@ -724,6 +790,36 @@ def draw_edge_label(draw: "ImageDraw.ImageDraw", path: list[tuple[float, float]]
     draw.multiline_text((mx - bw / 2 - bbox[0], my - bh / 2 - bbox[1]), text, font=font, fill=color, align="center")
 
 
+def draw_cylinder(
+    draw: "ImageDraw.ImageDraw", box_px: tuple[float, float, float, float],
+    fill: tuple[int, int, int] | None, stroke: tuple[int, int, int] | None,
+    sw: int, cap_h_px: float,
+) -> None:
+    """A simple database-cylinder glyph for mxgraph's ``cylinder3``/generic
+    ``cylinder`` basic shapes (our ``db`` molecule): a rectangular body
+    capped by two ellipses, giving the classic 3D-cylinder silhouette. Not
+    a faithful mxgraph ``cylinder3`` reproduction (no perspective-skew
+    tuning of the cap) -- geometric fidelity only, per the module
+    docstring; this is a fidelity nicety, kept deliberately simple.
+    """
+    x0, y0, x1, y1 = box_px
+    cap_h = max(4.0, min(cap_h_px, (y1 - y0) / 2.0))
+    half_cap = cap_h / 2.0
+
+    # Body: the cylinder's straight walls, spanning between the two caps'
+    # vertical centers (the caps themselves paint over its top/bottom ends).
+    draw.rectangle([x0, y0 + half_cap, x1, y1 - half_cap], fill=fill)
+    if stroke is not None:
+        draw.line([(x0, y0 + half_cap), (x0, y1 - half_cap)], fill=stroke, width=sw)
+        draw.line([(x1, y0 + half_cap), (x1, y1 - half_cap)], fill=stroke, width=sw)
+
+    # Bottom cap, then the top cap drawn LAST so its full outline (the
+    # "lid" arc that visually distinguishes this from a plain rect) is
+    # crisp on top rather than partially covered by the body fill.
+    draw.ellipse([x0, y1 - cap_h, x1, y1], fill=fill, outline=stroke, width=sw)
+    draw.ellipse([x0, y0, x1, y0 + cap_h], fill=fill, outline=stroke, width=sw)
+
+
 def draw_placeholder(canvas: "Image.Image", rect_px: tuple[float, float, float, float]) -> None:
     """A grey filled circle standing in for an icon whose data-URI has no
     atlas entry -- the render still succeeds (exit 0), just visibly
@@ -734,12 +830,62 @@ def draw_placeholder(canvas: "Image.Image", rect_px: tuple[float, float, float, 
     ImageDraw.Draw(canvas).ellipse([cx - d / 2, cy - d / 2, cx + d / 2, cy + d / 2], fill=PLACEHOLDER_RGB)
 
 
+_ICON_EDGE_INSET = 2.0  # mxgraph's own small built-in image-to-shape-edge
+# margin. Deliberately NOT style.get("spacingLeft"/"spacingRight"/"spacingTop"
+# /"spacingBottom") -- those pad the LABEL TEXT (already honored by
+# draw_label itself) and, in a molecule like the backend box, are
+# DELIBERATELY large (spacingLeft=44) so the text clears a left-aligned
+# icon -- reusing them here for the icon's OWN inset would shove the icon
+# by that same large amount and make it overlap the (now-also-shifted)
+# text instead of sitting next to it.
+
+
+def icon_box_rect(rect: tuple[float, float, float, float], style: dict[str, str]) -> tuple[float, float, float, float]:
+    """The (unscaled) box a cell's icon should be fit into.
+
+    Defaults to the WHOLE cell rect -- the plain ``shape=image`` case, and
+    any other cell whose style carries an ``image=`` with no positioning
+    hints (e.g. the resolved ``sap-btp-chip`` text cell) -- narrowed by
+    ``imageWidth``/``imageHeight``/``imageAlign``/``imageVerticalAlign``
+    when present: a smaller, positioned icon INSIDE a larger shape, e.g. a
+    ``shape=label`` backend box's left-aligned service icon, or a
+    capability chip's top-centered one. Mirrors mxgraph's own image-label
+    layout keys closely enough for our vocabulary; not a general mxgraph
+    label-layout engine.
+    """
+    x, y, w, h = rect
+    box_w = _safe_float(style.get("imageWidth"), w)
+    box_h = _safe_float(style.get("imageHeight"), h)
+    box_w = min(box_w, w) if box_w > 0 else w
+    box_h = min(box_h, h) if box_h > 0 else h
+
+    h_align = style.get("imageAlign", "center")
+    if h_align == "left":
+        bx = x + _ICON_EDGE_INSET
+    elif h_align == "right":
+        bx = x + w - box_w - _ICON_EDGE_INSET
+    else:
+        bx = x + (w - box_w) / 2.0
+
+    v_align = style.get("imageVerticalAlign", "middle")
+    if v_align == "top":
+        by = y + _ICON_EDGE_INSET
+    elif v_align == "bottom":
+        by = y + h - box_h - _ICON_EDGE_INSET
+    else:
+        by = y + (h - box_h) / 2.0
+
+    return (bx, by, box_w, box_h)
+
+
 def draw_image_cell(canvas: "Image.Image", cell: Cell, style: dict[str, str],
                      rect: tuple[float, float, float, float], scale: float, atlas: dict) -> None:
     """Resolve ``cell``'s ``image=`` data-URI to an atlas PNG by sha1 (the
-    load-bearing contract -- see the module docstring) and paste it,
-    preserving aspect ratio and honoring ``opacity=N`` (watermarks). A
-    lookup miss draws a grey placeholder circle and prints a WARNING; it
+    load-bearing contract -- see the module docstring) and paste it into
+    ``rect`` (already narrowed to the icon's own box by ``icon_box_rect``
+    when the caller isn't a bare ``shape=image`` cell), preserving aspect
+    ratio and honoring ``opacity=N`` (watermarks). A lookup miss draws a
+    grey placeholder circle sized to ``rect`` and prints a WARNING; it
     never raises."""
     uri = extract_image_value(cell.style)
     icon = None
@@ -778,10 +924,13 @@ def draw_vertex(canvas: "Image.Image", draw: "ImageDraw.ImageDraw", cell: Cell,
                  rect: tuple[float, float, float, float], scale: float, atlas: dict) -> None:
     style = parse_style(cell.style)
     x, y, w, h = rect
+    shape = style.get("shape")
 
-    if style.get("shape") == "image":
-        draw_image_cell(canvas, cell, style, rect, scale, atlas)
-        return  # icon captions are out of scope (see module docstring)
+    if shape == "image":
+        draw_image_cell(canvas, cell, style, icon_box_rect(rect, style), scale, atlas)
+        if cell.value:
+            draw_label(draw, label_band_rect(rect, style), cell.value, style, scale)
+        return
 
     x0, y0 = x * scale, y * scale
     x1, y1 = (x + w) * scale, (y + h) * scale
@@ -789,16 +938,34 @@ def draw_vertex(canvas: "Image.Image", draw: "ImageDraw.ImageDraw", cell: Cell,
     stroke = parse_color(style.get("strokeColor"))
     sw = max(1, round(_safe_float(style.get("strokeWidth"), 1.0) * scale))
 
-    if style.get("ellipse") == "1":
+    if shape in ("cylinder3", "cylinder"):
+        cap_h_px = _safe_float(style.get("size"), 15.0) * scale
+        draw_cylinder(draw, (x0, y0, x1, y1), fill, stroke, sw, cap_h_px)
+    elif style.get("ellipse") == "1":
         draw.ellipse([x0, y0, x1, y1], fill=fill, outline=stroke, width=sw)
     elif style.get("text") == "1":
         pass  # label-only shape: no background/border by convention
     else:
+        # "label" is a recognized rect molecule that also carries an
+        # embedded icon (a backend box / capability chip -- see
+        # icon_box_rect); anything else with a shape= we don't specifically
+        # handle still degrades to a plain rect (never a crash), but now
+        # says so, symmetric with the icon-atlas-miss WARNING below.
+        if shape not in (None, "label"):
+            print(f"WARNING: unhandled shape={shape!r}; drawing plain rect", file=sys.stderr)
         radius = corner_radius(style, w, h) * scale
         if radius > 0:
             draw.rounded_rectangle([x0, y0, x1, y1], radius=int(round(radius)), fill=fill, outline=stroke, width=sw)
         else:
             draw.rectangle([x0, y0, x1, y1], fill=fill, outline=stroke, width=sw)
+
+    # Any non-image shape can STILL carry an embedded icon (e.g. a
+    # shape=label backend box's service icon, a capability chip's icon
+    # grid entry, or a resolved sap-btp-chip text cell's logo) -- composite
+    # it in addition to the rect/label above rather than silently dropping
+    # it (previously only a bare shape=image cell ever got an icon at all).
+    if extract_image_value(cell.style):
+        draw_image_cell(canvas, cell, style, icon_box_rect(rect, style), scale, atlas)
 
     if cell.value:
         draw_label(draw, rect, cell.value, style, scale)

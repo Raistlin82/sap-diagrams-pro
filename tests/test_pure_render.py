@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageChops, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageStat
 
 from conftest import load_script
 
@@ -113,6 +113,113 @@ def test_text_cell_renders_in_fontcolor(tmp_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Fonts: bundled Arimo family (FIX-1 -- was DejaVuSans.ttf, unresolvable on
+# macOS, silently degrading every render to load_default()'s tiny bitmap
+# font: tofu for the em dash used in every diagram title, no bold/italic,
+# and cross-environment nondeterminism since it depended on whatever
+# TrueType fonts happened to be installed system-wide).
+# ─────────────────────────────────────────────────────────────────────────
+def test_load_font_resolves_each_bundled_arimo_face_by_absolute_path():
+    """(bold, italic) must select the matching bundled face file -- not
+    just "some truetype font" -- so fontStyle=1 cells actually render in
+    the bold face rather than a synthetic/approximate one."""
+    cases = [
+        (False, False, "Arimo-Regular.ttf", "Regular"),
+        (True, False, "Arimo-Bold.ttf", "Bold"),
+        (False, True, "Arimo-Italic.ttf", "Italic"),
+        (True, True, "Arimo-BoldItalic.ttf", "Bold Italic"),
+    ]
+    for bold, italic, filename, style_name in cases:
+        font = pr.load_font(24, bold=bold, italic=italic)
+        assert isinstance(font, pr.ImageFont.FreeTypeFont)
+        assert font.path == str(pr.FONTS_DIR / filename)
+        assert font.getname() == ("Arimo", style_name)
+
+
+def test_bundled_font_files_actually_exist_and_are_valid_truetype():
+    for filename in ("Arimo-Regular.ttf", "Arimo-Bold.ttf", "Arimo-Italic.ttf", "Arimo-BoldItalic.ttf"):
+        path = pr.FONTS_DIR / filename
+        assert path.is_file(), f"missing bundled font {path}"
+        # Loadable at all -- a corrupt/truncated commit would raise here.
+        pr.ImageFont.truetype(str(path), 12)
+
+
+def test_em_dash_glyph_is_a_real_mapped_glyph_not_tofu():
+    """A TrueType font with no glyph for a codepoint substitutes the SAME
+    ".notdef" placeholder box for ANY unmapped codepoint -- so a genuinely
+    mapped em-dash glyph (U+2014, used in every diagram title, e.g. "NOVA
+    Invoice Suite — L1 Architecture") must render a DIFFERENT ink footprint
+    than a deliberately-unmapped Private Use Area codepoint at the same
+    size. Previously (DejaVuSans.ttf unresolvable on macOS -> load_default())
+    this would have been tofu.
+    """
+    font = pr.load_font(40)
+
+    def glyph_bbox(ch):
+        img = Image.new("L", (150, 150), 0)
+        ImageDraw.Draw(img).text((10, 10), ch, font=font, fill=255)
+        return img.getbbox()
+
+    bbox_dash = glyph_bbox("—")
+    bbox_missing = glyph_bbox("")  # PUA codepoint no ordinary text font maps
+    assert bbox_dash is not None
+    assert bbox_missing is not None
+    assert bbox_dash != bbox_missing
+
+
+def test_bold_style_renders_visibly_heavier_than_regular():
+    """fontStyle=1 must be visually distinguishable, not just "the same
+    glyph shape at a fallback bitmap size" (load_default() has no bold)."""
+    def ink_pixel_count(font):
+        img = Image.new("L", (400, 100), 0)
+        ImageDraw.Draw(img).text((10, 10), "SAP BTP Title", font=font, fill=255)
+        return sum(img.histogram()[129:])  # count of pixels brighter than 128
+
+    regular_ink = ink_pixel_count(pr.load_font(40))
+    bold_ink = ink_pixel_count(pr.load_font(40, bold=True))
+    assert bold_ink > regular_ink * 1.1  # comfortably more than noise (~1.44x measured)
+
+
+def test_load_font_uses_the_bundle_with_no_warnings_by_default(monkeypatch, capsys):
+    monkeypatch.setattr(pr, "_FONT_CACHE", {})
+    monkeypatch.setattr(pr, "_warned_no_bundled_font", False)
+    monkeypatch.setattr(pr, "_warned_no_truetype", False)
+    font = pr.load_font(20)
+    assert capsys.readouterr().err == ""
+    assert isinstance(font, pr.ImageFont.FreeTypeFont)
+    assert font.path == str(pr.FONTS_DIR / "Arimo-Regular.ttf")
+
+
+def test_load_font_falls_back_and_warns_when_bundle_is_missing(monkeypatch, capsys):
+    """If assets/fonts/ is somehow missing (corrupt checkout, packaging
+    bug), rendering must still succeed -- degrading gracefully instead of
+    crashing -- and say so loudly rather than silently drifting."""
+    monkeypatch.setattr(pr, "_FONT_CACHE", {})
+    monkeypatch.setattr(pr, "_warned_no_bundled_font", False)
+    monkeypatch.setattr(pr, "_warned_no_truetype", False)
+    monkeypatch.setattr(pr, "FONTS_DIR", Path("/nonexistent/assets/fonts/for-testing"))
+
+    font = pr.load_font(20)
+    stderr = capsys.readouterr().err
+    assert "WARNING" in stderr
+    assert "bundled font" in stderr
+    assert font is not None
+
+
+def test_title_with_em_dash_renders_in_a_real_page_not_just_in_isolation(tmp_path):
+    """End-to-end companion to test_em_dash_glyph_is_a_real_mapped_glyph_not_tofu:
+    title1's value is "NOVA Invoice Suite — L1 Architecture" (the exact
+    kind of cell generate-drawio.py emits for every diagram's title) --
+    confirm it paints as part of a real page render, not just in the
+    isolated load_font unit test above."""
+    out = tmp_path / "out.png"
+    assert pr.main([str(FIXTURE), "--out", str(out), "--scale", "2"]) == 0
+    with Image.open(out) as img:
+        # title1: x=40,y=2,w=500,h=30, fontColor=#1D2D3E.
+        assert _region_has_color(img, (40 * 2, 2 * 2, 540 * 2, 32 * 2), (0x1D, 0x2D, 0x3E))
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # pill (rounded rect, arcSize=50) + step-circle (ellipse)
 # ─────────────────────────────────────────────────────────────────────────
 def test_pill_renders_as_filled_stadium(tmp_path):
@@ -186,6 +293,113 @@ def test_bogus_image_uri_falls_back_to_placeholder_with_warn_and_exit_0(tmp_path
     with Image.open(out) as img:
         # icon2: x=140,y=160,w=48,h=48 -> placeholder circle's center.
         assert img.getpixel((164 * 2, 184 * 2)) == pr.PLACEHOLDER_RGB
+        # its caption ("Bogus Icon", fontColor=#1D2D3E) still renders below
+        # -- FIX-2(a): caption rendering doesn't depend on the atlas lookup
+        # having hit; only the icon graphic itself is a placeholder.
+        assert _region_has_color(img, (100 * 2, 206 * 2, 230 * 2, 230 * 2), (0x1D, 0x2D, 0x3E))
+
+
+def test_image_cell_caption_renders_below_the_icon(tmp_path):
+    """FIX-2(a): draw_vertex used to ``return`` right after drawing a
+    shape=image cell's icon, before ever looking at cell.value -- so the
+    service name (e.g. "SAP Digital Assistant Service") set as the cell's
+    value with verticalLabelPosition=bottom/verticalAlign=top was silently
+    dropped for every icon in every diagram (46 bare unlabeled icons in
+    nova-L1)."""
+    out = tmp_path / "out.png"
+    assert pr.main([str(FIXTURE), "--out", str(out), "--scale", "2"]) == 0
+    with Image.open(out) as img:
+        # icon1: x=40,y=160,w=48,h=48, verticalLabelPosition=bottom,
+        # verticalAlign=top, fontColor=#556B82 -- caption band sits just
+        # below the icon's bottom edge (unscaled y=208).
+        assert _region_has_color(img, (0, 206 * 2, 300 * 2, 230 * 2), (0x55, 0x6B, 0x82))
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# FIX-2(b): image= compositing for ANY shape, not just the exact
+# shape=image spelling -- shape=label backend boxes, capability chips, and
+# the resolved sap-btp-chip text cell all carry an image= too and were
+# previously dropped with no warning at all (worse than the atlas-miss path).
+# ─────────────────────────────────────────────────────────────────────────
+def test_shape_label_cell_with_image_composites_the_icon(tmp_path):
+    out = tmp_path / "out.png"
+    assert pr.main([str(FIXTURE), "--out", str(out), "--scale", "2"]) == 0
+    with Image.open(out) as img:
+        # boxicon1: x=240,y=160,w=200,h=48, shape=label, imageAlign=left,
+        # imageVerticalAlign=middle, imageWidth=28, imageHeight=28 -> the
+        # icon's own (unscaled) box is (242,170,28,28) -- see icon_box_rect
+        # -- i.e. scaled (484,340)-(540,396).
+        icon_box = (484, 340, 540, 396)
+        crop = img.crop(icon_box)
+        # 1) not empty/flat.
+        assert any(s > 0 for s in ImageStat.Stat(crop).stddev)
+        # 2) not merely the rect's own white fill / blue border / a grey
+        #    placeholder -- some pixel is genuinely icon-colored.
+        assert _region_has_extra_color(img, icon_box, [(255, 255, 255), pr.PLACEHOLDER_RGB, (0x00, 0x70, 0xF2)])
+
+        # The shape's own rect border AND its text label are STILL drawn --
+        # compositing the icon is additive, never a replacement.
+        assert _region_has_color(img, (520, 316, 840, 328), (0x00, 0x70, 0xF2))  # top border
+        assert _region_has_color(img, (580, 352, 840, 388), (0x1D, 0x2D, 0x3E))  # "Backend Service"
+
+
+def test_plain_shapes_without_image_key_never_trigger_icon_lookup_warnings(tmp_path, capsys):
+    """Negative control for FIX-2(b): a cell with no ``image=`` at all
+    (a plain rect/pill/ellipse/text/unknown-shape cell) must never be
+    treated as "an icon lookup that missed" -- extract_image_value(...)
+    has to gate the new unconditional compositing call, or every ordinary
+    shape would spuriously warn about a nonexistent icon."""
+    out = tmp_path / "out.png"
+    rc = pr.main([str(FIXTURE), "--out", str(out), "--scale", "2"])
+    stderr = capsys.readouterr().err
+    assert rc == 0
+    for cell_id in ("rect1", "pill1", "step1", "src1", "tgt1", "badshape1"):
+        assert cell_id not in stderr
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# FIX-3: shape=cylinder3 / shape=cylinder (the "db" molecule) -- previously
+# fell through to a plain rect with no visual distinction at all.
+# ─────────────────────────────────────────────────────────────────────────
+def test_cylinder3_shape_has_a_curved_top_distinct_from_a_plain_rect(tmp_path):
+    out = tmp_path / "out.png"
+    assert pr.main([str(FIXTURE), "--out", str(out), "--scale", "2"]) == 0
+    with Image.open(out) as img:
+        # cyl1: x=480,y=160,w=60,h=80, strokeColor=#0070F2, fillColor=#FFFFFF,
+        # size=15 -> scaled bounding box (960,320)-(1080,480).
+        # A PLAIN rect (same stroke) paints its border into its own
+        # bounding-box corners; an elliptical cap does NOT reach them --
+        # the corner must stay plain background...
+        assert img.getpixel((962, 322)) == (255, 255, 255)
+        # ...while the cap's arc IS present at the top-center, proving a
+        # shape was actually drawn there (not just an empty box).
+        assert img.getpixel((1020, 321)) == (0x00, 0x70, 0xF2)
+
+
+def test_draw_cylinder_unit_caps_dont_reach_the_bounding_box_corners():
+    """Unit-level version of the fixture test above, isolated from any
+    surrounding geometry: draw_cylinder's own corner must stay background."""
+    img = Image.new("RGB", (120, 160), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    pr.draw_cylinder(draw, (10, 10, 110, 150), (255, 255, 255), (0, 112, 242), 2, cap_h_px=30)
+    assert img.getpixel((12, 12)) == (255, 255, 255)  # corner: untouched
+    assert img.getpixel((60, 10)) == (0, 112, 242)  # top-center: cap outline
+
+
+def test_unknown_shape_falls_back_to_plain_rect_with_a_warning(tmp_path, capsys):
+    out = tmp_path / "out.png"
+    rc = pr.main([str(FIXTURE), "--out", str(out), "--scale", "2"])
+    stderr = capsys.readouterr().err
+
+    assert rc == 0
+    assert "WARNING" in stderr
+    assert "hexagon" in stderr
+
+    with Image.open(out) as img:
+        # badshape1: x=600,y=160,w=60,h=40, fillColor=#F5F6F7 -- a PLAIN
+        # rect (unlike the cylinder above), so even a point near its own
+        # bounding-box corner is filled.
+        assert img.getpixel((1204, 324)) == (0xF5, 0xF6, 0xF7)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -402,3 +616,51 @@ def test_extract_image_value_normalizes_semicolon_base64_marker():
     assert pr.extract_image_value(style) == "data:image/png,AAAA"
     assert pr.extract_image_value(None) is None
     assert pr.extract_image_value("rounded=1;fillColor=#FFFFFF") is None
+
+
+def test_icon_box_rect_defaults_to_the_whole_rect():
+    """The plain shape=image case, and any image= cell with no positioning
+    hints (e.g. the resolved sap-btp-chip text cell): fit the icon to the
+    WHOLE cell rect, unchanged."""
+    rect = (10.0, 20.0, 90.0, 30.0)
+    assert pr.icon_box_rect(rect, pr.parse_style("")) == rect
+    assert pr.icon_box_rect(rect, pr.parse_style("text;fontSize=16")) == rect
+
+
+def test_icon_box_rect_honors_image_width_height_and_alignment():
+    rect = (100.0, 100.0, 200.0, 60.0)
+    style = pr.parse_style("imageWidth=28;imageHeight=28;imageAlign=left;imageVerticalAlign=middle")
+    bx, by, bw, bh = pr.icon_box_rect(rect, style)
+    assert (bw, bh) == (28.0, 28.0)
+    assert bx == 100.0 + pr._ICON_EDGE_INSET  # hugs the left edge
+    assert by == 100.0 + (60.0 - 28.0) / 2.0  # vertically centered
+
+    style_right_top = pr.parse_style("imageWidth=20;imageHeight=20;imageAlign=right;imageVerticalAlign=top")
+    bx2, by2, _, _ = pr.icon_box_rect(rect, style_right_top)
+    assert bx2 == 100.0 + 200.0 - 20.0 - pr._ICON_EDGE_INSET
+    assert by2 == 100.0 + pr._ICON_EDGE_INSET
+
+
+def test_icon_box_rect_never_exceeds_the_cell_rect():
+    """An imageWidth/imageHeight larger than the cell itself (malformed
+    input) must clamp down rather than overflow the shape's own box."""
+    rect = (0.0, 0.0, 40.0, 20.0)
+    style = pr.parse_style("imageWidth=999;imageHeight=999")
+    _, _, bw, bh = pr.icon_box_rect(rect, style)
+    assert (bw, bh) == (40.0, 20.0)
+
+
+def test_label_band_rect_places_caption_outside_the_shape():
+    rect = (40.0, 160.0, 48.0, 48.0)
+    bottom_style = pr.parse_style("verticalLabelPosition=bottom;fontSize=10")
+    x, y, w, h = pr.label_band_rect(rect, bottom_style)
+    assert (x, w) == (40.0, 48.0)
+    assert y == 208.0  # rect's bottom edge (160 + 48)
+    assert h > 0
+
+    top_style = pr.parse_style("verticalLabelPosition=top;fontSize=10")
+    _, y_top, _, h_top = pr.label_band_rect(rect, top_style)
+    assert y_top == 160.0 - h_top
+
+    # Unset (the common case: a label INSIDE the shape) -> unchanged.
+    assert pr.label_band_rect(rect, pr.parse_style("")) == rect
