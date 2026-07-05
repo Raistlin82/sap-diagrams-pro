@@ -26,6 +26,16 @@ SPDX-FileCopyrightText = "SAP SE or an SAP affiliate company"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
+# Pre-rasterized PNGs of the SAP service/generic icon glyphs (+ the public
+# brand-pack chip) — same posture as assets/brand-pack/. brand-pack.local's
+# derived PNGs live in the gitignored assets/icon-atlas.local/ instead and
+# are intentionally not annotated here (never committed).
+path = "assets/icon-atlas/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "SAP SE or an SAP affiliate company"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
 # Style values derive from SAP's btp-solution-diagrams shape libraries.
 path = [
     "assets/style-contract.json",
