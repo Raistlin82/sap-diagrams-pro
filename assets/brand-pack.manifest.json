@@ -1,7 +1,6 @@
 {
   "assets": [
     {"key": "sap-logo-chip",  "public": true,  "source": "official", "official_ref": "sap_brand_names.xml:SAP (Default)"},
-    {"key": "sap-btp-chip",   "public": true,  "source": "official", "official_ref": "sap_brand_names.xml:SAP BTP (Text Only)"},
     {"key": "aws-badge",      "public": false, "source": "exemplar", "match": {"value_regex": "(?i)aws|amazon", "mime": "image/(png|svg\\+xml)"}},
     {"key": "azure-badge",    "public": false, "source": "exemplar", "match": {"value_regex": "(?i)azure", "mime": "image/(png|svg\\+xml)"}},
     {"key": "cf-badge",       "public": false, "source": "exemplar", "match": {"value_regex": "(?i)cloud ?foundry"}},

@@ -11,6 +11,11 @@
         <mxCell id="3" value="Lutech" style="shape=image;html=1;verticalLabelPosition=bottom;verticalAlign=top;imageAspect=0;aspect=fixed;image=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=;" vertex="1" parent="1">
           <mxGeometry x="120" y="40" width="40" height="40" as="geometry" />
         </mxCell>
+        <object label="Azure" id="4">
+          <mxCell style="shape=image;html=1;verticalLabelPosition=bottom;verticalAlign=top;imageAspect=0;aspect=fixed;image=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=;" vertex="1" parent="1">
+            <mxGeometry x="200" y="40" width="40" height="40" as="geometry" />
+          </mxCell>
+        </object>
       </root>
     </mxGraphModel>
   </diagram>

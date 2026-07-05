@@ -121,7 +121,6 @@ Manifest (committed) classifies what to harvest; the script never decides confid
 {
   "assets": [
     {"key": "sap-logo-chip",  "public": true,  "source": "official", "official_ref": "sap_brand_names.xml:SAP (Default)"},
-    {"key": "sap-btp-chip",   "public": true,  "source": "official", "official_ref": "sap_brand_names.xml:SAP BTP (Text Only)"},
     {"key": "aws-badge",      "public": false, "source": "exemplar", "match": {"value_regex": "(?i)aws|amazon", "mime": "image/(png|svg\\+xml)"}},
     {"key": "azure-badge",    "public": false, "source": "exemplar", "match": {"value_regex": "(?i)azure", "mime": "image/(png|svg\\+xml)"}},
     {"key": "cf-badge",       "public": false, "source": "exemplar", "match": {"value_regex": "(?i)cloud ?foundry"}},
@@ -130,6 +129,8 @@ Manifest (committed) classifies what to harvest; the script never decides confid
   ]
 }
 ```
+
+Note — sap-btp-chip: text-only molecule — owned by Task 2's style contract, not harvestable.
 
 - [ ] **Step 1: Fixture** — hand-write `tests/fixtures/mini-exemplar.drawio`: an uncompressed `<mxfile><diagram><mxGraphModel>` with two vertices whose styles embed tiny `image=data:image/png;base64,…` (any 1×1 PNG) and values "AWS" and "Lutech".
 - [ ] **Step 2: Failing tests**

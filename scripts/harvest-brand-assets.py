@@ -22,6 +22,16 @@ Output: {key: {dataUri, source, from, license_note}} written as
 best-effort: an asset that can't be resolved prints a WARNING and is
 skipped rather than failing the run.
 
+Contract notes for consumers (style contract / molecule emitters):
+  - An empty harvest result for a pack writes nothing: a pre-existing
+    index.json in that output directory is left in place, not truncated.
+  - dataUri values are persisted in draw.io's embeddable comma form
+    (`data:image/png,<base64 payload>` — the standard `;base64` marker is
+    stripped so the URI survives inside draw.io's ';'-delimited style
+    strings). This is NOT a strict RFC 2397 data URI: embed it as-is in
+    style strings; re-insert ";base64" before the payload if handing it
+    to an RFC-strict decoder.
+
 Usage:
     python3 harvest-brand-assets.py \\
         --manifest assets/brand-pack.manifest.json \\
@@ -139,11 +149,27 @@ def _data_uri_mime(data_uri: str) -> str:
     return m.group(1) if m else ""
 
 
-def _nearest_value(cell: ET.Element, cells_by_id: dict[str, ET.Element]) -> str:
-    """The cell's own value, else its immediate parent's value (or "")."""
+def _nearest_value(
+    cell: ET.Element,
+    cells_by_id: dict[str, ET.Element],
+    xml_parents: dict[ET.Element, ET.Element],
+) -> str:
+    """The cell's own value, else its wrapper's label, else its parent's value.
+
+    draw.io wraps cells that carry custom data in `<object label="…">` (or
+    `<UserObject>`): the user-visible label then lives on the WRAPPER element,
+    not on the mxCell — so the enclosing XML element's ``label`` counts as the
+    cell's own value for matching purposes. Only after that do we fall back to
+    the immediate parent cell's value.
+    """
     value = (cell.get("value") or "").strip()
     if value:
         return value
+    wrapper = xml_parents.get(cell)
+    if wrapper is not None:
+        label = (wrapper.get("label") or "").strip()
+        if label:
+            return label
     parent = cells_by_id.get(cell.get("parent") or "")
     if parent is not None:
         return (parent.get("value") or "").strip()
@@ -167,11 +193,14 @@ def _collect_exemplar_candidates(sources: list[Path]) -> list[tuple[str, str, st
         for page in pages:
             cells = list(page.iter("mxCell"))
             cells_by_id = {c.get("id"): c for c in cells if c.get("id")}
+            # Element → enclosing element, so <object label="…">-wrapped
+            # cells can be matched via the wrapper's label.
+            xml_parents = {child: parent for parent in page.iter() for child in parent}
             for cell in cells:
                 data_uri = _extract_image_data_uri(cell.get("style") or "")
                 if not data_uri:
                     continue
-                value = _nearest_value(cell, cells_by_id)
+                value = _nearest_value(cell, cells_by_id, xml_parents)
                 candidates.append((src.name, value, data_uri))
     return candidates
 
@@ -183,8 +212,17 @@ def _best_exemplar_match(
     value_regex = match_spec.get("value_regex")
     if not value_regex:
         return None
-    value_pat = re.compile(value_regex)
-    mime_pat = re.compile(match_spec["mime"]) if match_spec.get("mime") else None
+    try:
+        value_pat = re.compile(value_regex)
+        mime_pat = re.compile(match_spec["mime"]) if match_spec.get("mime") else None
+    except re.error as exc:
+        # Per-asset robustness: a bad regex in ONE manifest entry must not
+        # abort the whole run — warn and let the caller skip this asset.
+        print(
+            f"WARNING: invalid regex in match spec {match_spec!r}: {exc}",
+            file=sys.stderr,
+        )
+        return None
 
     best: tuple[str, str] | None = None
     best_size = -1
@@ -320,6 +358,9 @@ def harvest(
     local: dict[str, dict] = {}
 
     for asset in assets:
+        if not isinstance(asset, dict):
+            print(f"WARNING: manifest entry is not an object, skipping: {asset!r}", file=sys.stderr)
+            continue
         key = asset.get("key")
         if not key:
             print(f"WARNING: manifest entry missing 'key', skipping: {asset}", file=sys.stderr)
@@ -389,6 +430,13 @@ def main(argv: list[str] | None = None) -> int:
         manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     except Exception as exc:
         print(f"ERROR: could not read manifest {args.manifest}: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("assets"), list):
+        print(
+            f"ERROR: malformed manifest {args.manifest}: expected a JSON object "
+            'with an "assets" array at the top level',
+            file=sys.stderr,
+        )
         return 2
 
     public, local = harvest(manifest, args.sources, args.official_repo)
