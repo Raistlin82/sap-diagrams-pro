@@ -1157,6 +1157,204 @@ def _distribute_anchors(
     return {e.id: (exit_a.get(e.id), entry_a.get(e.id)) for e in edges if e.id in info}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Molecule emission (IR v2) — styles sourced from assets/style-contract.json via
+# scripts/_molecules.py. The NEW group/node/edge types route through the contract
+# here; the existing v1 hardcoded paths above are untouched.
+# ─────────────────────────────────────────────────────────────────────────────
+_MOLECULES_MOD = None
+
+# IR v2 group types that render as contract-driven molecule frames.
+MOLECULE_GROUP_TYPES = {"subaccount", "governance", "cloud-tier", "custom-app"}
+# IR v2 leaf node archetypes that render as contract-driven molecules.
+MOLECULE_NODE_TYPES = {"product", "db", "chip"}
+
+
+def _molecules_module():
+    """Lazily import scripts/_molecules.py (same dashed-safe technique emit uses
+    for _zone_layout). Cached for the process."""
+    global _MOLECULES_MOD
+    if _MOLECULES_MOD is None:
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "_molecules", Path(__file__).resolve().parent / "_molecules.py"
+        )
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _MOLECULES_MOD = _mod
+    return _MOLECULES_MOD
+
+
+def _num(v: float) -> str:
+    """Serialise a molecule coordinate to a rounded-int drawio string."""
+    return str(int(round(float(v))))
+
+
+def _place_molecule(
+    root: ET.Element,
+    cells: list[dict],
+    *,
+    anchor_id: str,
+    anchor_parent: str,
+    off_x: float,
+    off_y: float,
+    contract: dict,
+    brand_packs: dict,
+    icon_resolver,
+    warnings: list[str],
+    anchor_size: tuple[float, float] | None = None,
+) -> str:
+    """Serialise a molecule's cell dicts to ``mxCell`` XML.
+
+    ``cells[0]`` is the anchor (``parent is None``): it takes ``anchor_id`` +
+    ``anchor_parent`` and its (x,y) is offset by (off_x, off_y). Child cells
+    (``parent`` = an in-molecule id) keep their parent-relative coords. Image
+    placeholders are resolved (dataUri) or degrade to the text-badge fallback.
+    ``anchor_size`` overrides the anchor's (w,h) — used to grow a group frame to
+    the layout-computed footprint while keeping the contract style/children.
+    """
+    M = _molecules_module()
+    idmap: dict[str, str] = {}
+    for i, c in enumerate(cells):
+        idmap[c["id"]] = anchor_id if i == 0 else f"{anchor_id}-{c['id']}"
+    for i, c in enumerate(cells):
+        eid = idmap[c["id"]]
+        if c.get("parent") is None:
+            parent = anchor_parent
+            x, y = c["x"] + off_x, c["y"] + off_y
+        else:
+            parent = idmap.get(c["parent"], anchor_id)
+            x, y = c["x"], c["y"]
+        w, h = c["w"], c["h"]
+        if i == 0 and anchor_size is not None:
+            w, h = anchor_size
+        rc = M.resolve_cell(c, brand_packs, contract, icon_resolver, warnings)
+        attrib = {
+            "id": eid,
+            "value": rc.get("value", "") or "",
+            "style": rc.get("style", "") or "",
+            "vertex": "1",
+            "parent": parent,
+        }
+        if c.get("connectable") is False:
+            attrib["connectable"] = "0"
+        cell = ET.SubElement(root, "mxCell", attrib=attrib)
+        ET.SubElement(
+            cell,
+            "mxGeometry",
+            attrib={"x": _num(x), "y": _num(y), "width": _num(w), "height": _num(h), "as": "geometry"},
+        )
+    return anchor_id
+
+
+def _group_molecule_cells(g: Group, contract: dict) -> list[dict] | None:
+    """Contract-driven frame cells for an IR v2 group type (or None for v1)."""
+    M = _molecules_module()
+    if g.type == "subaccount":
+        return M.subaccount_frame(g, contract)
+    if g.type == "governance":
+        return M.governance_strip(g, contract)
+    if g.type == "cloud-tier":
+        return M.tier_box(g, contract)
+    if g.type == "custom-app":
+        return M.custom_app_box(g, contract)
+    return None
+
+
+def _flow_family_edge_style(
+    e: Edge,
+    contract: dict,
+    exit_a: tuple[float, float] | None = None,
+    entry_a: tuple[float, float] | None = None,
+) -> str:
+    """Edge style for a semantic flow family, sourced 1:1 from the style
+    contract (edge-identity / edge-provisioning / …). Distribution anchors and a
+    white label background are appended (keeping the contract style as the
+    verbatim prefix)."""
+    M = _molecules_module()
+    style = M.flow_family_style(e.flowFamily, contract)
+    style += "labelBackgroundColor=#FFFFFF;labelBorderColor=none;verticalAlign=middle;align=center;"
+    if exit_a and entry_a:
+        style += (
+            f"exitX={exit_a[0]};exitY={exit_a[1]};exitDx=0;exitDy=0;"
+            f"entryX={entry_a[0]};entryY={entry_a[1]};entryDx=0;entryDy=0;"
+        )
+    return style
+
+
+def _emit_branding_and_badges(
+    root: ET.Element,
+    diagram: Diagram,
+    canvas_w: int,
+    contract: dict,
+    brand_packs: dict,
+    icon_resolver,
+    warnings: list[str],
+) -> None:
+    """Emit metadata-level branding (customer logo + optional resolved watermark)
+    and the diagram-level hyperscaler/runtime badge strip. All degrade to
+    text-badges when the (usually .local) brand assets are absent."""
+    M = _molecules_module()
+    if diagram.branding:
+        cells = M.branding_block(
+            {"branding": diagram.branding, "title": diagram.title}, contract, brand_packs
+        )
+        x_right = canvas_w - 40
+        for c in cells:
+            cid = c.get("id")
+            if cid == "watermark":
+                # Only place a genuinely-resolved (image) watermark; a text
+                # fallback would just be noise floating over the canvas.
+                if "shape=image" not in c.get("style", ""):
+                    continue
+                w, h = c["w"], c["h"]
+                px, py = (canvas_w - w) / 2, 120.0
+                parent = "1"
+            elif cid == "customer-logo":
+                w, h = c["w"], c["h"]
+                px, py = x_right - w, 12.0
+                parent = "1"
+            else:
+                continue  # brand-title: the main diagram title is already drawn
+            attrib = {
+                "id": _stable_id("brand", cid),
+                "value": c.get("value", "") or "",
+                "style": c.get("style", "") or "",
+                "vertex": "1",
+                "parent": parent,
+                "connectable": "0",
+            }
+            cell = ET.SubElement(root, "mxCell", attrib=attrib)
+            ET.SubElement(
+                cell, "mxGeometry",
+                attrib={"x": _num(px), "y": _num(py), "width": _num(w), "height": _num(h), "as": "geometry"},
+            )
+    if diagram.badges:
+        x = canvas_w - 40
+        y = 48.0
+        for kind, coll in (("hyperscaler", "hyperscalers"), ("runtime", "runtimes")):
+            for name in (diagram.badges.get(coll) or []):
+                b = M.badge(kind, str(name), contract, brand_packs)
+                if not (b.get("value") or "").strip() and "shape=image" not in b.get("style", ""):
+                    continue
+                w, h = b["w"], b["h"]
+                x -= w
+                cell = ET.SubElement(
+                    root, "mxCell",
+                    attrib={
+                        "id": _stable_id("dbadge", f"{kind}-{name}"),
+                        "value": b.get("value", "") or "",
+                        "style": b.get("style", "") or "",
+                        "vertex": "1", "parent": "1", "connectable": "0",
+                    },
+                )
+                ET.SubElement(
+                    cell, "mxGeometry",
+                    attrib={"x": _num(x), "y": _num(y), "width": _num(w), "height": _num(h), "as": "geometry"},
+                )
+                x -= 8
+
+
 def emit(
     diagram: Diagram,
     shape_index: "ShapeIndex | None" = None,
@@ -1209,6 +1407,21 @@ def emit(
         node_geo = zone_result["nodes"]
         edge_waypoints = zone_result["edges"]
         canvas_w, canvas_h = zone_result["canvas"]
+
+    # Molecule emission context (IR v2): the style contract + brand packs + an
+    # icon resolver reusing the ShapeIndex path. Molecule cell styles come only
+    # from the contract; missing brand assets degrade to text-badges (warnings
+    # collected here, flushed to stderr at the end — never a hard failure).
+    _M = _molecules_module()
+    contract = _M.load_contract()
+    brand_packs = _M.load_brand_packs()
+    mol_warnings: list[str] = []
+
+    def icon_resolver(name: str | None) -> str | None:
+        if not name:
+            return None
+        svc = shape_index.resolve(name) or shape_index.resolve_generic(name)
+        return _extract_image_uri(svc.get("drawioStyle")) if svc else None
 
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     mxfile = ET.Element(
@@ -1337,6 +1550,17 @@ def emit(
         x, y, w, h = group_geo[g.id]
         cell_id = _stable_id("g", g.id)
         group_cell_ids[g.id] = cell_id
+        # IR v2 group types → contract-driven molecule frames (grown to the
+        # layout footprint, but never smaller than the contract frame).
+        if g.type in MOLECULE_GROUP_TYPES:
+            cells = _group_molecule_cells(g, contract)
+            _place_molecule(
+                root, cells, anchor_id=cell_id, anchor_parent="1",
+                off_x=x, off_y=y, contract=contract, brand_packs=brand_packs,
+                icon_resolver=icon_resolver, warnings=mol_warnings,
+                anchor_size=(max(w, cells[0]["w"]), max(h, cells[0]["h"])),
+            )
+            continue
         # The BTP layer carries a "SAP BTP" logo chip instead of a text label.
         g_value = "" if g.type == "btp-layer" else g.label
         g_cell = ET.SubElement(
@@ -1373,6 +1597,17 @@ def emit(
         cell_id = _stable_id("g", g.id)
         group_cell_ids[g.id] = cell_id
         parent_cell_id = group_cell_ids.get(g.parent, "1")
+        # IR v2 group types → contract-driven molecule frames (nested: relative
+        # to the parent cell's origin).
+        if g.type in MOLECULE_GROUP_TYPES:
+            cells = _group_molecule_cells(g, contract)
+            _place_molecule(
+                root, cells, anchor_id=cell_id, anchor_parent=parent_cell_id,
+                off_x=rel_x, off_y=rel_y, contract=contract, brand_packs=brand_packs,
+                icon_resolver=icon_resolver, warnings=mol_warnings,
+                anchor_size=(max(w, cells[0]["w"]), max(h, cells[0]["h"])),
+            )
+            continue
         g_cell = ET.SubElement(
             root,
             "mxCell",
@@ -1414,6 +1649,35 @@ def emit(
     node_abs_geom: dict[str, tuple[int, int, int, int]] = {}
 
     for n in diagram.nodes:
+        # IR v2 leaf archetypes → contract-driven molecules. Position origin
+        # comes from the existing layout (Task 6 fixes the footprint); the
+        # molecule owns the cell(s) + style. Anchor id == the node's stable id so
+        # edges connect to it exactly as for v1 nodes.
+        if n.type in MOLECULE_NODE_TYPES:
+            if n.id in node_geo:
+                nx, ny, _, _ = node_geo[n.id]
+            else:
+                nx, ny = node_xy.get(n.id, (0, 0))
+            node_cell_id = _stable_id("n", n.id)
+            parent_cell_id, off_x, off_y = "1", float(nx), float(ny)
+            if n.group and n.group in group_cell_ids and n.group in group_geo:
+                parent_cell_id = group_cell_ids[n.group]
+                gx, gy, _, _ = group_geo[n.group]
+                off_x, off_y = float(nx - gx), float(ny - gy)
+            if n.type == "product":
+                cells = _M.product_box(n, contract, icon_resolver)
+            elif n.type == "db":
+                cells = [_M.db_cell(n, contract)]
+            else:  # chip
+                cells = [_M.chip_cell(n, contract)]
+            _place_molecule(
+                root, cells, anchor_id=node_cell_id, anchor_parent=parent_cell_id,
+                off_x=off_x, off_y=off_y, contract=contract, brand_packs=brand_packs,
+                icon_resolver=icon_resolver, warnings=mol_warnings,
+            )
+            node_abs_geom[n.id] = (nx, ny, cells[0]["w"], cells[0]["h"])
+            continue
+
         gtype = _group_type.get(n.group)
         if gtype in BACKEND_GROUP_TYPES:
             # RIGHT-zone backend system → white box with icon-left + title.
@@ -1573,13 +1837,21 @@ def emit(
         # inline edge labels, so the multi-cell pattern is the only way.
         has_pill = e.kind in _EDGE_KIND_PILL or e.kind == "annotation"
         inline_value = "" if has_pill else e.label
+        # IR v2 flow family → contract edge molecule (edge-identity / -provisioning
+        # / -master-data / -transport / -firewall / -default); else the v1 style.
+        if e.flowFamily:
+            edge_style = _flow_family_edge_style(
+                e, contract, *edge_anchors.get(e.id, (None, None))
+            )
+        else:
+            edge_style = _edge_style(e, *edge_anchors.get(e.id, (None, None)))
         e_cell = ET.SubElement(
             root,
             "mxCell",
             attrib={
                 "id": edge_id,
                 "value": inline_value,
-                "style": _edge_style(e, *edge_anchors.get(e.id, (None, None))),
+                "style": edge_style,
                 "edge": "1",
                 "parent": "1",
                 "source": _stable_id("n", e.source),
@@ -1601,6 +1873,33 @@ def emit(
                     "mxPoint",
                     attrib={"x": str(int(round(wx))), "y": str(int(round(wy)))},
                 )
+
+        # IR v2 protocol pill (e.g. "SCIM", "SAML2/OIDC"): a contract-styled
+        # child vertex of the edge, emitted at (0,0) — the channel router
+        # (Task 8e) positions it along the edge later.
+        if e.pill:
+            pcell = _M.pill(e, contract)
+            p_cell = ET.SubElement(
+                root,
+                "mxCell",
+                attrib={
+                    "id": _stable_id("pp", e.id),
+                    "value": pcell["value"],
+                    "style": pcell["style"],
+                    "vertex": "1",
+                    "parent": edge_id,
+                    "connectable": "0",
+                },
+            )
+            ET.SubElement(
+                p_cell,
+                "mxGeometry",
+                attrib={
+                    "x": "0", "y": "0",
+                    "width": _num(pcell["w"]), "height": _num(pcell["h"]),
+                    "relative": "1", "as": "geometry",
+                },
+            )
 
         # Pill labels for the 4 SAP-canonical edge kinds (trust,
         # authenticate, authorize, generic_protocol). Each kind has its
@@ -1673,6 +1972,16 @@ def emit(
     #    - User asked for 'sap' or 'sap-short' preset → embed SAP essential
     #    - Otherwise auto-generate based on actual styles used.
     _emit_legend(root, diagram, canvas_w, canvas_h, shape_index)
+
+    # 7. IR v2 metadata: customer branding + diagram-level badge strip.
+    _emit_branding_and_badges(
+        root, diagram, canvas_w, contract, brand_packs, icon_resolver, mol_warnings
+    )
+
+    # Flush molecule preflight warnings (missing brand assets → text fallback)
+    # to stderr, de-duplicated. Never a hard failure.
+    for w in dict.fromkeys(mol_warnings):
+        print(f"WARNING: {w}", file=sys.stderr)
 
     return _serialize(mxfile)
 

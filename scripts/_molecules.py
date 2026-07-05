@@ -1,0 +1,735 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Gabriele Capparelli
+# SPDX-License-Identifier: Apache-2.0
+"""_molecules.py — style-contract-driven molecule emission for sap-diagrams-pro.
+
+Every visual "molecule" (product box, subaccount frame, cloud-tier box, custom
+app card, capability chip, protocol pill, step circle, image badge, …) is
+assembled here from the *style contract* (``assets/style-contract.json``) — this
+module contains **NO style literals of its own** (the
+``test_no_style_literals_in_engine_sources`` guard greps this file for hardcoded
+styles). All colours/strokes/fills come verbatim from the contract; this module
+only picks the right contract entry and computes geometry.
+
+Public API (each vertex molecule returns a list of cell dicts, or a single dict,
+in PARENT-RELATIVE coordinates — the caller in ``generate-drawio.py`` offsets the
+anchor by the group/node position the layout engine computed and serialises the
+dicts to ``mxCell`` XML)::
+
+    load_contract() -> dict
+    load_brand_packs() -> dict
+    product_box(node, contract, icon_resolver) -> list[dict]
+    db_cell(node, contract) -> dict
+    chip_cell(node, contract) -> dict
+    custom_app_box(group, contract) -> list[dict]
+    subaccount_frame(group, contract) -> list[dict]
+    governance_strip(group, contract) -> list[dict]
+    tier_box(group, contract) -> list[dict]
+    persona(node, contract, icon_resolver) -> list[dict]
+    pill(edge, contract) -> dict
+    step_circle(node, contract) -> dict
+    network_separator(x, y0, y1, contract) -> list[dict]
+    branding_block(metadata, contract, brand_packs) -> list[dict]
+    badge(kind, name, contract, brand_packs) -> dict
+
+Cell dict schema: ``{id, value, style, x, y, w, h, parent, ...}``. ``parent`` is
+``None`` for the molecule's *anchor* (cells[0]) — the caller supplies its real
+parent + offset — or a local id from the same list for a true child (whose
+coords are relative to that child's parent, so the caller does NOT offset it).
+
+Placeholder resolution (spec Layer-3): contract styles carry ``image=@{key}``
+placeholders. ``resolve_style_placeholders`` swaps ``@{key}``/``@key`` for a real
+dataUri drawn from the brand packs (``assets/brand-pack[.local]/index.json``) or,
+for service icons, an ``icon_resolver`` callable. When an asset is ABSENT the
+cell degrades to a neutral **text-badge fallback** (a bordered chip whose value
+is the human-readable name, e.g. "AWS") and a preflight WARNING is recorded —
+never a hard failure (CI / Claude Desktop ship without the ``.local`` pack).
+"""
+from __future__ import annotations
+
+import json
+import math
+import re
+from pathlib import Path
+from typing import Any, Callable
+
+ASSETS = Path(__file__).resolve().parent.parent / "assets"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Loading
+# ─────────────────────────────────────────────────────────────────────────────
+_CONTRACT_CACHE: dict | None = None
+
+
+def load_contract() -> dict:
+    """Load (and memoise) the style contract."""
+    global _CONTRACT_CACHE
+    if _CONTRACT_CACHE is None:
+        _CONTRACT_CACHE = json.loads(
+            (ASSETS / "style-contract.json").read_text(encoding="utf-8")
+        )
+    return _CONTRACT_CACHE
+
+
+def load_brand_packs() -> dict:
+    """Merge the public + local brand-pack indexes into one ``key -> entry`` map.
+
+    The public pack (committed) is loaded first; the ``.local`` pack (gitignored,
+    often absent in CI / on Desktop) is layered on top so a private high-fidelity
+    asset can override a public placeholder. Missing / malformed files are
+    ignored — resolution then simply falls back to the text-badge path.
+    """
+    packs: dict[str, Any] = {}
+    for rel in ("brand-pack/index.json", "brand-pack.local/index.json"):
+        p = ASSETS / rel
+        if not p.exists():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                packs.update(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+    return packs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Contract accessors (keep every style string sourced from the contract)
+# ─────────────────────────────────────────────────────────────────────────────
+def _mol(contract: dict, name: str) -> dict:
+    return contract["molecules"][name]
+
+
+def _style(contract: dict, name: str) -> str:
+    return _mol(contract, name)["style"]
+
+
+def _geo(contract: dict, name: str) -> dict:
+    return _mol(contract, name).get("geometry", {})
+
+
+def _f(geo: dict, key: str, default: float) -> float:
+    v = geo.get(key, default)
+    return float(v)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Human-readable names + brand-asset key resolution
+# ─────────────────────────────────────────────────────────────────────────────
+_DISPLAY: dict[str, str] = {
+    "aws": "AWS",
+    "azure": "Azure",
+    "gcp": "GCP",
+    "google": "Google Cloud",
+    "alibaba": "Alibaba Cloud",
+    "ibm": "IBM Cloud",
+    "cloud-foundry": "Cloud Foundry",
+    "cloudfoundry": "Cloud Foundry",
+    "kyma": "Kyma",
+    "abap": "ABAP",
+    "neo": "Neo",
+    "rise": "RISE with SAP",
+    "acme": "ACME",
+    "lutech": "Lutech",
+    "sap": "SAP",
+    "sap-btp-chip": "SAP BTP",
+    "sap-logo-chip": "SAP",
+}
+
+
+def display_name(key: str) -> str:
+    """Map a brand-asset key (``aws``, ``cloud-foundry``, ``azure-badge``) to a
+    human-readable label for the text-badge fallback (``AWS`` / ``Cloud
+    Foundry`` / ``Azure``)."""
+    if not key:
+        return ""
+    if key in _DISPLAY:
+        return _DISPLAY[key]
+    base = re.sub(r"-(badge|logo|chip)$", "", key)
+    if base in _DISPLAY:
+        return _DISPLAY[base]
+    return base.replace("-", " ").replace("_", " ").title()
+
+
+# A few brand keys don't follow the ``<name>-badge`` convention.
+_KEY_ALIASES: dict[str, list[str]] = {
+    "sap-btp-chip": ["sap-logo-chip"],
+    "cloud-foundry": ["cf-badge"],
+    "cloudfoundry": ["cf-badge"],
+}
+
+
+def _key_candidates(key: str) -> list[str]:
+    """Candidate brand-pack keys to try for a logical asset name, most-specific
+    first: the exact key, ``<key>-badge``, ``<key>-logo``, then any aliases."""
+    cands = [key, f"{key}-badge", f"{key}-logo"]
+    for alias in _KEY_ALIASES.get(key, []):
+        if alias not in cands:
+            cands.append(alias)
+    # de-dup, preserve order
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in cands:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def _resolve_asset(
+    key: str,
+    brand_packs: dict | None,
+    icon_resolver: Callable[[str], str | None] | None = None,
+) -> str | None:
+    """Resolve a logical asset name to a draw.io dataUri, or ``None`` if absent.
+
+    Order (spec Layer-3): brand packs (public then local, already merged) →
+    the icon resolver (for ``@{service}`` glyphs, reusing the emitter's own
+    ShapeIndex path). dataUris are used verbatim (comma-form, no ``;base64``)
+    so the downstream sha1 / atlas lookup stays stable.
+    """
+    packs = brand_packs or {}
+    for cand in _key_candidates(key):
+        entry = packs.get(cand)
+        if isinstance(entry, dict) and entry.get("dataUri"):
+            return entry["dataUri"]
+    if icon_resolver is not None:
+        uri = icon_resolver(key)
+        if uri:
+            return uri
+    return None
+
+
+_PLACEHOLDER_RE = re.compile(r"image=@\{?([\w.\-]+)\}?")
+
+
+def resolve_style_placeholders(
+    style: str,
+    brand_packs: dict | None,
+    icon_resolver: Callable[[str], str | None] | None = None,
+) -> tuple[str, list[str]]:
+    """Replace ``image=@{key}`` / ``image=@key`` tokens with resolved dataUris.
+
+    Returns ``(new_style, unresolved_keys)``. Idempotent: an already-resolved
+    ``image=data:…`` has no ``@`` and is left untouched. When ``unresolved_keys``
+    is non-empty the caller applies the text-badge fallback.
+    """
+    unresolved: list[str] = []
+
+    def repl(m: re.Match) -> str:
+        key = m.group(1)
+        uri = _resolve_asset(key, brand_packs, icon_resolver)
+        if uri is None:
+            unresolved.append(key)
+            return m.group(0)
+        return f"image={uri}"
+
+    return _PLACEHOLDER_RE.sub(repl, style), unresolved
+
+
+def _fallback_chip_style(contract: dict) -> str:
+    """Neutral bordered chip used for the text-badge fallback."""
+    return _style(contract, "chip")
+
+
+def resolve_cell(
+    cell: dict,
+    brand_packs: dict | None,
+    contract: dict,
+    icon_resolver: Callable[[str], str | None] | None = None,
+    warnings: list[str] | None = None,
+) -> dict:
+    """Return a copy of ``cell`` with any image placeholders resolved.
+
+    Behaviour on an *unresolved* placeholder depends on ``cell['placeholder_mode']``:
+      * ``"strip"`` — drop the ``image=@…`` token, keep the cell's own style +
+        value (used by the SAP BTP text chip, whose fallback *is* its text form).
+      * anything else (``"badge"`` / default) — swap to the neutral text-badge:
+        a bordered chip whose value is ``fallback_name`` (or the humanised key).
+    """
+    out = dict(cell)
+    style = cell.get("style", "")
+    if "@" not in style:
+        return out
+    resolved, unresolved = resolve_style_placeholders(style, brand_packs, icon_resolver)
+    if not unresolved:
+        out["style"] = resolved
+        return out
+    if cell.get("placeholder_mode") == "strip":
+        out["style"] = re.sub(r"image=@\{?[\w.\-]+\}?;?", "", resolved)
+        return out
+    key = unresolved[0]
+    if warnings is not None:
+        warnings.append(
+            f"brand asset {key!r} not found (no .local pack?); "
+            f"using text-badge fallback {display_name(key)!r}"
+        )
+    out["style"] = _fallback_chip_style(contract)
+    out["value"] = cell.get("fallback_name") or display_name(key)
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Badge slots (image badge with text-chip fallback)
+# ─────────────────────────────────────────────────────────────────────────────
+_BADGE_MOLECULE = {
+    "hyperscaler": "badge-hyperscaler",
+    "runtime": "badge-runtime",
+    "watermark": "watermark",
+    "persona": "persona",
+    "service": "service-icon",
+}
+
+
+def _badge_slot(kind: str, name: str, contract: dict) -> dict:
+    """Build an UNRESOLVED image-badge cell for ``name`` using the ``kind``
+    contract style, with its category placeholder rewritten to ``@{name}`` and a
+    ``fallback_name`` for the text-badge path. Resolution is the caller's job
+    (``resolve_cell`` / ``badge``)."""
+    molname = _BADGE_MOLECULE.get(kind, "badge-hyperscaler")
+    base = _style(contract, molname)
+    style = re.sub(r"image=@\{[^}]*\}", f"image=@{{{name}}}", base)
+    g = _geo(contract, molname)
+    return {
+        "id": f"badge-{kind}-{name}",
+        "value": "",
+        "style": style,
+        "x": 0.0,
+        "y": 0.0,
+        "w": _f(g, "w", 82.5),
+        "h": _f(g, "h", 55.0),
+        "parent": None,
+        "connectable": False,
+        "placeholder_mode": "badge",
+        "fallback_name": display_name(name),
+    }
+
+
+def badge(kind: str, name: str, contract: dict, brand_packs: dict) -> dict:
+    """Resolved image badge for ``name`` (kind ``hyperscaler`` | ``runtime`` |
+    ``watermark`` | …). Returns the image cell when the asset resolves, else the
+    neutral text-badge fallback (a bordered chip whose value is the human name,
+    e.g. ``badge("hyperscaler","aws",…)`` with an empty pack → value ``"AWS"``)."""
+    return resolve_cell(_badge_slot(kind, name, contract), brand_packs, contract)
+
+
+def _append_badge_slots(
+    cells: list[dict],
+    group: Any,
+    contract: dict,
+    parent: str,
+    x0: float,
+    y0: float,
+    gap: float = 8.0,
+) -> None:
+    """Append hyperscaler + runtime badge slots (from ``group.badges``) in a row,
+    parented to ``parent``. Slots stay UNRESOLVED; the emitter resolves them
+    (it owns the brand packs)."""
+    badges = getattr(group, "badges", None) or {}
+    x = x0
+    for kind, coll in (("hyperscaler", "hyperscalers"), ("runtime", "runtimes")):
+        for name in (badges.get(coll) or []):
+            slot = _badge_slot(kind, str(name), contract)
+            slot["id"] = f"badge-{kind}-{name}"
+            slot["x"] = x
+            slot["y"] = y0
+            slot["parent"] = parent
+            cells.append(slot)
+            x += slot["w"] + gap
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Node molecules
+# ─────────────────────────────────────────────────────────────────────────────
+# Capability-chip grid tuning (geometry only — no styling).
+_CAP_W, _CAP_H, _CAP_GAP = 132.0, 56.0, 12.0
+
+
+def product_box(
+    node: Any,
+    contract: dict,
+    icon_resolver: Callable[[str], str | None] | None = None,
+) -> list[dict]:
+    """Product node → white-panelled BTP-blue box + title row + a grid of
+    capability chips. Every chip sits inside the box with ``product-box.padX``
+    margins on all four sides; the box grows to fit the grid + title."""
+    box_style = _style(contract, "product-box")
+    g = _geo(contract, "product-box")
+    pad_x = _f(g, "padX", 60.8)
+    title_row = _f(g, "titleRow", 48.08)
+    base_w = _f(g, "w", 343.0)
+    base_h = _f(g, "h", 199.85)
+
+    caps = list(getattr(node, "capabilities", None) or [])
+    n = len(caps)
+    cols = 1 if n <= 1 else 2
+    rows = math.ceil(n / cols) if n else 0
+    grid_w = cols * _CAP_W + (cols - 1) * _CAP_GAP if cols else 0.0
+    grid_h = rows * _CAP_H + (rows - 1) * _CAP_GAP if rows else 0.0
+
+    top = max(title_row, pad_x)  # clear the title row AND honour the padX margin
+    box_w = max(base_w, grid_w + 2 * pad_x)
+    box_h = (top + grid_h + pad_x) if rows else max(base_h, top + pad_x)
+
+    cells: list[dict] = [
+        {
+            "id": "box",
+            "value": "",
+            "style": box_style,
+            "x": 0.0,
+            "y": 0.0,
+            "w": box_w,
+            "h": box_h,
+            "parent": None,
+        }
+    ]
+
+    # Title row (product name), text style from the contract.
+    cells.append(
+        {
+            "id": "title",
+            "value": getattr(node, "label", "") or "",
+            "style": _style(contract, "title-block"),
+            "x": pad_x,
+            "y": max(6.0, (top - 30.0) / 2.0),
+            "w": box_w - 2 * pad_x,
+            "h": 30.0,
+            "parent": "box",
+            "connectable": False,
+        }
+    )
+
+    # Capability chips, centred horizontally inside the padX margins.
+    grid_x = max(pad_x, (box_w - grid_w) / 2.0) if grid_w else pad_x
+    chip_style = _style(contract, "capability-chip")
+    for i, cap in enumerate(caps):
+        col, row = i % cols, i // cols
+        cx = grid_x + col * (_CAP_W + _CAP_GAP)
+        cy = top + row * (_CAP_H + _CAP_GAP)
+        style = chip_style
+        icon = cap.get("icon") if isinstance(cap, dict) else None
+        uri = icon_resolver(icon) if (icon and icon_resolver) else None
+        if uri:
+            style = (
+                chip_style
+                + "shape=label;imageAlign=center;imageVerticalAlign=top;"
+                + f"verticalAlign=bottom;spacingBottom=4;image={uri};"
+            )
+        cells.append(
+            {
+                "id": f"chip{i}",
+                "value": (cap.get("label", "") if isinstance(cap, dict) else str(cap)),
+                "style": style,
+                "x": cx,
+                "y": cy,
+                "w": _CAP_W,
+                "h": _CAP_H,
+                "parent": "box",
+                "connectable": False,
+            }
+        )
+    return cells
+
+
+def db_cell(node: Any, contract: dict) -> dict:
+    """Database node → the contract cylinder (SAP-blue border, white fill)."""
+    g = _geo(contract, "db")
+    return {
+        "id": "db",
+        "value": getattr(node, "label", "") or "",
+        "style": _style(contract, "db"),
+        "x": 0.0,
+        "y": 0.0,
+        "w": _f(g, "w", 60.0),
+        "h": _f(g, "h", 80.0),
+        "parent": None,
+    }
+
+
+def chip_cell(node: Any, contract: dict) -> dict:
+    """Chip node (small client/label chip) → the contract chip style."""
+    g = _geo(contract, "chip")
+    return {
+        "id": "chip",
+        "value": getattr(node, "label", "") or "",
+        "style": _style(contract, "chip"),
+        "x": 0.0,
+        "y": 0.0,
+        "w": _f(g, "w", 130.0),
+        "h": _f(g, "h", 28.18),
+        "parent": None,
+    }
+
+
+def persona(
+    node: Any,
+    contract: dict,
+    icon_resolver: Callable[[str], str | None] | None = None,
+) -> list[dict]:
+    """Persona (user figure) → the contract persona image cell with its
+    ``@{persona}`` placeholder resolved via ``icon_resolver`` (the node's
+    ``genericIcon`` or a plain "user")."""
+    g = _geo(contract, "persona")
+    style = _style(contract, "persona")
+    who = getattr(node, "genericIcon", None) or "user"
+    uri = icon_resolver(who) if icon_resolver else None
+    if uri:
+        style = re.sub(r"@\{persona\}", uri, style)
+    return [
+        {
+            "id": "persona",
+            "value": getattr(node, "label", "") or "",
+            "style": style,
+            "x": 0.0,
+            "y": 0.0,
+            "w": _f(g, "w", 28.0),
+            "h": _f(g, "h", 28.0),
+            "parent": None,
+            "connectable": False,
+        }
+    ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Group / frame molecules
+# ─────────────────────────────────────────────────────────────────────────────
+def subaccount_frame(group: Any, contract: dict) -> list[dict]:
+    """Subaccount → white rounded frame (SAP-blue border) + a "SAP BTP" chip
+    (image ``@sap-btp-chip`` with text fallback) + any hyperscaler/runtime
+    badge slots from ``group.badges``."""
+    g = _geo(contract, "subaccount-frame")
+    pad_x = _f(g, "padX", 11.57)
+    pad_top = _f(g, "padTop", 6.0)
+    frame = {
+        "id": "frame",
+        "value": getattr(group, "label", "") or "",
+        "style": _style(contract, "subaccount-frame"),
+        "x": 0.0,
+        "y": 0.0,
+        "w": _f(g, "w", 1001.0),
+        "h": _f(g, "h", 567.0),
+        "parent": None,
+    }
+    cells: list[dict] = [frame]
+
+    cg = _geo(contract, "sap-btp-chip")
+    cells.append(
+        {
+            "id": "btpchip",
+            "value": "SAP BTP",
+            # contract text style + the SAP-BTP logo placeholder (resolved to
+            # the brand-pack image when present, else stripped → the text chip).
+            "style": _style(contract, "sap-btp-chip") + "image=@sap-btp-chip;",
+            "x": pad_x + 8.0,
+            "y": pad_top,
+            "w": _f(cg, "w", 90.0),
+            "h": _f(cg, "h", 30.0),
+            "parent": "frame",
+            "connectable": False,
+            "placeholder_mode": "strip",
+        }
+    )
+    _append_badge_slots(cells, group, contract, "frame", pad_x + 8.0, pad_top + 36.0)
+    return cells
+
+
+def governance_strip(group: Any, contract: dict) -> list[dict]:
+    """Governance band → the contract BTP strip enclosing its members."""
+    g = _geo(contract, "governance-strip")
+    frame = {
+        "id": "frame",
+        "value": getattr(group, "label", "") or "",
+        "style": _style(contract, "governance-strip"),
+        "x": 0.0,
+        "y": 0.0,
+        "w": _f(g, "w", 946.0),
+        "h": _f(g, "h", 236.0),
+        "parent": None,
+    }
+    cells = [frame]
+    _append_badge_slots(
+        cells, group, contract, "frame",
+        _f(g, "padX", 64.0), _f(g, "padTop", 35.0),
+    )
+    return cells
+
+
+def tier_box(group: Any, contract: dict) -> list[dict]:
+    """Cloud-tier → SAP-blue box for ``public``/``private``, non-SAP grey box for
+    ``any-premise`` (matches SSAM/Brandart), plus any brand chips (badge slots)."""
+    kind = (getattr(group, "kind", None) or "public").lower()
+    molname = "tier-box-nonsap" if kind == "any-premise" else "tier-box-sap"
+    g = _geo(contract, molname)
+    box_w = _f(g, "w", 201.0)
+    box_h = _f(g, "h", 92.85)
+    frame = {
+        "id": "frame",
+        "value": getattr(group, "label", "") or "",
+        "style": _style(contract, molname),
+        "x": 0.0,
+        "y": 0.0,
+        "w": box_w,
+        "h": box_h,
+        "parent": None,
+    }
+    cells = [frame]
+    _append_badge_slots(cells, group, contract, "frame", 10.0, box_h - 42.0)
+    return cells
+
+
+def custom_app_box(group: Any, contract: dict) -> list[dict]:
+    """Custom application → the contract card frame + a runtime badge slot (for
+    any ``group.badges.runtimes``)."""
+    g = _geo(contract, "custom-app-box")
+    frame = {
+        "id": "frame",
+        "value": getattr(group, "label", "") or "",
+        "style": _style(contract, "custom-app-box"),
+        "x": 0.0,
+        "y": 0.0,
+        "w": _f(g, "w", 343.0),
+        "h": _f(g, "h", 185.93),
+        "parent": None,
+    }
+    cells = [frame]
+    badges = getattr(group, "badges", None) or {}
+    x = _f(g, "padX", 80.08)
+    for name in (badges.get("runtimes") or []):
+        slot = _badge_slot("runtime", str(name), contract)
+        slot["id"] = f"badge-runtime-{name}"
+        slot["x"] = x
+        slot["y"] = 8.0
+        slot["parent"] = "frame"
+        cells.append(slot)
+        x += slot["w"] + 8.0
+    return cells
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Edge-adjacent + decorative molecules
+# ─────────────────────────────────────────────────────────────────────────────
+_FLOW_FAMILY_MOLECULE = {
+    "identity": "edge-identity",
+    "provisioning": "edge-provisioning",
+    "master-data": "edge-master-data",
+    "transport": "edge-transport",
+    "firewall": "edge-firewall",
+    "default": "edge-default",
+}
+
+
+def flow_family_style(flow_family: str, contract: dict) -> str:
+    """Contract edge style for a flow family (1:1 with the six edge-* molecules)."""
+    molname = _FLOW_FAMILY_MOLECULE.get(flow_family, "edge-default")
+    return _style(contract, molname)
+
+
+def pill(edge: Any, contract: dict) -> dict:
+    """Protocol pill vertex for an edge (e.g. "SCIM", "SAML2/OIDC"). Emitted at
+    (0,0); the channel router (Task 8e) positions it along the edge later."""
+    g = _geo(contract, "pill-protocol")
+    text = getattr(edge, "pill", None) or getattr(edge, "label", "") or ""
+    return {
+        "id": f"pill-{getattr(edge, 'id', 'e')}",
+        "value": text,
+        "style": _style(contract, "pill-protocol"),
+        "x": 0.0,
+        "y": 0.0,
+        "w": _f(g, "w", 35.43),
+        "h": _f(g, "h", 16.0),
+        "parent": None,
+        "connectable": False,
+    }
+
+
+def step_circle(node: Any, contract: dict) -> dict:
+    """Numbered step circle for a node (numbers.xml default number ellipse)."""
+    g = _geo(contract, "step-circle")
+    step = getattr(node, "step", None)
+    return {
+        "id": f"step-{getattr(node, 'id', 'n')}",
+        "value": "" if step is None else str(step),
+        "style": _style(contract, "step-circle"),
+        "x": 0.0,
+        "y": 0.0,
+        "w": _f(g, "w", 30.0),
+        "h": _f(g, "h", 30.0),
+        "parent": None,
+        "connectable": False,
+    }
+
+
+def network_separator(x: float, y0: float, y1: float, contract: dict) -> list[dict]:
+    """Vertical NETWORK zone separator: the grey jump-gap bar + its caption.
+
+    The bar is an edge-style line between (x,y0) and (x,y1) (carries
+    ``edge: True`` + explicit ``points``); the label is a text cell beside it."""
+    line = {
+        "id": "sep-line",
+        "value": "",
+        "style": _style(contract, "network-separator"),
+        "x": float(x),
+        "y": float(y0),
+        "w": 0.0,
+        "h": float(y1) - float(y0),
+        "parent": None,
+        "edge": True,
+        "points": [(float(x), float(y0)), (float(x), float(y1))],
+    }
+    lg = _geo(contract, "network-separator-label")
+    label = {
+        "id": "sep-label",
+        "value": "NETWORK",
+        "style": _style(contract, "network-separator-label"),
+        "x": float(x) + 8.0,
+        "y": float(y0) - 16.0,
+        "w": _f(lg, "w", 80.0),
+        "h": _f(lg, "h", 30.0),
+        "parent": None,
+    }
+    return [line, label]
+
+
+def branding_block(metadata: dict, contract: dict, brand_packs: dict) -> list[dict]:
+    """Customer branding: an optional partner watermark, a customer-logo badge and
+    a title cell. Each is an independent top-level cell (``parent`` is ``None``);
+    the emitter places them. Unresolved logos degrade to text-badges."""
+    cells: list[dict] = []
+    branding = (metadata or {}).get("branding") or {}
+
+    watermark = branding.get("partnerWatermark")
+    if watermark:
+        wc = badge("watermark", str(watermark), contract, brand_packs)
+        wg = _geo(contract, "watermark")
+        wc["id"] = "watermark"
+        wc["w"] = _f(wg, "w", 842.64)
+        wc["h"] = _f(wg, "h", 143.94)
+        wc["parent"] = None
+        cells.append(wc)
+
+    logo = branding.get("customerLogo")
+    if logo:
+        # A customer logo is an image badge that degrades to a text chip with
+        # the customer name (e.g. "ACME") when the (usually .local) asset is
+        # absent — badge() already applies that fallback.
+        lc = badge("hyperscaler", str(logo), contract, brand_packs)
+        lc["id"] = "customer-logo"
+        lc["parent"] = None
+        cells.append(lc)
+
+    title = (metadata or {}).get("title")
+    if title:
+        cells.append(
+            {
+                "id": "brand-title",
+                "value": title,
+                "style": _style(contract, "title-block"),
+                "x": 0.0,
+                "y": 0.0,
+                "w": 260.0,
+                "h": 30.0,
+                "parent": None,
+                "connectable": False,
+            }
+        )
+    return cells
