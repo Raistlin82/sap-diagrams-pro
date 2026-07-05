@@ -240,3 +240,89 @@ def test_8b_lanes_are_deterministic_and_centered():
     gutter = next(c for c in r1.channels if c.axis == "v" and c.rect.x == 100)
     xs = [next(iter({x for x, _y in r1.waypoints[f"e{i}"]})) for i in range(4)]
     assert abs(sum(xs) / len(xs) - gutter.center) < 1e-6
+
+
+# ── 8c: port distribution by barycenter ──────────────────────────────────────
+def _entry_side_from_frac(frac):
+    ex, ey = frac
+    if ex == 0.0:
+        return "L"
+    if ex == 1.0:
+        return "R"
+    if ey == 0.0:
+        return "T"
+    if ey == 1.0:
+        return "B"
+    return None
+
+
+def _side_faced_by_segment(last_wp, entry_pt):
+    """Which target side an incoming segment lands on (its heading)."""
+    dx = entry_pt[0] - last_wp[0]
+    dy = entry_pt[1] - last_wp[1]
+    if abs(dx) >= abs(dy):
+        return "L" if dx > 0 else "R"      # heading right → hits left face
+    return "T" if dy > 0 else "B"          # heading down  → hits top face
+
+
+def test_8c_three_edges_from_one_side_get_distinct_ordered_fractions():
+    """Three edges leaving one box's right side get distinct exitY fractions
+    (evenly across [0.25,0.75]), ordered by their target's y."""
+    layout = {
+        "nodes": {
+            "S": (20, 300, 60, 40),
+            "T0": (350, 100, 60, 40),      # cy=120
+            "T1": (350, 300, 60, 40),      # cy=320
+            "T2": (350, 500, 60, 40),      # cy=520
+        },
+        "groups": {}, "canvas": (900, 700),
+        "meta": {"columns": {"left": (0, 100), "center": (300, 500), "right": (700, 800)},
+                 "networkSeparator": None},
+    }
+    dia = _diagram([_edge("e0", "S", "T0"), _edge("e1", "S", "T1"),
+                    _edge("e2", "S", "T2")])
+    res = router.route(dia, layout)
+
+    # all three leave S's right side
+    ex = {eid: res.port_fracs[eid][0] for eid in ("e0", "e1", "e2")}
+    assert all(a[0] == 1.0 for a in ex.values()), "all exit the right side"
+    exit_y = {eid: a[1] for eid, a in ex.items()}
+    assert len(set(exit_y.values())) == 3, "distinct exitY fractions"
+    assert set(round(v, 3) for v in exit_y.values()) == {0.25, 0.5, 0.75}
+    # ordered by target y: T0(120) < T1(320) < T2(520)
+    assert exit_y["e0"] < exit_y["e1"] < exit_y["e2"]
+
+
+def test_8c_entry_side_faces_last_segment_direction():
+    """Each edge's entry port sits on the side its final segment heads into."""
+    for path in (V2, NOVA):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        diagram = load_script("generate-drawio").parse_json(payload)
+        sl = load_script("_skeleton_layout")
+        layout = sl.compute_layout(diagram, load_script("generate-drawio").ShapeIndex.load())
+        res = router.route(diagram, layout)
+        for e in diagram.edges:
+            if e.id not in res.waypoints:
+                continue
+            last_wp = res.waypoints[e.id][-1]
+            entry_pt = res.ports[e.id][1]
+            faced = _side_faced_by_segment(last_wp, entry_pt)
+            got = _entry_side_from_frac(res.port_fracs[e.id][1])
+            assert got == faced, (
+                f"{path.name} edge {e.id}: entry side {got} != faced {faced}"
+            )
+
+
+def test_8c_lane_keeps_clearance_from_network_separator(gen, sl):
+    """No in-gutter vertical lane hugs the NETWORK separator bar within its
+    y-range: every center↔right vertical segment stays >= a clearance off it."""
+    diagram, layout, res = _fixture_route(gen, sl, NOVA)
+    sep = layout["meta"]["networkSeparator"]
+    assert sep is not None
+    sx, y0, y1 = sep["x"], sep["y0"], sep["y1"]
+    for eid, wps in res.waypoints.items():
+        for (ax, ay), (bx, by) in _segments(wps):
+            if abs(ax - bx) < 0.5 and abs(ax - sx) < 6.0:   # a vertical seg near the bar
+                lo, hi = sorted((ay, by))
+                if hi >= y0 and lo <= y1:                    # overlaps the bar's y-range
+                    pytest.fail(f"edge {eid} vertical lane hugs the separator at x={ax}")

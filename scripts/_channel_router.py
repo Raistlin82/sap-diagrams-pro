@@ -79,6 +79,7 @@ CHANNEL_BASE_W = 24.0    # a channel's reserved base width before lanes are adde
 PORT_LO, PORT_HI = 0.25, 0.75   # ports spread evenly across [0.25, 0.75] of a side
 CORRIDOR_MARGIN = 22.0   # px a horizontal corridor sits clear of all node content
 SLOT_PAD = 6.0           # extra px between pill/label slots (pitch = pill_h + this)
+SEP_CLEARANCE = 14.0     # px a lane keeps clear of the NETWORK separator bar
 
 _COLS = ("left", "center", "right")
 
@@ -119,6 +120,8 @@ class _Plan:
     eid: str
     src: Any                        # Rect
     dst: Any                        # Rect
+    src_id: str
+    dst_id: str
     src_col: int
     dst_col: int
     kind: str                       # "adjacent" | "long" | "intra" | "degenerate"
@@ -207,8 +210,8 @@ def _bfs_columns(adj: dict[int, list[int]], start: int, goal: int) -> list[int]:
 
 
 # ── Planning ─────────────────────────────────────────────────────────────────
-def _plan_edge(eid, src, dst, src_col, dst_col, gutters, corridors,
-               net_sep) -> _Plan:
+def _plan_edge(eid, src, dst, src_id, dst_id, src_col, dst_col, gutters,
+               corridors) -> _Plan:
     """Classify one edge and pick its exit/entry sides + shared channel.
 
     Three structural cases exploit the skeleton:
@@ -225,10 +228,10 @@ def _plan_edge(eid, src, dst, src_col, dst_col, gutters, corridors,
         ch = gutters.get(gi)
         if ch is not None:
             if dcol > 0:                              # target to the right
-                return _Plan(eid, src, dst, src_col, dst_col, "adjacent",
-                             "R", "L", ch, src.cy, dst.cy)
-            return _Plan(eid, src, dst, src_col, dst_col, "adjacent",
-                         "L", "R", ch, src.cy, dst.cy)
+                return _Plan(eid, src, dst, src_id, dst_id, src_col, dst_col,
+                             "adjacent", "R", "L", ch, src.cy, dst.cy)
+            return _Plan(eid, src, dst, src_id, dst_id, src_col, dst_col,
+                         "adjacent", "L", "R", ch, src.cy, dst.cy)
 
     if abs(dcol) >= 2 and corridors:
         # Pick the corridor (top/bottom) closest to the edge's mid-height.
@@ -241,7 +244,7 @@ def _plan_edge(eid, src, dst, src_col, dst_col, gutters, corridors,
             use = bot
         side = "T" if (use is not None and use.center <= src.cy) else "B"
         # bary along the corridor axis (x) orders lanes/ports across it
-        return _Plan(eid, src, dst, src_col, dst_col, "long",
+        return _Plan(eid, src, dst, src_id, dst_id, src_col, dst_col, "long",
                      side, side, use, src.cx, dst.cx)
 
     # Same column (or no channels): intra-column orthogonal jog.
@@ -250,28 +253,63 @@ def _plan_edge(eid, src, dst, src_col, dst_col, gutters, corridors,
     if abs(dx) >= abs(dy):                             # horizontal dominant → H-V-H
         exit_s = "R" if dx >= 0 else "L"
         entry_s = "L" if dx >= 0 else "R"
-        return _Plan(eid, src, dst, src_col, dst_col, "intra",
+        return _Plan(eid, src, dst, src_id, dst_id, src_col, dst_col, "intra",
                      exit_s, entry_s, None, src.cy, dst.cy)
     exit_s = "B" if dy >= 0 else "T"                  # vertical dominant → V-H-V
     entry_s = "T" if dy >= 0 else "B"
-    return _Plan(eid, src, dst, src_col, dst_col, "intra",
+    return _Plan(eid, src, dst, src_id, dst_id, src_col, dst_col, "intra",
                  exit_s, entry_s, None, src.cx, dst.cx)
 
 
-# ── Ports (8c fleshes out the distribution; here: side midpoints) ────────────
+# ── Ports (8c) ───────────────────────────────────────────────────────────────
+def _port_bary(other, side: str) -> float:
+    """Ordering key for a port on ``side``: the OTHER endpoint's coordinate
+    perpendicular to that side (its y for a vertical L/R side, its x for a
+    horizontal T/B side). Sorting a side's ports by this spreads a fan without
+    the connectors crossing each other at the box face."""
+    return other.cy if side in ("L", "R") else other.cx
+
+
+def _spread(n: int, i: int) -> float:
+    """Fraction i of n evenly across [PORT_LO, PORT_HI] (0.5 when alone)."""
+    if n <= 1:
+        return 0.5
+    return PORT_LO + i * (PORT_HI - PORT_LO) / (n - 1)
+
+
 def _assign_ports(plans: list[_Plan]) -> dict[str, tuple[tuple, tuple]]:
-    """Fractional (exit, entry) anchor per edge. 8a places every port at the
-    side midpoint (0.5); 8c distributes them by barycenter across [0.25,0.75]."""
-    out: dict[str, tuple[tuple, tuple]] = {}
+    """Fractional (exit, entry) anchor per edge, distributed per box side.
+
+    Edges leaving the SAME side of the SAME box are grouped, ordered by the
+    barycenter of their far endpoint, and handed fractions spread evenly across
+    ``[0.25, 0.75]`` of that side — so a fan of connectors diverges instead of
+    stacking on the side midpoint. Entry ports are distributed the same way on
+    the target side. Deterministic: every group is sorted with an ``eid``
+    tie-break."""
+    from collections import defaultdict
+    exit_groups: dict[tuple[str, str], list[_Plan]] = defaultdict(list)
+    entry_groups: dict[tuple[str, str], list[_Plan]] = defaultdict(list)
     for p in plans:
-        out[p.eid] = (_side_frac(p.src, p.exit_side, 0.5),
-                      _side_frac(p.dst, p.entry_side, 0.5))
-    return out
+        exit_groups[(p.src_id, p.exit_side)].append(p)
+        entry_groups[(p.dst_id, p.entry_side)].append(p)
+
+    exit_frac: dict[str, tuple[float, float]] = {}
+    entry_frac: dict[str, tuple[float, float]] = {}
+    for (_nid, side), group in exit_groups.items():
+        group.sort(key=lambda p: (_port_bary(p.dst, side), p.eid))
+        for i, p in enumerate(group):
+            exit_frac[p.eid] = _side_frac(p.src, side, _spread(len(group), i))
+    for (_nid, side), group in entry_groups.items():
+        group.sort(key=lambda p: (_port_bary(p.src, side), p.eid))
+        for i, p in enumerate(group):
+            entry_frac[p.eid] = _side_frac(p.dst, side, _spread(len(group), i))
+
+    return {p.eid: (exit_frac[p.eid], entry_frac[p.eid]) for p in plans}
 
 
 # ── Lanes (8b) ───────────────────────────────────────────────────────────────
-def _allocate_lanes(channels: list[Channel], plans: list[_Plan]
-                    ) -> dict[str, float]:
+def _allocate_lanes(channels: list[Channel], plans: list[_Plan],
+                    net_sep: dict | None = None) -> dict[str, float]:
     """Per-edge perpendicular offset from its channel centre-line.
 
     Every edge sharing a channel gets its own parallel lane, so their in-channel
@@ -288,6 +326,8 @@ def _allocate_lanes(channels: list[Channel], plans: list[_Plan]
         if p.channel is not None:
             by_channel.setdefault(id(p.channel), []).append(p)
 
+    sep_x = float(net_sep["x"]) if net_sep else None
+
     offsets: dict[str, float] = {}
     for ch in channels:
         group = by_channel.get(id(ch), [])
@@ -300,9 +340,23 @@ def _allocate_lanes(channels: list[Channel], plans: list[_Plan]
             usable = max(1.0, ch.rect.w - 16.0)
             if (n - 1) * pitch > usable:
                 pitch = max(10.0, usable / (n - 1))
+
+        # The NETWORK separator bar sits on this gutter's centre-line: shift the
+        # whole lane bundle to one side so no lane HUGS the bar (edges instead
+        # cross it once, cleanly, on their horizontal exit/entry segment).
+        base = 0.0
+        if (ch.axis == "v" and sep_x is not None
+                and ch.rect.x <= sep_x <= ch.rect.right):
+            centered_min = ch.center - (n - 1) / 2.0 * pitch
+            want_min = sep_x + SEP_CLEARANCE                    # left-most lane
+            base = want_min - centered_min
+            max_x = ch.center + (n - 1) / 2.0 * pitch + base
+            if max_x > ch.rect.right - 4.0:                     # clamp in-gutter
+                base -= (max_x - (ch.rect.right - 4.0))
+
         for i, p in enumerate(group):
             ch.lanes[p.eid] = i
-            offsets[p.eid] = (i - (n - 1) / 2.0) * pitch
+            offsets[p.eid] = (i - (n - 1) / 2.0) * pitch + base
     return offsets
 
 
@@ -448,11 +502,12 @@ def route(diagram, layout: dict) -> RouteResult:
         dc = _column_of(dst, cols) if cols else 0
         # walk the region graph so multi-column hops are explicit (Task 9 hook)
         _ = _bfs_columns(adj, sc, dc)
-        plans.append(_plan_edge(e.id, src, dst, sc, dc, gutters, corridors, net_sep))
+        plans.append(_plan_edge(e.id, src, dst, e.source, e.target, sc, dc,
+                                gutters, corridors))
 
     # ── ports (8c), lanes (8b) ──────────────────────────────────────────────
     port_fracs = _assign_ports(plans)
-    lane_off = _allocate_lanes(channels, plans)
+    lane_off = _allocate_lanes(channels, plans, net_sep)
 
     # ── absolute ports + waypoints ──────────────────────────────────────────
     ports: dict[str, tuple[tuple, tuple]] = {}
