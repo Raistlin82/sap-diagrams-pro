@@ -267,6 +267,48 @@ def test_branding_block_fallbacks(M, contract):
     assert by_id["brand-title"]["value"] == "Archetype A"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-1 (review round): badge()/branding_block() used to silently drop
+# icon_resolver/warnings (they defaulted to None), so a customer logo or
+# partner watermark that fell back to a text-badge never appended a preflight
+# WARNING — unlike every group-level badge slot (hyperscaler/runtime), which
+# already threaded warnings through `_place_molecule`. Both now accept and
+# forward icon_resolver/warnings so ALL badge/branding assets share one
+# resolution + warning path.
+# ─────────────────────────────────────────────────────────────────────────────
+def test_branding_block_appends_warnings_when_unresolved(M, contract):
+    meta = {"title": "Archetype A", "branding": {"customerLogo": "acme",
+            "partnerWatermark": "lutech"}}
+    warnings: list[str] = []
+    M.branding_block(meta, contract, {}, icon_resolver=None, warnings=warnings)
+    assert any("'acme'" in w for w in warnings), "customer logo must warn when unresolved"
+    assert any("'lutech'" in w for w in warnings), "partner watermark must warn when unresolved"
+
+
+def test_badge_appends_warning_when_unresolved(M, contract):
+    warnings: list[str] = []
+    M.badge("hyperscaler", "aws", contract, {}, icon_resolver=None, warnings=warnings)
+    assert any("'aws'" in w for w in warnings)
+
+
+def test_golden_branding_and_diagram_badges_warn_on_unresolved_assets(capsys):
+    # End-to-end proof (FIX-1): render the v2 fixture (customerLogo="acme",
+    # partnerWatermark="lutech", metadata.badges.hyperscalers=["azure"]) with
+    # NO .local brand pack. Before the fix, only "azure" warned — via the
+    # group-badge path (cloud-tier-right's own hyperscaler badge, wired
+    # through `_place_molecule`) — because `_emit_branding_and_badges`
+    # received icon_resolver/warnings but never passed them into
+    # `branding_block`/`badge`. Now all three degrade-and-warn identically.
+    gen = load_script("generate-drawio")
+    diagram = gen.parse_json(json.loads(V2_FIXTURE.read_text(encoding="utf-8")))
+    gen.emit(diagram, layout="auto")
+    stderr = capsys.readouterr().err
+    assert "WARNING" in stderr
+    assert "'acme'" in stderr, "customer logo (metadata.branding) must warn — was silent pre-fix"
+    assert "'lutech'" in stderr, "partner watermark (metadata.branding) must warn — was silent pre-fix"
+    assert "'azure'" in stderr, "hyperscaler badge must keep warning (already worked pre-fix)"
+
+
 def test_flow_family_style_maps_all_six(M, contract):
     mapping = {
         "identity": "edge-identity", "provisioning": "edge-provisioning",
@@ -308,11 +350,16 @@ def test_display_name_humanises_keys(M):
 # molecule styles in its XML.
 # ─────────────────────────────────────────────────────────────────────────────
 @pytest.fixture(scope="module")
-def golden_styles():
+def golden_root():
     gen = load_script("generate-drawio")
     diagram = gen.parse_json(json.loads(V2_FIXTURE.read_text(encoding="utf-8")))
     xml = gen.emit(diagram, layout="auto")
-    root = ET.fromstring(xml)
+    return gen, ET.fromstring(xml)
+
+
+@pytest.fixture(scope="module")
+def golden_styles(golden_root):
+    _gen, root = golden_root
     return [el.get("style", "") for el in root.iter("mxCell")]
 
 
@@ -324,9 +371,16 @@ def _contract_prefix(contract, name):
     return s[:i] if i != -1 else s
 
 
+def _cell_style_by_id(root, cell_id):
+    for el in root.iter("mxCell"):
+        if el.get("id") == cell_id:
+            return el.get("style", "")
+    return None
+
+
 @pytest.mark.parametrize("name", [
-    "product-box", "capability-chip", "title-block", "custom-app-box",
-    "subaccount-frame", "governance-strip", "tier-box-sap", "tier-box-nonsap",
+    "product-box", "capability-chip", "title-block",
+    "subaccount-frame", "governance-strip", "tier-box-nonsap",
     "db", "chip", "sap-btp-chip", "pill-protocol",
     "edge-identity", "edge-provisioning", "edge-master-data",
     "edge-transport", "edge-firewall", "edge-default",
@@ -335,6 +389,51 @@ def test_golden_molecule_style_present_and_contract_exact(golden_styles, contrac
     prefix = _contract_prefix(contract, name)
     assert any(s.startswith(prefix) for s in golden_styles), \
         f"no emitted cell carries the {name!r} contract style"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-4 (review round): product-box/custom-app-box and subaccount-frame/
+# tier-box-sap are BYTE-IDENTICAL contract style strings (no image= token to
+# even prefix-truncate on). The loose "any cell in the whole document" check
+# above can't discriminate them — e.g. the "custom-app-box" parametrization
+# was satisfied by an unrelated product-box cell (bpa/cloud-alm's product
+# nodes), never actually looking at the custom-app-1 group's own cell, so a
+# dispatch bug in `_group_molecule_cells` (e.g. routing "custom-app" to the
+# wrong builder) would go undetected. Pin each ambiguous molecule to the
+# SPECIFIC emitted cell id for a known IR entity — computed the exact same
+# way generate-drawio.py computes it — so the right builder having run for
+# THAT entity is what's actually asserted.
+# ─────────────────────────────────────────────────────────────────────────────
+def test_golden_custom_app_box_cell_pinned_by_id(golden_root, contract):
+    gen, root = golden_root
+    cell_id = gen._stable_id("g", "custom-app-1")  # fixture's only custom-app group
+    style = _cell_style_by_id(root, cell_id)
+    assert style is not None, f"no emitted cell for the custom-app-1 group (id {cell_id!r})"
+    assert style.startswith(_contract_prefix(contract, "custom-app-box"))
+
+
+def test_golden_tier_box_sap_cell_pinned_by_id(golden_root, contract):
+    gen, root = golden_root
+    cell_id = gen._stable_id("g", "cloud-tier-public")  # fixture's kind="public" tier
+    style = _cell_style_by_id(root, cell_id)
+    assert style is not None, f"no emitted cell for the cloud-tier-public group (id {cell_id!r})"
+    assert style.startswith(_contract_prefix(contract, "tier-box-sap"))
+
+
+def test_golden_subaccount_frame_cell_pinned_by_id(golden_root, contract):
+    gen, root = golden_root
+    cell_id = gen._stable_id("g", "subaccount-test")  # nested subaccount frame
+    style = _cell_style_by_id(root, cell_id)
+    assert style is not None, f"no emitted cell for the subaccount-test group (id {cell_id!r})"
+    assert style.startswith(_contract_prefix(contract, "subaccount-frame"))
+
+
+def test_golden_product_box_cell_pinned_by_id(golden_root, contract):
+    gen, root = golden_root
+    cell_id = gen._stable_id("n", "bpa")  # fixture's product node
+    style = _cell_style_by_id(root, cell_id)
+    assert style is not None, f"no emitted cell for the bpa product node (id {cell_id!r})"
+    assert style.startswith(_contract_prefix(contract, "product-box"))
 
 
 def test_golden_sap_btp_chip_resolved_to_image(golden_styles, contract):

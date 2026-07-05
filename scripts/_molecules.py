@@ -29,8 +29,8 @@ dicts to ``mxCell`` XML)::
     pill(edge, contract) -> dict
     step_circle(node, contract) -> dict
     network_separator(x, y0, y1, contract) -> list[dict]
-    branding_block(metadata, contract, brand_packs) -> list[dict]
-    badge(kind, name, contract, brand_packs) -> dict
+    branding_block(metadata, contract, brand_packs, icon_resolver, warnings) -> list[dict]
+    badge(kind, name, contract, brand_packs, icon_resolver, warnings) -> dict
 
 Cell dict schema: ``{id, value, style, x, y, w, h, parent, ...}``. ``parent`` is
 ``None`` for the molecule's *anchor* (cells[0]) — the caller supplies its real
@@ -97,7 +97,10 @@ def load_brand_packs() -> dict:
 # Contract accessors (keep every style string sourced from the contract)
 # ─────────────────────────────────────────────────────────────────────────────
 def _mol(contract: dict, name: str) -> dict:
-    return contract["molecules"][name]
+    try:
+        return contract["molecules"][name]
+    except KeyError as exc:
+        raise KeyError(f"molecule {name!r} missing from style-contract.json") from exc
 
 
 def _style(contract: dict, name: str) -> str:
@@ -305,12 +308,28 @@ def _badge_slot(kind: str, name: str, contract: dict) -> dict:
     }
 
 
-def badge(kind: str, name: str, contract: dict, brand_packs: dict) -> dict:
+def badge(
+    kind: str,
+    name: str,
+    contract: dict,
+    brand_packs: dict,
+    icon_resolver: Callable[[str], str | None] | None = None,
+    warnings: list[str] | None = None,
+) -> dict:
     """Resolved image badge for ``name`` (kind ``hyperscaler`` | ``runtime`` |
     ``watermark`` | …). Returns the image cell when the asset resolves, else the
     neutral text-badge fallback (a bordered chip whose value is the human name,
-    e.g. ``badge("hyperscaler","aws",…)`` with an empty pack → value ``"AWS"``)."""
-    return resolve_cell(_badge_slot(kind, name, contract), brand_packs, contract)
+    e.g. ``badge("hyperscaler","aws",…)`` with an empty pack → value ``"AWS"``).
+
+    ``icon_resolver``/``warnings`` are threaded straight through to
+    ``resolve_cell`` so every badge — including the customer-branding assets
+    emitted via ``branding_block`` — gets the SAME shape-index resolution leg
+    and the SAME de-duplicated preflight WARNING on an unresolved asset as the
+    group-badge path (``_place_molecule`` in generate-drawio.py). Both default
+    to ``None`` so existing 4-positional-arg callers are unaffected."""
+    return resolve_cell(
+        _badge_slot(kind, name, contract), brand_packs, contract, icon_resolver, warnings
+    )
 
 
 def _append_badge_slots(
@@ -329,8 +348,7 @@ def _append_badge_slots(
     x = x0
     for kind, coll in (("hyperscaler", "hyperscalers"), ("runtime", "runtimes")):
         for name in (badges.get(coll) or []):
-            slot = _badge_slot(kind, str(name), contract)
-            slot["id"] = f"badge-{kind}-{name}"
+            slot = _badge_slot(kind, str(name), contract)  # id already set by _badge_slot
             slot["x"] = x
             slot["y"] = y0
             slot["parent"] = parent
@@ -341,8 +359,50 @@ def _append_badge_slots(
 # ─────────────────────────────────────────────────────────────────────────────
 # Node molecules
 # ─────────────────────────────────────────────────────────────────────────────
-# Capability-chip grid tuning (geometry only — no styling).
-_CAP_W, _CAP_H, _CAP_GAP = 132.0, 56.0, 12.0
+def _capability_grid_geometry(contract: dict) -> tuple[float, float, float]:
+    """Per-chip ``(w, h, gap)`` for the capability-chip grid inside a product
+    box — derived from the contract's ``capability-chip`` geometry (review
+    fix: this used to be the bare module literal ``132.0, 56.0, 12.0``,
+    disconnected from the contract and disagreeing with it).
+
+    The contract's ``capability-chip`` entry (``build-style-contract.py::
+    x_capability_chip``) is measured from a SINGLE SSAM exemplar panel that
+    wraps an ENTIRE capability icon-grid for one product — ``w``/``h`` are
+    the whole panel's size, ``gapX``/``gapY`` the icon-to-icon pitch,
+    ``iconW``/``iconH`` the measured icon footprint, ``padX``/``padTop`` the
+    inset of the first icon from the panel edge. The SSAM exemplar draws ALL
+    of a product's capabilities inside that ONE bordered white panel — it has
+    no per-capability rect — whereas this engine renders one bordered
+    ``capability-chip``-styled cell PER capability (see ``product_box``
+    below). The panel geometry therefore can't be used verbatim as a
+    per-chip size; we derive one instead, from the SAME numbers:
+
+      * cell size — the panel's content box (panel size minus the
+        padX/padTop inset on both axes) divided across the reference grid
+        shape actually measured in that exemplar (2 columns x 2 rows — the
+        SBPA exemplar panel holds 4 capabilities);
+      * gap — the icon pitch minus the icon footprint (``gapX - iconW`` /
+        ``gapY - iconH``), i.e. the exemplar's own breathing room between
+        grid items, taking the smaller of the two axes.
+
+    Every input number is sourced from the contract via ``_geo()``; only the
+    divide-by-reference-grid step is this module's own (documented)
+    derivation, per the "geometry from the contract" principle in the module
+    docstring above (no bare, contract-disconnected literals)."""
+    g = _geo(contract, "capability-chip")
+    panel_w = _f(g, "w", 315.0)
+    panel_h = _f(g, "h", 135.0)
+    pad_x = _f(g, "padX", 42.5)
+    pad_top = _f(g, "padTop", 18.2)
+    gap_x = _f(g, "gapX", 87.36)
+    gap_y = _f(g, "gapY", 53.28)
+    icon_w = _f(g, "iconW", 32.0)
+    icon_h = _f(g, "iconH", 32.0)
+    cols_ref, rows_ref = 2.0, 2.0  # SSAM SBPA exemplar panel: 4 caps, 2x2 grid
+    cell_w = max(icon_w, (panel_w - 2 * pad_x) / cols_ref)
+    cell_h = max(icon_h, (panel_h - 2 * pad_top) / rows_ref)
+    gap = max(4.0, min(gap_x - icon_w, gap_y - icon_h))
+    return cell_w, cell_h, gap
 
 
 def product_box(
@@ -359,13 +419,14 @@ def product_box(
     title_row = _f(g, "titleRow", 48.08)
     base_w = _f(g, "w", 343.0)
     base_h = _f(g, "h", 199.85)
+    cap_w, cap_h, cap_gap = _capability_grid_geometry(contract)
 
     caps = list(getattr(node, "capabilities", None) or [])
     n = len(caps)
     cols = 1 if n <= 1 else 2
     rows = math.ceil(n / cols) if n else 0
-    grid_w = cols * _CAP_W + (cols - 1) * _CAP_GAP if cols else 0.0
-    grid_h = rows * _CAP_H + (rows - 1) * _CAP_GAP if rows else 0.0
+    grid_w = cols * cap_w + (cols - 1) * cap_gap if cols else 0.0
+    grid_h = rows * cap_h + (rows - 1) * cap_gap if rows else 0.0
 
     top = max(title_row, pad_x)  # clear the title row AND honour the padX margin
     box_w = max(base_w, grid_w + 2 * pad_x)
@@ -404,8 +465,8 @@ def product_box(
     chip_style = _style(contract, "capability-chip")
     for i, cap in enumerate(caps):
         col, row = i % cols, i // cols
-        cx = grid_x + col * (_CAP_W + _CAP_GAP)
-        cy = top + row * (_CAP_H + _CAP_GAP)
+        cx = grid_x + col * (cap_w + cap_gap)
+        cy = top + row * (cap_h + cap_gap)
         style = chip_style
         icon = cap.get("icon") if isinstance(cap, dict) else None
         uri = icon_resolver(icon) if (icon and icon_resolver) else None
@@ -422,8 +483,8 @@ def product_box(
                 "style": style,
                 "x": cx,
                 "y": cy,
-                "w": _CAP_W,
-                "h": _CAP_H,
+                "w": cap_w,
+                "h": cap_h,
                 "parent": "box",
                 "connectable": False,
             }
@@ -595,8 +656,7 @@ def custom_app_box(group: Any, contract: dict) -> list[dict]:
     badges = getattr(group, "badges", None) or {}
     x = _f(g, "padX", 80.08)
     for name in (badges.get("runtimes") or []):
-        slot = _badge_slot("runtime", str(name), contract)
-        slot["id"] = f"badge-runtime-{name}"
+        slot = _badge_slot("runtime", str(name), contract)  # id already set by _badge_slot
         slot["x"] = x
         slot["y"] = 8.0
         slot["parent"] = "frame"
@@ -690,16 +750,26 @@ def network_separator(x: float, y0: float, y1: float, contract: dict) -> list[di
     return [line, label]
 
 
-def branding_block(metadata: dict, contract: dict, brand_packs: dict) -> list[dict]:
+def branding_block(
+    metadata: dict,
+    contract: dict,
+    brand_packs: dict,
+    icon_resolver: Callable[[str], str | None] | None = None,
+    warnings: list[str] | None = None,
+) -> list[dict]:
     """Customer branding: an optional partner watermark, a customer-logo badge and
     a title cell. Each is an independent top-level cell (``parent`` is ``None``);
-    the emitter places them. Unresolved logos degrade to text-badges."""
+    the emitter places them. Unresolved logos degrade to text-badges — and, when
+    ``warnings`` is supplied, append the same de-duplicated preflight WARNING
+    every other badge slot gets (previously these two skipped that leg
+    entirely: ``badge()`` was called with no ``icon_resolver``/``warnings``,
+    so a missing customer logo or partner watermark degraded silently)."""
     cells: list[dict] = []
     branding = (metadata or {}).get("branding") or {}
 
     watermark = branding.get("partnerWatermark")
     if watermark:
-        wc = badge("watermark", str(watermark), contract, brand_packs)
+        wc = badge("watermark", str(watermark), contract, brand_packs, icon_resolver, warnings)
         wg = _geo(contract, "watermark")
         wc["id"] = "watermark"
         wc["w"] = _f(wg, "w", 842.64)
@@ -711,8 +781,8 @@ def branding_block(metadata: dict, contract: dict, brand_packs: dict) -> list[di
     if logo:
         # A customer logo is an image badge that degrades to a text chip with
         # the customer name (e.g. "ACME") when the (usually .local) asset is
-        # absent — badge() already applies that fallback.
-        lc = badge("hyperscaler", str(logo), contract, brand_packs)
+        # absent — badge() already applies that fallback (and now warns too).
+        lc = badge("hyperscaler", str(logo), contract, brand_packs, icon_resolver, warnings)
         lc["id"] = "customer-logo"
         lc["parent"] = None
         cells.append(lc)

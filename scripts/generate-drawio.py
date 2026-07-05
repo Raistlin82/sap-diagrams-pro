@@ -1293,11 +1293,16 @@ def _emit_branding_and_badges(
 ) -> None:
     """Emit metadata-level branding (customer logo + optional resolved watermark)
     and the diagram-level hyperscaler/runtime badge strip. All degrade to
-    text-badges when the (usually .local) brand assets are absent."""
+    text-badges when the (usually .local) brand assets are absent — and, since
+    ``icon_resolver``/``warnings`` are threaded through to ``branding_block``/
+    ``badge`` below, every one of those degradations now runs the same
+    shape-index resolution leg and emits the same de-duplicated preflight
+    WARNING as the group-badge path (``_place_molecule``)."""
     M = _molecules_module()
     if diagram.branding:
         cells = M.branding_block(
-            {"branding": diagram.branding, "title": diagram.title}, contract, brand_packs
+            {"branding": diagram.branding, "title": diagram.title}, contract, brand_packs,
+            icon_resolver, warnings,
         )
         x_right = canvas_w - 40
         for c in cells:
@@ -1334,7 +1339,7 @@ def _emit_branding_and_badges(
         y = 48.0
         for kind, coll in (("hyperscaler", "hyperscalers"), ("runtime", "runtimes")):
             for name in (diagram.badges.get(coll) or []):
-                b = M.badge(kind, str(name), contract, brand_packs)
+                b = M.badge(kind, str(name), contract, brand_packs, icon_resolver, warnings)
                 if not (b.get("value") or "").strip() and "shape=image" not in b.get("style", ""):
                     continue
                 w, h = b["w"], b["h"]
