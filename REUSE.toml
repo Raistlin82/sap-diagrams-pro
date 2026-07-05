@@ -18,3 +18,9 @@ path = [
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Gabriele Capparelli"
 SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "assets/brand-pack/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "SAP SE or an SAP affiliate company"
+SPDX-License-Identifier = "Apache-2.0"
