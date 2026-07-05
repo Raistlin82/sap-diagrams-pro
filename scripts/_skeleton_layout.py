@@ -75,7 +75,10 @@ from typing import Any
 # ── Sizing atoms (moved UNCHANGED from _zone_layout.py; kept in sync with the
 #    renderer via icon_size()) ────────────────────────────────────────────────
 LABEL_H = 24          # vertical room reserved under an icon for its caption
-CHAR_W = 6.6          # ~Helvetica advance at 12px, for label-width estimates
+# CHAR_W (≈Helvetica advance at 12px, for label-width estimates) is the SINGLE
+# source of truth in _molecules.CHAR_W; it's re-exported below (right after the
+# molecule loader is defined) so this module's _text_w and _molecules._title_w
+# can't drift apart. See DRY note there.
 TEXT_MIN, TEXT_MAX = 44, 150
 
 NODE_GAP = 34         # gap between nodes inside a leaf group (room for edge pills)
@@ -133,6 +136,14 @@ def _molecules():
         spec.loader.exec_module(mod)
         _MOL = mod
     return _MOL
+
+
+# DRY (review FIX-4): re-export the label-advance constant from _molecules so the
+# 6.6 literal lives in exactly one place. Eager (the skeleton layout always needs
+# _molecules for footprints anyway); _molecules never imports this module, so
+# there's no circular import. Kept as a module attribute so existing sl.CHAR_W
+# readers keep working.
+CHAR_W = _molecules().CHAR_W
 
 
 def icon_size(level: str) -> int:

@@ -268,6 +268,40 @@ def test_tier_box_title_is_own_top_left_cell(M, contract):
     assert title[0]["y"] < 40
 
 
+# FIX-1 (review): the frame title hugs the TOP of its reserved band. The contract
+# title-block is verticalAlign=middle; every frame builder appends
+# verticalAlign=top (and keeps align=left) so the title sits at the top-left, not
+# floating mid-cell.
+@pytest.mark.parametrize("builder,group", [
+    ("subaccount_frame", NS(id="sa", label="A", kind=None, badges=None)),
+    ("governance_strip", NS(id="gov", label="G", badges=None)),
+    ("tier_box", NS(id="t", label="T", kind="public", badges=None)),
+    ("custom_app_box", NS(id="ca", label="C", badges=None)),
+])
+def test_frame_title_cell_is_top_aligned(M, contract, builder, group):
+    cells = getattr(M, builder)(group, contract)
+    title = [c for c in cells if c["id"] == "frame-title"][0]
+    assert "verticalAlign=top" in title["style"], f"{builder}: title not top-aligned"
+    assert "align=left" in title["style"]
+
+
+# FIX-5 (review): a long custom-app label spans the full frame width at the top,
+# so the runtime badge row must sit BELOW the title band — never under the title
+# text (the old row was top-anchored at y=8, overlapping a long title).
+def test_custom_app_box_runtime_badges_below_title(M, contract):
+    g = NS(id="ca", label="A Very Long Custom Application Title Indeed",
+           badges={"runtimes": ["cloud-foundry", "kyma"]})
+    cells = M.custom_app_box(g, contract)
+    title = [c for c in cells if c["id"] == "frame-title"][0]
+    badges = [c for c in cells if c["id"].startswith("badge-")]
+    assert badges, "expected runtime badge slots"
+    title_bottom = title["y"] + title["h"]
+    for b in badges:
+        assert b["y"] >= title_bottom, (
+            f"badge {b['id']!r} at y={b['y']} overlaps the title band "
+            f"(bottom {title_bottom})")
+
+
 def test_subaccount_shows_chip_rule(M):
     # Outermost BTP container (top-level, or parented to a non-BTP group) shows
     # the chip; a subaccount nested in a btp-layer/subaccount suppresses it.
@@ -320,6 +354,10 @@ def test_network_separator(M, contract):
     # The "NETWORK" caption sits near the BOTTOM of the bar (gold standard
     # SAP_Task_Center_L1), not at its top.
     assert label["y"] > (100 + 700) / 2
+    # FIX-3 (review): the caption is CENTERED on the separator x so it reads
+    # INSIDE the gutter — its horizontal midpoint is the bar's x (previously it
+    # was hard-left-aligned at x - label_w + 2, overhanging the center column).
+    assert label["x"] + label["w"] / 2 == pytest.approx(500.0)
 
 
 def test_branding_block_fallbacks(M, contract):

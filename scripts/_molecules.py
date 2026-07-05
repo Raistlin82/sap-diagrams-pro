@@ -581,15 +581,19 @@ TIER_BADGE_BOTTOM_MARGIN = 14.0
 # cell (top-left, beside any chip) instead of the frame `value` — draw.io
 # middle-centres a frame value over the packed children, which floated titles
 # dead-centre on tall frames. ``_title_w`` estimates the caption width (12px
-# Helvetica ≈ 6.6px/char, matching _skeleton_layout.CHAR_W) so the frame-min
-# reserves room for chip + title on one header line.
-TITLE_CHAR_W = 6.6
+# Helvetica ≈ 6.6px/char) so the frame-min reserves room for chip + title on one
+# header line. ``CHAR_W`` is the SINGLE source of truth for that advance:
+# _skeleton_layout re-exports it (its ``_text_w`` uses the same value), so the
+# frame-min estimate here and the layout's label-width estimate there can't drift
+# apart. It lives in THIS module because _skeleton_layout depends on _molecules
+# (never the reverse), so the shared constant belongs in the lower module.
+CHAR_W = 6.6            # ≈Helvetica advance at 12px, for label-width estimates
 TITLE_H = 24.0          # height of a standalone top-left frame-title cell
 HEADER_GAP = 8.0        # gap between the SAP BTP chip and the title beside it
 
 
 def _title_w(label: str, cap: float = 240.0) -> float:
-    return min(cap, max(40.0, len(label or "") * TITLE_CHAR_W + 12.0))
+    return min(cap, max(40.0, len(label or "") * CHAR_W + 12.0))
 
 
 def subaccount_shows_chip(group_type: str | None, parent_type: str | None) -> bool:
@@ -612,11 +616,17 @@ def _frame_title_cell(group: Any, contract: dict, x: float, y: float,
     ``title-block`` (``align=left`` already). Fills the frame width to the right
     of ``x`` so the label reads on one header line. The frame's ``value`` is
     left empty by every builder so draw.io can't middle-centre a title over the
-    packed children."""
+    packed children.
+
+    The contract ``title-block`` is ``verticalAlign=middle``; we append
+    ``verticalAlign=top`` (a positioning override, not a colour literal — the
+    no-style-literals guard only greps for hardcoded fill/stroke colour hexes)
+    so the label hugs the TOP of its reserved band instead of floating mid-cell,
+    which is what the T6-review fix intended."""
     return {
         "id": "frame-title",
         "value": getattr(group, "label", "") or "",
-        "style": _style(contract, "title-block"),
+        "style": _style(contract, "title-block") + "verticalAlign=top;",
         "x": x,
         "y": y,
         "w": max(40.0, box_w - x - 8.0),
@@ -674,7 +684,9 @@ def frame_insets(group: Any, contract: dict) -> tuple[float, float, float]:
         pad_top = _f(g, "padTop", 35.0) + (brow_h + 8.0 if brow_h else 8.0)
         return 24.0, pad_top, 16.0
     if gtype == "custom-app":
-        # runtime badge row is drawn at y=8 (top); reserve label + that row.
+        # title band at the top; the runtime badge row is drawn just BELOW it
+        # (custom_app_box, FIX-5). Reserve title + that row so packed children
+        # start beneath both.
         return 16.0, 40.0 + (brow_h if brow_h else 0.0), 16.0
     if gtype == "cloud-tier":
         # label at the top; the badge row reflows to the BOTTOM (pad_bot holds it).
@@ -886,13 +898,20 @@ def custom_app_box(group: Any, contract: dict, size: tuple[float, float] | None 
         "parent": None,
     }
     # FIX-A: label top-left, never the middle-centred frame value.
-    cells = [frame, _frame_title_cell(group, contract, 16.0, 10.0, box_w)]
+    title_y = 10.0
+    cells = [frame, _frame_title_cell(group, contract, 16.0, title_y, box_w)]
     badges = getattr(group, "badges", None) or {}
     x = _f(g, "padX", 80.08)
+    # FIX-5 (review): the runtime badge row sits BELOW the title band, not at the
+    # old y=8. The title cell spans the full frame width, so a long custom-app
+    # label would render over a top-anchored badge row. ``frame_insets``'
+    # custom-app ``pad_top`` already reserves ``title + this row``, so packed
+    # children still start beneath both.
+    badge_y = title_y + TITLE_H + 4.0
     for name in (badges.get("runtimes") or []):
         slot = _badge_slot("runtime", str(name), contract)  # id already set by _badge_slot
         slot["x"] = x
-        slot["y"] = 8.0
+        slot["y"] = badge_y
         slot["parent"] = "frame"
         cells.append(slot)
         x += slot["w"] + 8.0
@@ -978,9 +997,11 @@ def network_separator(x: float, y0: float, y1: float, contract: dict) -> list[di
         "value": "NETWORK",
         "style": _style(contract, "network-separator-label"),
         # Caption near the BOTTOM of the bar (gold standard SAP_Task_Center_L1),
-        # nudged just left of the bar so it reads in the gutter rather than
-        # over the right-stack boxes.
-        "x": float(x) - label_w + 2.0,
+        # CENTERED on the bar so it reads inside the gutter (FIX-3). The old
+        # ``x - label_w + 2`` hard-left-aligned the 80px label at x-78, but the
+        # gutter half-width is only ~ZONE_HGAP/2 (~48px), so ~30px overhung the
+        # center column; centring at ``x - label_w/2`` keeps it within the gutter.
+        "x": float(x) - label_w / 2.0,
         "y": float(y1) - label_h - 6.0,
         "w": label_w,
         "h": label_h,

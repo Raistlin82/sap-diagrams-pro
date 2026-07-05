@@ -448,3 +448,65 @@ def test_network_separator_deterministic(gen, sl):
     lay1 = _compute(gen, sl, V2)
     lay2 = _compute(gen, sl, V2)
     assert lay1["meta"]["networkSeparator"] == lay2["meta"]["networkSeparator"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-2 (review): guard-rail — a frame's top-band title must never overlap its
+# packed children. The invariant (min(child.y) >= title.y + title.h) holds by
+# construction because frame_insets reserves pad_top >= the title band, but
+# nothing tested it: a future TITLE_H / contract padTop bump could silently
+# reintroduce the overlap. Exercised END TO END per frame type (build the frame
+# via compute_layout, draw the title via the molecule builder at the SAME size),
+# most importantly the subaccount-with-chip case (chip + title share the header).
+# ─────────────────────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("gid,group,builder,show_chip", [
+    ("sa", {"id": "sa", "type": "subaccount",
+            "label": "A Very Long Subaccount Name That Would Overlap Its Content",
+            "position": "center"}, "subaccount_frame", True),
+    ("gov", {"id": "gov", "type": "governance",
+             "label": "A Very Long Governance Band Title That Would Overlap",
+             "position": "top"}, "governance_strip", None),
+    ("tier", {"id": "tier", "type": "cloud-tier", "kind": "public",
+              "label": "A Very Long Cloud Tier Title That Would Overlap",
+              "position": "right"}, "tier_box", None),
+    ("ca", {"id": "ca", "type": "custom-app",
+            "label": "A Very Long Custom App Title That Would Overlap Content",
+            "position": "right"}, "custom_app_box", None),
+])
+def test_frame_title_never_overlaps_children(gen, sl, gid, group, builder, show_chip):
+    M = load_script("_molecules")
+    contract = M.load_contract()
+    ir = {"metadata": {"title": "t", "level": "L1"}, "groups": [group],
+          "nodes": [{"id": "n1", "label": "Node One", "group": gid, "service": "Event Mesh"}],
+          "edges": []}
+    diagram = gen.parse_json(ir)
+    lay = sl.compute_layout(diagram, gen.ShapeIndex.load())
+    _fx, fy, fw, fh = lay["groups"][gid]
+    grp = next(g for g in diagram.groups if g.id == gid)
+    fn = getattr(M, builder)
+    cells = (fn(grp, contract, size=(fw, fh), show_chip=show_chip)
+             if show_chip is not None else fn(grp, contract, size=(fw, fh)))
+    title = [c for c in cells if c["id"] == "frame-title"][0]
+    title_abs_bottom = fy + title["y"] + title["h"]
+    min_child_y = min(lay["nodes"][n.id][1]
+                      for n in diagram.nodes if n.group == gid)
+    assert min_child_y >= title_abs_bottom, (
+        f"{gid}: first child at y={min_child_y} overlaps the title band "
+        f"(bottom {title_abs_bottom})")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-4 (review, DRY): the label-advance constant lives once, in
+# _molecules.CHAR_W; _skeleton_layout re-exports it (its _text_w uses the same
+# value) so the frame-min estimate and the layout label-width estimate can't
+# drift apart. No duplicated 6.6 literal.
+# ─────────────────────────────────────────────────────────────────────────────
+def test_char_width_centralized_in_molecules(sl):
+    M = load_script("_molecules")
+    assert M.CHAR_W == 6.6
+    assert sl.CHAR_W == M.CHAR_W
+    # both scale by the shared advance (mid-range string dodges the clamps)
+    s = "x" * 15
+    assert M._title_w(s) == pytest.approx(min(240.0, max(40.0, 15 * M.CHAR_W + 12.0)))
+    assert sl._text_w(s) == pytest.approx(
+        min(sl.TEXT_MAX, max(sl.TEXT_MIN, 15 * M.CHAR_W + 12)))
