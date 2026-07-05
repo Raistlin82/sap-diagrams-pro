@@ -158,6 +158,22 @@ def test_identity_slot_by_parent(gen, sl):
     assert _contains(ident2, btp2), f"parented identity {ident2} not inside btp {btp2}"
 
 
+def test_identity_techid_marker_matches_shape_index_typo(gen, sl):
+    """FIX-5: assets/shape-index.json's real techId for Identity Provisioning is
+    misspelled ("...identity-provisoning", missing the 2nd 'i') — the marker
+    tuple must match the DATA as it actually is, or the techId fallback
+    silently never fires. Uses the "IP" alias (not a literal "identity
+    provisioning" substring) so a hit can ONLY come through the techId path,
+    not the (already-working) service-name marker path."""
+    from types import SimpleNamespace as NS
+    shape_index = gen.ShapeIndex.load()
+    resolved = shape_index.resolve("IP")
+    assert resolved and "provisoning" in resolved["techId"].lower(), \
+        "fixture assumption: shape-index still misspells this techId"
+    node = NS(id="n", service="IP")
+    assert sl._is_identity_group(NS(id="g"), {"g": [node]}, shape_index)
+
+
 def test_governance_above_center(gen, sl):
     """A governance group is banded across the TOP, above the center column."""
     lay = _compute(gen, sl, V2)
@@ -211,8 +227,13 @@ def test_product_footprint_exceeds_icon(gen, sl):
 
 
 def test_tier_box_reflow_keeps_badges_at_bottom(gen, sl):
-    """A tier_box grown taller than its contract height reflows its badge row to
-    the true bottom edge — not floating at the contract reference height."""
+    """A tier_box grown taller than its contract height reflows its badge row
+    so it stays fully INSIDE the frame (badge bottom edge never past the
+    frame's own bottom border) and anchored to the bottom band, not floating
+    mid-box. (Review fix: this used to assert the buggy fixed offset
+    ``grown_h - 42.0``, which put a 55px-tall hyperscaler badge's bottom edge
+    ~13px PAST the frame border — enshrining the bug instead of catching it.)
+    """
     M = load_script("_molecules")
     contract = M.load_contract()
     from types import SimpleNamespace as NS
@@ -224,8 +245,82 @@ def test_tier_box_reflow_keeps_badges_at_bottom(gen, sl):
     badges = [c for c in cells if c["id"].startswith("badge-")]
     assert badges, "expected badge slots"
     for b in badges:
-        assert b["y"] == pytest.approx(grown_h - 42.0), \
-            "badge row must sit at final_h-42, i.e. bottom-anchored to the grown frame"
+        badge_bottom = b["y"] + b["h"]
+        assert badge_bottom <= grown_h, \
+            f"badge {b['id']!r} bottom {badge_bottom} overflows the grown frame ({grown_h})"
+        assert b["y"] > grown_h / 2, \
+            f"badge {b['id']!r} must sit in the bottom half of the frame"
+    # The row is top-aligned at a shared y (shorter badges, e.g. the 32px
+    # runtime badge, sit above their own bottom edge within that shared row —
+    # that's unrelated pre-existing row layout, not this fix) — so "hugs the
+    # bottom band" is a property of the row's overall bottom (its TALLEST
+    # badge), not each individual badge.
+    row_bottom = max(b["y"] + b["h"] for b in badges)
+    assert grown_h - row_bottom <= 20, \
+        f"badge row must hug the bottom band, not float mid-box " \
+        f"(gap to frame bottom = {grown_h - row_bottom})"
+
+
+def test_tier_box_badges_stay_inside_layout_computed_frame(gen, sl):
+    """Integration: run the real skeleton layout on ir-v2-sample, take the
+    FINAL frame size ``compute_layout`` assigns the fixture's
+    ``cloud-tier-right`` group (which carries a hyperscaler + a runtime
+    badge), and render that group's tier_box at that exact size — the same
+    two-step ``generate-drawio.py`` performs at emit time. The emitted badge
+    cells must sit fully inside their frame (badge bottom ≤ frame bottom):
+    proof that frame_insets' RESERVE and tier_box's DRAW offset agree end to
+    end, not just in the synthetic unit test above."""
+    M = load_script("_molecules")
+    contract = M.load_contract()
+    payload = json.loads(V2.read_text(encoding="utf-8"))
+    diagram = gen.parse_json(payload)
+    lay = sl.compute_layout(diagram, gen.ShapeIndex.load())
+    gid = "cloud-tier-right"
+    _x, _y, box_w, box_h = lay["groups"][gid]
+    group = next(g for g in diagram.groups if g.id == gid)
+    assert group.badges, "fixture must carry badges to exercise the reflow"
+    cells = M.tier_box(group, contract, size=(box_w, box_h))
+    badges = [c for c in cells if c["id"].startswith("badge-")]
+    assert badges, "expected badge slots for the fixture's hyperscaler/runtime badges"
+    for b in badges:
+        assert b["y"] + b["h"] <= box_h, (
+            f"badge {b['id']!r} bottom {b['y'] + b['h']} overflows the frame "
+            f"computed by compute_layout (h={box_h})"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cyclic / self group-parent must not silently drop groups (FIX-3).
+# ─────────────────────────────────────────────────────────────────────────────
+def test_cyclic_group_parent_falls_back_to_top_level(gen, sl, capsys):
+    """A 2-node parent cycle (cycle-a.parent=cycle-b, cycle-b.parent=cycle-a)
+    must not silently vanish: compute_layout warns on stderr AND still places
+    both groups (and their nodes) — at top level, as a fallback — instead of
+    dropping them because neither is reachable from a real (parent=None)
+    root."""
+    ir = {
+        "metadata": {"title": "cycle", "level": "L1"},
+        "groups": [
+            {"id": "cycle-a", "type": "btp-layer", "label": "A", "parent": "cycle-b"},
+            {"id": "cycle-b", "type": "btp-layer", "label": "B", "parent": "cycle-a"},
+        ],
+        "nodes": [
+            {"id": "na", "label": "NA", "group": "cycle-a"},
+            {"id": "nb", "label": "NB", "group": "cycle-b"},
+        ],
+        "edges": [],
+    }
+    lay = sl.compute_layout(gen.parse_json(ir), gen.ShapeIndex.load())
+
+    # Nothing silently disappeared: both groups and both nodes ARE placed.
+    assert "cycle-a" in lay["groups"] and "cycle-b" in lay["groups"]
+    assert "na" in lay["nodes"] and "nb" in lay["nodes"]
+    assert not _overlap(lay["groups"]["cycle-a"], lay["groups"]["cycle-b"])
+
+    stderr = capsys.readouterr().err
+    assert "cyclic/unreachable parent" in stderr
+    assert "cycle-a" in stderr
+    assert "cycle-b" in stderr
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -234,15 +329,42 @@ def test_tier_box_reflow_keeps_badges_at_bottom(gen, sl):
 def test_meta_shape(gen, sl):
     lay = _compute(gen, sl, V2)
     meta = lay["meta"]
+    diagram = gen.parse_json(json.loads(V2.read_text()))
+    all_group_ids = {g.id for g in diagram.groups}
+
     assert set(meta["slots"]) == set(sl.SLOTS)
     # every top-level group appears in exactly one slot
     placed = [gid for ids in meta["slots"].values() for gid in ids]
-    top_level = [g.id for g in gen.parse_json(json.loads(V2.read_text())).groups if not g.parent]
+    top_level = [g.id for g in diagram.groups if not g.parent]
     assert sorted(placed) == sorted(top_level)
-    # lanes carry flow-ordered node ids per group; ranks cover every node
+
+    # slot_of is the reverse of slots: exactly the top-level groups, each
+    # mapped to the one slot it was placed into.
+    assert set(meta["slot_of"]) == set(top_level)
+    for gid in top_level:
+        assert gid in meta["slots"][meta["slot_of"][gid]]
+
+    # lanes carry flow-ordered node ids per group, and now cover EVERY group —
+    # a node-less CONTAINER (e.g. "btp", which only nests subaccounts, and
+    # "subaccount-test", which only nests subaccount-production) gets an
+    # empty list rather than being absent.
     assert all(isinstance(v, list) for v in meta["lanes"].values())
-    assert set(meta["ranks"]) == {n.id for n in gen.parse_json(json.loads(V2.read_text())).nodes}
+    assert set(meta["lanes"]) == all_group_ids
+    assert meta["lanes"]["btp"] == []
+    assert meta["lanes"]["subaccount-test"] == []
+    assert meta["lanes"]["subaccount-production"], "leaf frame must keep its real lane"
+
+    assert set(meta["ranks"]) == {n.id for n in diagram.nodes}
     assert meta["identity"] == ["identity"]
+
+    # columns: x-extent per column, ordered left-to-right with no overlap —
+    # the shared source of truth for Task 7's NETWORK separator / Task 8's
+    # router.
+    assert set(meta["columns"]) == {"left", "center", "right"}
+    for name, (x0, x1) in meta["columns"].items():
+        assert x0 <= x1, f"column {name!r} has a backwards extent {(x0, x1)}"
+    assert meta["columns"]["left"][1] <= meta["columns"]["center"][0]
+    assert meta["columns"]["center"][1] <= meta["columns"]["right"][0]
 
 
 def test_return_dict_shape(gen, sl):

@@ -46,8 +46,20 @@ Returns the shape the renderer expects (identical to the old zone backend) plus 
 
     {"groups": {gid:(x,y,w,h)}, "nodes": {nid:(x,y,w,h)}, "edges": {},
      "canvas": (w,h),
-     "meta": {"slots": {slot:[gid…]}, "lanes": {gid:[nid…]},
-              "ranks": {nid:int}, "identity": [gid…]}}
+     "meta": {"slots": {slot:[gid…]}, "slot_of": {gid:slot},
+              "lanes": {gid:[nid…]}, "ranks": {nid:int}, "identity": [gid…],
+              "columns": {"left"|"center"|"right": (x0,x1)}}}
+
+``slot_of`` is the reverse of ``slots`` (every top-level group's own slot).
+``lanes`` covers EVERY group — including node-less containers that only nest
+other groups, and empty leaf frames — with ``[]`` when it has no direct nodes.
+``columns`` is the x-extent of each vertical column (zero-width at the cursor
+when a column is empty): the single source of truth for column boundaries
+shared with Task 7's NETWORK separator and Task 8's router.
+
+A group whose ``parent`` cycles (A→B→A, or a self-parent) or dangles on an id
+that doesn't exist is placed at top level as a fallback (with a stderr
+warning) rather than silently dropped — see ``_group_reaches_top_level``.
 
 All coordinates absolute (drawio top-left origin). Pure-Python, no external
 process, no datetime/random → byte-identical re-runs.
@@ -56,6 +68,7 @@ from __future__ import annotations
 
 import importlib.util as _ilu
 import math
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -90,7 +103,13 @@ SLOTS = ("branding", "left", "top", "center", "right", "bottom")
 # / Keystore / …). Detected by the resolved service's techId or its raw name.
 _IDENTITY_TECHID_MARKERS = (
     "cloud-identity", "identity-authentication",
-    "identity-provisioning", "authorization-and-trust",
+    "identity-provisioning",
+    "identity-provisoning",  # sic — assets/shape-index.json misspells this
+    # techId ("…-sap-identity-provisoning") for BOTH its S/M ("32072-…") and
+    # L ("48072-…") entries; kept alongside the correct spelling so the
+    # fallback matches the real (typo'd) data instead of silently never
+    # firing, without assuming the upstream data typo gets fixed.
+    "authorization-and-trust",
 )
 _IDENTITY_NAME_MARKERS = (
     "identity authentication", "identity provisioning",
@@ -219,15 +238,30 @@ def _padding(group_type: str, has_children: bool) -> tuple[float, float, float]:
     return 16.0, 32.0, 14.0
 
 
-def _leaf_mode(group, group_type: str, n: int) -> str:
+def _pack_mode(group, group_type: str, n: int, *, row_max: int) -> str:
+    """'row' | 'col' | 'grid' to pack ``n`` same-tier items inside ``group``.
+
+    Single source of truth for the "row when there are few enough items, else
+    grid" packing decision — shared by ``_leaf_mode`` (a childless group's
+    direct nodes) and, inside ``measure()``, both a has-children group's OWN
+    direct-node pack and its outer children/lane pack. Those three used to
+    each inline a copy of this threshold check; the has-children copies had
+    silently drifted from ``_leaf_mode`` (they dropped the user/backend-box
+    "col" preference below), so a person/backend-box group with nested
+    children would pack differently than one without. An explicit
+    ``group.flow`` always wins, regardless of caller.
+    """
     flow = getattr(group, "flow", None)
     if flow in ("row", "col", "grid"):
         return flow
     if group_type == "user" or group_type in BACKEND_TYPES:
         return "col"                      # stack people / backend boxes vertically
-    if group_type in MOLECULE_GROUP_TYPES:
-        return "row" if n <= 2 else "grid"  # products/services pack compactly
-    return "row" if n <= 4 else "grid"    # BTP services: row when few, else grid
+    return "row" if n <= row_max else "grid"
+
+
+def _leaf_mode(group, group_type: str, n: int) -> str:
+    row_max = 2 if group_type in MOLECULE_GROUP_TYPES else 4
+    return _pack_mode(group, group_type, n, row_max=row_max)
 
 
 # ── Flow ranking ─────────────────────────────────────────────────────────────
@@ -292,6 +326,34 @@ def _has_any_edge(diagram) -> set[str]:
     return touched
 
 
+# ── Group-parent cycle detection ─────────────────────────────────────────────
+def _group_reaches_top_level(gid: str, groups_by_id: dict) -> bool:
+    """True when walking ``gid``'s ``.parent`` chain terminates at a genuine
+    top-level group (``parent`` is ``None``).
+
+    False when the chain cycles back on itself (a self-parent, or a longer
+    cycle like A→B→A) or dangles on a parent id that isn't a real group.
+    ``compute_layout`` only measures/places groups reachable from a top-level
+    ancestor by construction (each group is nested via its parent's own
+    measure() recursion); a group stuck in either failure mode would
+    otherwise never be reachable from anywhere and — together with its nodes
+    — silently vanish from the emitted layout instead of surfacing the
+    malformed input.
+    """
+    seen: set[str] = set()
+    cur = gid
+    while True:
+        if cur in seen:
+            return False                  # cycle (self-parent included)
+        seen.add(cur)
+        g = groups_by_id.get(cur)
+        if g is None:
+            return False                  # dangling parent reference
+        if not g.parent:
+            return True                   # reached a genuine top-level root
+        cur = g.parent
+
+
 # ── Identity detection ───────────────────────────────────────────────────────
 def _is_identity_group(group, nodes_by_group, shape_index) -> bool:
     nodes = nodes_by_group.get(group.id, [])
@@ -328,9 +390,24 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
     contract = M.load_contract()
 
     groups_by_id = {g.id: g for g in diagram.groups}
+
+    # A group whose .parent chain cycles (A→B→A, self-parent) or dangles on a
+    # non-existent id never reaches a parent=None root, so it would never be
+    # visited by the top-level-only measure/place pass below — silently
+    # dropping it AND its nodes. Detect those up front, warn, and fall back to
+    # placing each one at top level (see _group_reaches_top_level).
+    stuck_ids = {g.id for g in diagram.groups
+                 if not _group_reaches_top_level(g.id, groups_by_id)}
+    for gid in stuck_ids:
+        print(f"WARNING: group {gid!r} has a cyclic/unreachable parent; "
+              "placing at top level", file=sys.stderr)
+
     children_by_parent: dict[str, list] = {}
     for g in diagram.groups:
-        if g.parent:
+        # A stuck group is placed at top level instead (below), so it must NOT
+        # also be measured as a nested child via its cyclic/dangling parent —
+        # that would recurse forever (A contains B contains A…).
+        if g.parent and g.id not in stuck_ids:
             children_by_parent.setdefault(g.parent, []).append(g)
     nodes_by_group: dict[str, list] = {}
     orphans: list = []
@@ -385,13 +462,12 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
             blocks: list[tuple[float, float]] = []
             direct_pack = None
             if node_fps:
-                dmode = getattr(group, "flow", None) or (
-                    "row" if len(node_fps) <= (2 if is_mol else 4) else "grid")
+                dmode = _leaf_mode(group, gtype, len(node_fps))
                 dpos, dW, dH = _pack([(w, h) for _, w, h in node_fps], dmode, NODE_GAP)
                 direct_pack = (dpos, dW, dH)
                 blocks.append((dW, dH))
             blocks += [(cm.w, cm.h) for cm in rest_meas]
-            bmode = getattr(group, "flow", None) or ("row" if len(blocks) <= 3 else "grid")
+            bmode = _pack_mode(group, gtype, len(blocks), row_max=3)
             bpos, mainW, mainH = _pack(blocks, bmode, LANE_GAP)
 
             # optional identity bottom band (stacked under the main content)
@@ -440,7 +516,7 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
 
         return _Meas(group.id, box_w, box_h, node_rel, child_rel)
 
-    top_level = [g for g in diagram.groups if not g.parent]
+    top_level = [g for g in diagram.groups if not g.parent or g.id in stuck_ids]
     measures = {g.id: measure(g) for g in top_level}
 
     # ---- assign slots -------------------------------------------------------
@@ -483,10 +559,18 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
             place(cm, x + rx, y + ry)
 
     col_center_x: dict[str, float] = {}
+    # x-extent (x0, x1) of each column, regardless of whether it holds any
+    # content — a zero-width (cursor, cursor) slice when empty — so Task 7's
+    # NETWORK separator (between "center" x1 and "right" x0) and Task 8's
+    # router share this engine's own column geometry instead of recomputing
+    # it (see meta["columns"] below).
+    col_x_extent: dict[str, tuple[float, float]] = {}
     cursor = float(MARGIN)
     for c in ("left", "center", "right"):
         gs = cols[c]
+        x0 = cursor
         if not gs:
+            col_x_extent[c] = (x0, x0)
             continue
         cw = col_w[c]
         col_center_x[c] = cursor + cw / 2.0
@@ -495,6 +579,7 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
             m = measures[g.id]
             place(m, cursor + (cw - m.w) / 2.0, y)
             y += m.h + ZONE_VGAP
+        col_x_extent[c] = (x0, x0 + cw)
         cursor += cw + ZONE_HGAP
 
     columns_right = cursor - ZONE_HGAP if cursor > MARGIN else MARGIN
@@ -554,9 +639,24 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
         "canvas": (canvas_w, canvas_h),
         "meta": {
             "slots": {s: list(slots[s]) for s in SLOTS},
-            "lanes": {gid: list(order) for gid, order in lanes.items()},
+            # Reverse of "slots": the slot each top-level group landed in.
+            "slot_of": dict(slot_of),
+            # Every group gets a lanes entry, not just ones with direct
+            # nodes — a node-less CONTAINER group (e.g. a "btp" group that
+            # only nests subaccounts) previously had no key at all here,
+            # which a router walking "every group's lane" would trip on.
+            # Empty list covers both pure containers and genuinely-empty
+            # leaf frames alike.
+            "lanes": {gid: list(lanes.get(gid, [])) for gid in groups_by_id},
             "ranks": {nid: ranks[nid] for nid in ir_index},
             "identity": sorted(identity_ids),
+            # x-extent (x0, x1) of each vertical column, in canvas
+            # coordinates — the ONE source of truth for column boundaries
+            # (Task 7's NETWORK separator sits between "center"[1] and
+            # "right"[0]; Task 8's router shares the same numbers instead of
+            # re-deriving them).
+            "columns": {c: (int(round(col_x_extent[c][0])), int(round(col_x_extent[c][1])))
+                        for c in ("left", "center", "right")},
         },
     }
 

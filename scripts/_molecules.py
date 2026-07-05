@@ -568,6 +568,14 @@ def persona(
 # edge instead of floating at the contract's reference height.
 # ─────────────────────────────────────────────────────────────────────────────
 BADGE_GAP = 8.0  # horizontal gap between adjacent badge slots (see _append_badge_slots)
+# Vertical clearance a bottom-anchored badge row keeps from its frame's OWN
+# bottom border (cloud-tier). MUST match frame_insets' cloud-tier pad_bot
+# reserve (``brow_h + TIER_BADGE_BOTTOM_MARGIN``) — tier_box draws the row at
+# ``box_h - brow_h - TIER_BADGE_BOTTOM_MARGIN`` so the reserve and the draw
+# offset share one number and can't drift apart again (they previously did:
+# the reserve was right, but the draw offset was a stale ``box_h - 42.0``
+# that let a 55px-tall hyperscaler badge overflow the frame bottom by ~13px).
+TIER_BADGE_BOTTOM_MARGIN = 14.0
 
 
 def _has_badges(group: Any) -> bool:
@@ -622,7 +630,7 @@ def frame_insets(group: Any, contract: dict) -> tuple[float, float, float]:
         return 16.0, 40.0 + (brow_h if brow_h else 0.0), 16.0
     if gtype == "cloud-tier":
         # label at the top; the badge row reflows to the BOTTOM (pad_bot holds it).
-        return 10.0, 24.0, (brow_h + 14.0 if brow_h else 12.0)
+        return 10.0, 24.0, (brow_h + TIER_BADGE_BOTTOM_MARGIN if brow_h else 12.0)
     return 16.0, 32.0, 14.0
 
 
@@ -749,9 +757,18 @@ def tier_box(group: Any, contract: dict, size: tuple[float, float] | None = None
     """Cloud-tier → SAP-blue box for ``public``/``private``, non-SAP grey box for
     ``any-premise`` (matches SSAM/Brandart), plus any brand chips (badge slots).
 
-    The badge row is BOTTOM-anchored (``box_h - 42``); when the layout grows the
-    box taller than the contract reference height it passes the final ``size``
-    here so the row reflows to the true bottom edge instead of floating."""
+    The badge row is BOTTOM-anchored to ``box_h - badge_row_h -
+    TIER_BADGE_BOTTOM_MARGIN``, where ``badge_row_h`` is the tallest badge
+    actually present (55 for a hyperscaler, 32 for a runtime-only row) — the
+    SAME reserve ``frame_insets`` adds as this frame's ``pad_bot``. So the
+    row's bottom edge always sits ``TIER_BADGE_BOTTOM_MARGIN`` px inside the
+    frame's own bottom border, never past it. (A prior version anchored at a
+    fixed ``box_h - 42``, which put a 55px-tall hyperscaler badge's bottom
+    edge ~13px BELOW the frame border whenever the frame was at/near its
+    contract reference height — the reserve was already correct; only this
+    draw offset had drifted from it.) When the layout grows the box taller
+    than the contract reference height it passes the final ``size`` here so
+    the row reflows to the true bottom edge instead of floating."""
     kind = (getattr(group, "kind", None) or "public").lower()
     molname = "tier-box-nonsap" if kind == "any-premise" else "tier-box-sap"
     g = _geo(contract, molname)
@@ -767,7 +784,9 @@ def tier_box(group: Any, contract: dict, size: tuple[float, float] | None = None
         "parent": None,
     }
     cells = [frame]
-    _append_badge_slots(cells, group, contract, "frame", 10.0, box_h - 42.0)
+    badge_row_h = _badge_row_size(group, contract)[1]
+    _append_badge_slots(cells, group, contract, "frame", 10.0,
+                         box_h - badge_row_h - TIER_BADGE_BOTTOM_MARGIN)
     return cells
 
 
