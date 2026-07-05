@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import html
 import json
 import re
 import sys
@@ -265,8 +264,17 @@ def _resolve_official(
     best: str | None = None
     best_size = -1
     for entry in matches:
+        # entry["xml"] comes from _parse_mxlibrary(), which reads it via
+        # ElementTree's .text — that already performs ONE round of XML
+        # entity-decoding as a normal part of parsing the outer <mxlibrary>
+        # wrapper. entry["xml"] is therefore already at exactly the escaping
+        # level a fresh XML parse expects; do NOT html.unescape() it again
+        # (that over-decodes any cell whose value="..." itself holds
+        # escaped rich text — e.g. the "(Text Only)" chips — turning their
+        # escaped `&lt;font ...&gt;` markup into literal unescaped `<`/`"`
+        # characters and breaking the parse).
         try:
-            page_root = _xml_fromstring(html.unescape(entry.get("xml") or ""))
+            page_root = _xml_fromstring(entry.get("xml") or "")
         except ET.ParseError as exc:
             print(f"WARNING: could not parse library entry {title!r} in {filename}: {exc}", file=sys.stderr)
             continue
