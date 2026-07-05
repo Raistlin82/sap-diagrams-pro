@@ -303,7 +303,8 @@ class Edge:
     pill: str | None = None
     # Semantic flow family driving edge colour + dash from the style
     # contract (Task 5): "identity" | "provisioning" | "master-data" |
-    # "transport" | "default". Checked by validate-ir.py when not None.
+    # "transport" | "firewall" | "default" (1:1 with the six edge-* molecules).
+    # Checked by validate-ir.py when not None.
     flowFamily: str | None = None
 
 
