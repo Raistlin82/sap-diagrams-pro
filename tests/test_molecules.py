@@ -219,13 +219,75 @@ def test_custom_app_box_frame(M, contract):
     g = NS(id="ca", label="Custom App", badges=None)
     cells = M.custom_app_box(g, contract)
     assert cells[0]["style"].startswith(_style(contract, "custom-app-box"))
-    assert cells[0]["value"] == "Custom App"
+    # FIX-A: the label is its OWN top-left cell, not the frame value (which
+    # draw.io would middle-centre over the packed children).
+    assert cells[0]["value"] == ""
+    title = [c for c in cells if c["id"] == "frame-title"]
+    assert title and title[0]["value"] == "Custom App"
 
 
 def test_governance_strip_frame(M, contract):
     g = NS(id="gov", label="Governance", badges=None)
     cells = M.governance_strip(g, contract)
     assert cells[0]["style"].startswith(_style(contract, "governance-strip"))
+    assert cells[0]["value"] == ""  # FIX-A: title is its own top-left cell
+    title = [c for c in cells if c["id"] == "frame-title"]
+    assert title and title[0]["value"] == "Governance"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-A (Task 6 review): frame titles must be their OWN top-band cell (top-left,
+# beside any chip), never the frame `value` (draw.io middle-centres that over the
+# packed children). FIX-B: the "SAP BTP" chip is stamped ONLY on the outermost
+# BTP container; nested subaccounts suppress it and show just their own name.
+# ─────────────────────────────────────────────────────────────────────────────
+def test_subaccount_frame_title_is_own_top_cell_not_frame_value(M, contract):
+    g = NS(id="sa", label="Extension Test", kind=None, badges=None)
+    cells = M.subaccount_frame(g, contract)
+    assert cells[0]["value"] == "", "frame value must be empty (no middle-centred title)"
+    title = [c for c in cells if c["id"] == "frame-title"]
+    assert len(title) == 1
+    t = title[0]
+    assert t["value"] == "Extension Test"
+    assert t["parent"] == "frame"
+    assert t["style"].startswith(_style(contract, "title-block"))
+    assert "align=left" in t["style"]
+    assert t["y"] < 40, "title sits in the top band, not middle-centred"
+    # with a chip present, the title sits to its RIGHT (chip + title on one line)
+    chip = [c for c in cells if c["id"] == "btpchip"][0]
+    assert t["x"] >= chip["x"] + chip["w"], "title must sit to the right of the chip"
+
+
+def test_tier_box_title_is_own_top_left_cell(M, contract):
+    g = NS(id="t", label="Public Cloud", kind="public", badges=None)
+    cells = M.tier_box(g, contract)
+    assert cells[0]["value"] == ""
+    title = [c for c in cells if c["id"] == "frame-title"]
+    assert title and title[0]["value"] == "Public Cloud"
+    assert "align=left" in title[0]["style"]
+    assert title[0]["y"] < 40
+
+
+def test_subaccount_shows_chip_rule(M):
+    # Outermost BTP container (top-level, or parented to a non-BTP group) shows
+    # the chip; a subaccount nested in a btp-layer/subaccount suppresses it.
+    assert M.subaccount_shows_chip("subaccount", None) is True
+    assert M.subaccount_shows_chip("subaccount", "governance") is True
+    assert M.subaccount_shows_chip("subaccount", "btp-layer") is False
+    assert M.subaccount_shows_chip("subaccount", "subaccount") is False
+    assert M.subaccount_shows_chip("governance", None) is False
+
+
+def test_subaccount_frame_suppresses_chip_when_nested(M, contract):
+    g = NS(id="sa", label="Production", kind=None, badges=None)
+    with_chip = M.subaccount_frame(g, contract, show_chip=True)
+    assert any(c["id"] == "btpchip" for c in with_chip)
+    no_chip = M.subaccount_frame(g, contract, show_chip=False)
+    assert not any(c["id"] == "btpchip" for c in no_chip)
+    # the nested subaccount still shows its OWN name, at the top-left
+    title = [c for c in no_chip if c["id"] == "frame-title"]
+    assert title and title[0]["value"] == "Production"
+    assert title[0]["x"] < 40, "no chip ⇒ title sits at the frame's top-left"
 
 
 def test_persona_resolves_icon(M, contract):
@@ -253,7 +315,11 @@ def test_network_separator(M, contract):
     label = [c for c in cells if c["id"] == "sep-label"][0]
     assert line["style"].startswith(_style(contract, "network-separator"))
     assert line.get("edge") is True and line["h"] == 700.0 - 100.0  # y1 - y0
+    assert line["points"] == [(500.0, 100.0), (500.0, 700.0)]
     assert label["style"].startswith(_style(contract, "network-separator-label"))
+    # The "NETWORK" caption sits near the BOTTOM of the bar (gold standard
+    # SAP_Task_Center_L1), not at its top.
+    assert label["y"] > (100 + 700) / 2
 
 
 def test_branding_block_fallbacks(M, contract):
@@ -393,11 +459,14 @@ def _cell_style_by_id(root, cell_id):
 @pytest.mark.parametrize("name", [
     "product-box", "capability-chip", "title-block",
     "subaccount-frame", "governance-strip", "tier-box-nonsap",
-    "db", "chip", "sap-btp-chip", "pill-protocol",
+    "db", "chip", "pill-protocol",
     "edge-identity", "edge-provisioning", "edge-master-data",
     "edge-transport", "edge-firewall", "edge-default",
 ])
 def test_golden_molecule_style_present_and_contract_exact(golden_styles, contract, name):
+    # NB: "sap-btp-chip" is intentionally not here — FIX-B suppresses the chip on
+    # the v2 fixture's (all-nested) subaccounts, so it's covered by the dedicated
+    # test_golden_sap_btp_chip_resolved_to_image (top-level subaccount) instead.
     prefix = _contract_prefix(contract, name)
     assert any(s.startswith(prefix) for s in golden_styles), \
         f"no emitted cell carries the {name!r} contract style"
@@ -448,12 +517,42 @@ def test_golden_product_box_cell_pinned_by_id(golden_root, contract):
     assert style.startswith(_contract_prefix(contract, "product-box"))
 
 
-def test_golden_sap_btp_chip_resolved_to_image(golden_styles, contract):
+def test_golden_sap_btp_chip_resolved_to_image(contract):
     # The SAP BTP chip resolves via the public brand pack (sap-logo-chip alias):
-    # its emitted style is the contract text chip + a real SVG dataUri.
+    # its emitted style is the contract text chip + a real SVG dataUri. FIX-B
+    # stamps the chip only on the OUTERMOST BTP container, so this uses a diagram
+    # with a TOP-LEVEL subaccount (the v2 fixture's subaccounts are both nested,
+    # which correctly suppresses their chips).
+    gen = load_script("generate-drawio")
+    ir = {
+        "metadata": {"title": "chip", "level": "L1"},
+        "groups": [{"id": "sa", "type": "subaccount", "label": "Prod", "position": "center"}],
+        "nodes": [{"id": "n", "label": "Event Mesh", "group": "sa", "service": "Event Mesh"}],
+        "edges": [],
+    }
+    root = ET.fromstring(gen.emit(gen.parse_json(ir), layout="auto"))
+    styles = [el.get("style", "") for el in root.iter("mxCell")]
     base = _style(contract, "sap-btp-chip")
-    hits = [s for s in golden_styles if s.startswith(base) and "data:image/svg" in s]
+    hits = [s for s in styles if s.startswith(base) and "data:image/svg" in s]
     assert hits, "SAP BTP chip did not resolve to the brand-pack image"
+
+
+def test_golden_nested_subaccounts_suppress_btp_chip():
+    # FIX-B: the v2 fixture's subaccounts (btp ⊃ test ⊃ production) are all
+    # nested, so NONE of them stamps a redundant "SAP BTP" chip — only the
+    # outer btp-layer badge remains. Guards against the chip "staircase".
+    gen = load_script("generate-drawio")
+    root = ET.fromstring(gen.emit(
+        gen.parse_json(json.loads(V2_FIXTURE.read_text(encoding="utf-8"))), layout="auto"))
+    for gid in ("subaccount-test", "subaccount-production"):
+        frame_id = gen._stable_id("g", gid)
+        chip_ids = [el.get("id") for el in root.iter("mxCell")
+                    if el.get("id", "").startswith(frame_id) and el.get("id", "").endswith("-btpchip")]
+        assert not chip_ids, f"nested subaccount {gid!r} must not stamp a SAP BTP chip"
+        # …but it DOES show its own name in a top-band title cell.
+        title_id = f"{frame_id}-frame-title"
+        title = _cell_style_by_id(root, title_id)
+        assert title is not None, f"{gid!r} must carry its own top-band title cell"
 
 
 def test_golden_v1_style_paths_untouched(golden_styles):

@@ -577,6 +577,54 @@ BADGE_GAP = 8.0  # horizontal gap between adjacent badge slots (see _append_badg
 # that let a 55px-tall hyperscaler badge overflow the frame bottom by ~13px).
 TIER_BADGE_BOTTOM_MARGIN = 14.0
 
+# Frame-title geometry (FIX-A). Frames draw their label as their OWN top-band
+# cell (top-left, beside any chip) instead of the frame `value` — draw.io
+# middle-centres a frame value over the packed children, which floated titles
+# dead-centre on tall frames. ``_title_w`` estimates the caption width (12px
+# Helvetica ≈ 6.6px/char, matching _skeleton_layout.CHAR_W) so the frame-min
+# reserves room for chip + title on one header line.
+TITLE_CHAR_W = 6.6
+TITLE_H = 24.0          # height of a standalone top-left frame-title cell
+HEADER_GAP = 8.0        # gap between the SAP BTP chip and the title beside it
+
+
+def _title_w(label: str, cap: float = 240.0) -> float:
+    return min(cap, max(40.0, len(label or "") * TITLE_CHAR_W + 12.0))
+
+
+def subaccount_shows_chip(group_type: str | None, parent_type: str | None) -> bool:
+    """Whether a subaccount stamps the "SAP BTP" chip (FIX-B).
+
+    The chip marks the OUTERMOST BTP container: a top-level subaccount, or one
+    whose parent is not itself a BTP container. A subaccount nested inside a
+    ``btp-layer``/``subaccount`` suppresses it (otherwise every nested tier
+    repeats an identical "SAP BTP" chip — the staircase the review flagged) and
+    shows only its own name. Single source of truth shared by the layout engine
+    (frame-min sizing) and the emitter (which builder arg to pass)."""
+    if group_type != "subaccount":
+        return False
+    return parent_type not in ("btp-layer", "subaccount")
+
+
+def _frame_title_cell(group: Any, contract: dict, x: float, y: float,
+                      box_w: float, h: float = TITLE_H) -> dict:
+    """A frame's label as its OWN top-left cell (FIX-A), styled from the contract
+    ``title-block`` (``align=left`` already). Fills the frame width to the right
+    of ``x`` so the label reads on one header line. The frame's ``value`` is
+    left empty by every builder so draw.io can't middle-centre a title over the
+    packed children."""
+    return {
+        "id": "frame-title",
+        "value": getattr(group, "label", "") or "",
+        "style": _style(contract, "title-block"),
+        "x": x,
+        "y": y,
+        "w": max(40.0, box_w - x - 8.0),
+        "h": h,
+        "parent": "frame",
+        "connectable": False,
+    }
+
 
 def _has_badges(group: Any) -> bool:
     b = getattr(group, "badges", None) or {}
@@ -634,32 +682,41 @@ def frame_insets(group: Any, contract: dict) -> tuple[float, float, float]:
     return 16.0, 32.0, 14.0
 
 
-def _frame_min(group: Any, contract: dict) -> tuple[float, float]:
+def _frame_min(group: Any, contract: dict, show_chip: bool = True) -> tuple[float, float]:
     """Smallest a frame may be regardless of child content — enough for its own
     decorations. For cloud-tier / custom-app the contract card size is the
     canonical minimum; the big container frames (subaccount / governance) use a
-    decoration-driven minimum instead of their (huge) exemplar size."""
+    decoration-driven minimum instead of their (huge) exemplar size.
+
+    The frame's own TOP-BAND title (FIX-A) now counts toward the minimum width:
+    a subaccount reserves ``chip + gap + title`` on one header line when it
+    stamps the chip (``show_chip``), else just the title; governance / cloud-tier
+    widen to hold their title too. ``show_chip`` must match what the emitter
+    passes ``subaccount_frame`` (both derive it from ``subaccount_shows_chip``)."""
     gtype = getattr(group, "type", None)
     pad_x, pad_top, pad_bot = frame_insets(group, contract)
     brow_w, _ = _badge_row_size(group, contract)
+    title_w = _title_w(getattr(group, "label", "") or "")
     if gtype == "cloud-tier":
         kind = (getattr(group, "kind", None) or "public").lower()
         mol = "tier-box-nonsap" if kind == "any-premise" else "tier-box-sap"
         g = _geo(contract, mol)
-        min_w = max(_f(g, "w", 201.0), brow_w + 2 * pad_x)
+        min_w = max(_f(g, "w", 201.0), brow_w + 2 * pad_x, title_w + 2 * pad_x)
         return min_w, _f(g, "h", 92.85)
     if gtype == "custom-app":
         g = _geo(contract, "custom-app-box")
-        return _f(g, "w", 343.0), _f(g, "h", 185.93)
+        return max(_f(g, "w", 343.0), title_w + 2 * pad_x), _f(g, "h", 185.93)
     if gtype == "subaccount":
         chip_w = _f(_geo(contract, "sap-btp-chip"), "w", 90.0)
-        return max(chip_w, brow_w) + 2 * pad_x, pad_top + pad_bot + 30.0
+        header_w = (chip_w + HEADER_GAP + title_w) if show_chip else title_w
+        return max(header_w, brow_w) + 2 * pad_x, pad_top + pad_bot + 30.0
     if gtype == "governance":
-        return max(120.0, brow_w) + 2 * pad_x, pad_top + pad_bot + 30.0
+        return max(120.0, brow_w, title_w) + 2 * pad_x, pad_top + pad_bot + 30.0
     return 2 * pad_x, pad_top + pad_bot
 
 
-def footprint(obj: Any, contract: dict, children_bbox: tuple[float, float] = (0.0, 0.0)) -> tuple[float, float]:
+def footprint(obj: Any, contract: dict, children_bbox: tuple[float, float] = (0.0, 0.0),
+              show_chip: bool = True) -> tuple[float, float]:
     """Minimum ``(w, h)`` a molecule occupies in layout space.
 
     Leaf node molecules (``product`` / ``db`` / ``chip``) have an intrinsic size
@@ -668,7 +725,9 @@ def footprint(obj: Any, contract: dict, children_bbox: tuple[float, float] = (0.
     insets)`` — i.e. never smaller than their own decorations, always big enough
     to contain the packed children the layout passes in ``children_bbox``. This
     is the value ``_skeleton_layout`` reserves before placement (and passes back
-    to the builders as their final ``size``)."""
+    to the builders as their final ``size``). ``show_chip`` reaches the
+    subaccount frame-min so a chip-suppressed nested subaccount doesn't reserve
+    the (absent) chip's width."""
     t = getattr(obj, "type", None)
     cw, ch = children_bbox
     if t == "product":
@@ -682,7 +741,7 @@ def footprint(obj: Any, contract: dict, children_bbox: tuple[float, float] = (0.
         return _f(g, "w", 130.0), _f(g, "h", 28.18)
     if t in ("subaccount", "governance", "custom-app", "cloud-tier"):
         pad_x, pad_top, pad_bot = frame_insets(obj, contract)
-        min_w, min_h = _frame_min(obj, contract)
+        min_w, min_h = _frame_min(obj, contract, show_chip)
         return max(min_w, cw + 2 * pad_x), max(min_h, pad_top + ch + pad_bot)
     return cw, ch
 
@@ -690,17 +749,25 @@ def footprint(obj: Any, contract: dict, children_bbox: tuple[float, float] = (0.
 # ─────────────────────────────────────────────────────────────────────────────
 # Group / frame molecules
 # ─────────────────────────────────────────────────────────────────────────────
-def subaccount_frame(group: Any, contract: dict, size: tuple[float, float] | None = None) -> list[dict]:
-    """Subaccount → white rounded frame (SAP-blue border) + a "SAP BTP" chip
-    (image ``@sap-btp-chip`` with text fallback) + any hyperscaler/runtime
-    badge slots from ``group.badges``."""
+def subaccount_frame(group: Any, contract: dict, size: tuple[float, float] | None = None,
+                     show_chip: bool = True) -> list[dict]:
+    """Subaccount → white rounded frame (SAP-blue border) + a top-left header
+    (an optional "SAP BTP" chip and the subaccount's OWN name) + any
+    hyperscaler/runtime badge slots from ``group.badges``.
+
+    FIX-A: the name is its own top-band cell (``frame-title``, top-left, beside
+    the chip on one header line) and the frame ``value`` is empty, so draw.io
+    never middle-centres the title over the packed children.
+    FIX-B: the "SAP BTP" chip is emitted only when ``show_chip`` — i.e. on the
+    OUTERMOST BTP container (see ``subaccount_shows_chip``); a nested subaccount
+    passes ``show_chip=False`` and shows only its own name at the top-left."""
     g = _geo(contract, "subaccount-frame")
     pad_x = _f(g, "padX", 11.57)
     pad_top = _f(g, "padTop", 6.0)
     box_w, box_h = size if size else (_f(g, "w", 1001.0), _f(g, "h", 567.0))
     frame = {
         "id": "frame",
-        "value": getattr(group, "label", "") or "",
+        "value": "",
         "style": _style(contract, "subaccount-frame"),
         "x": 0.0,
         "y": 0.0,
@@ -711,23 +778,31 @@ def subaccount_frame(group: Any, contract: dict, size: tuple[float, float] | Non
     cells: list[dict] = [frame]
 
     cg = _geo(contract, "sap-btp-chip")
-    cells.append(
-        {
-            "id": "btpchip",
-            "value": "SAP BTP",
-            # contract text style + the SAP-BTP logo placeholder (resolved to
-            # the brand-pack image when present, else stripped → the text chip).
-            "style": _style(contract, "sap-btp-chip") + "image=@sap-btp-chip;",
-            "x": pad_x + 8.0,
-            "y": pad_top,
-            "w": _f(cg, "w", 90.0),
-            "h": _f(cg, "h", 30.0),
-            "parent": "frame",
-            "connectable": False,
-            "placeholder_mode": "strip",
-        }
-    )
-    _append_badge_slots(cells, group, contract, "frame", pad_x + 8.0, pad_top + 36.0)
+    chip_w, chip_h = _f(cg, "w", 90.0), _f(cg, "h", 30.0)
+    x0 = pad_x + 8.0
+    title_x = x0
+    if show_chip:
+        cells.append(
+            {
+                "id": "btpchip",
+                "value": "SAP BTP",
+                # contract text style + the SAP-BTP logo placeholder (resolved to
+                # the brand-pack image when present, else stripped → the text chip).
+                "style": _style(contract, "sap-btp-chip") + "image=@sap-btp-chip;",
+                "x": x0,
+                "y": pad_top,
+                "w": chip_w,
+                "h": chip_h,
+                "parent": "frame",
+                "connectable": False,
+                "placeholder_mode": "strip",
+            }
+        )
+        title_x = x0 + chip_w + HEADER_GAP
+    # The subaccount's own name — its own top-band cell (beside the chip),
+    # never the middle-centred frame value.
+    cells.append(_frame_title_cell(group, contract, title_x, pad_top, box_w, chip_h))
+    _append_badge_slots(cells, group, contract, "frame", x0, pad_top + 36.0)
     return cells
 
 
@@ -737,7 +812,7 @@ def governance_strip(group: Any, contract: dict, size: tuple[float, float] | Non
     box_w, box_h = size if size else (_f(g, "w", 946.0), _f(g, "h", 236.0))
     frame = {
         "id": "frame",
-        "value": getattr(group, "label", "") or "",
+        "value": "",
         "style": _style(contract, "governance-strip"),
         "x": 0.0,
         "y": 0.0,
@@ -745,7 +820,9 @@ def governance_strip(group: Any, contract: dict, size: tuple[float, float] | Non
         "h": box_h,
         "parent": None,
     }
-    cells = [frame]
+    # FIX-A: title as its own top-left cell (aligned with the content inset),
+    # never the middle-centred frame value.
+    cells = [frame, _frame_title_cell(group, contract, 24.0, 8.0, box_w)]
     _append_badge_slots(
         cells, group, contract, "frame",
         _f(g, "padX", 64.0), _f(g, "padTop", 35.0),
@@ -775,7 +852,7 @@ def tier_box(group: Any, contract: dict, size: tuple[float, float] | None = None
     box_w, box_h = size if size else (_f(g, "w", 201.0), _f(g, "h", 92.85))
     frame = {
         "id": "frame",
-        "value": getattr(group, "label", "") or "",
+        "value": "",
         "style": _style(contract, molname),
         "x": 0.0,
         "y": 0.0,
@@ -783,7 +860,10 @@ def tier_box(group: Any, contract: dict, size: tuple[float, float] | None = None
         "h": box_h,
         "parent": None,
     }
-    cells = [frame]
+    # FIX-A: label top-left (matches the gold standard tier header), not the
+    # middle-centred frame value. Kept within the tier's 24px top inset so it
+    # clears any content placed at pad_top (e.g. the PCE chip).
+    cells = [frame, _frame_title_cell(group, contract, 10.0, 4.0, box_w, 16.0)]
     badge_row_h = _badge_row_size(group, contract)[1]
     _append_badge_slots(cells, group, contract, "frame", 10.0,
                          box_h - badge_row_h - TIER_BADGE_BOTTOM_MARGIN)
@@ -797,7 +877,7 @@ def custom_app_box(group: Any, contract: dict, size: tuple[float, float] | None 
     box_w, box_h = size if size else (_f(g, "w", 343.0), _f(g, "h", 185.93))
     frame = {
         "id": "frame",
-        "value": getattr(group, "label", "") or "",
+        "value": "",
         "style": _style(contract, "custom-app-box"),
         "x": 0.0,
         "y": 0.0,
@@ -805,7 +885,8 @@ def custom_app_box(group: Any, contract: dict, size: tuple[float, float] | None 
         "h": box_h,
         "parent": None,
     }
-    cells = [frame]
+    # FIX-A: label top-left, never the middle-centred frame value.
+    cells = [frame, _frame_title_cell(group, contract, 16.0, 10.0, box_w)]
     badges = getattr(group, "badges", None) or {}
     x = _f(g, "padX", 80.08)
     for name in (badges.get("runtimes") or []):
@@ -890,14 +971,19 @@ def network_separator(x: float, y0: float, y1: float, contract: dict) -> list[di
         "points": [(float(x), float(y0)), (float(x), float(y1))],
     }
     lg = _geo(contract, "network-separator-label")
+    label_w = _f(lg, "w", 80.0)
+    label_h = _f(lg, "h", 30.0)
     label = {
         "id": "sep-label",
         "value": "NETWORK",
         "style": _style(contract, "network-separator-label"),
-        "x": float(x) + 8.0,
-        "y": float(y0) - 16.0,
-        "w": _f(lg, "w", 80.0),
-        "h": _f(lg, "h", 30.0),
+        # Caption near the BOTTOM of the bar (gold standard SAP_Task_Center_L1),
+        # nudged just left of the bar so it reads in the gutter rather than
+        # over the right-stack boxes.
+        "x": float(x) - label_w + 2.0,
+        "y": float(y1) - label_h - 6.0,
+        "w": label_w,
+        "h": label_h,
         "parent": None,
     }
     return [line, label]

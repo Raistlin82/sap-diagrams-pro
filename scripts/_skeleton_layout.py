@@ -441,6 +441,12 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
     def measure(group) -> _Meas:
         gtype = group.type
         is_mol = gtype in MOLECULE_GROUP_TYPES
+        # FIX-B: only the outermost BTP container reserves the "SAP BTP" chip's
+        # header width; a nested subaccount suppresses it. Same rule the emitter
+        # applies (M.subaccount_shows_chip), so reserve and draw agree.
+        parent_type = (groups_by_id[group.parent].type
+                       if (group.parent and group.parent in groups_by_id) else None)
+        show_chip = M.subaccount_shows_chip(gtype, parent_type)
         direct = flow_sorted(nodes_by_group.get(group.id, []))
         if direct:
             lanes[group.id] = [n.id for n in direct]
@@ -484,7 +490,7 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
 
             pad_x, pad_top, pad_bot = _insets(group, gtype, is_mol, bool(children), M, contract)
             box_w, box_h = _frame_size(group, gtype, is_mol, content_w, content_h,
-                                       pad_x, pad_top, pad_bot, M, contract)
+                                       pad_x, pad_top, pad_bot, M, contract, show_chip)
             # widen the inset origin so packed content is centred in the frame
             extra_x = (box_w - (content_w + 2 * pad_x)) / 2.0
             base_x = pad_x + max(0.0, extra_x) + main_dx
@@ -508,7 +514,7 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
                                                     mode, NODE_GAP)
             pad_x, pad_top, pad_bot = _insets(group, gtype, is_mol, False, M, contract)
             box_w, box_h = _frame_size(group, gtype, is_mol, content_w, content_h,
-                                       pad_x, pad_top, pad_bot, M, contract)
+                                       pad_x, pad_top, pad_bot, M, contract, show_chip)
             extra_x = (box_w - (content_w + 2 * pad_x)) / 2.0
             base_x = pad_x + max(0.0, extra_x)
             for (n, w, h), (rx, ry) in zip(node_fps, positions):
@@ -565,6 +571,10 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
     # router share this engine's own column geometry instead of recomputing
     # it (see meta["columns"] below).
     col_x_extent: dict[str, tuple[float, float]] = {}
+    # y-extent (top, bottom) of each column's placed stack — the source of the
+    # NETWORK separator's y-span (it hugs the RIGHT stack, min top to max
+    # bottom). Absent for empty columns.
+    col_y_extent: dict[str, tuple[float, float]] = {}
     cursor = float(MARGIN)
     for c in ("left", "center", "right"):
         gs = cols[c]
@@ -575,12 +585,34 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
         cw = col_w[c]
         col_center_x[c] = cursor + cw / 2.0
         y = content_top + (max_h - col_h[c]) / 2.0
+        y_top = y
         for g in gs:
             m = measures[g.id]
             place(m, cursor + (cw - m.w) / 2.0, y)
             y += m.h + ZONE_VGAP
+        col_y_extent[c] = (y_top, y - ZONE_VGAP)  # last group's bottom
         col_x_extent[c] = (x0, x0 + cw)
         cursor += cw + ZONE_HGAP
+
+    # ---- NETWORK separator (Task 7) -----------------------------------------
+    # A vertical bar at the horizontal midpoint of the center→right gutter,
+    # spanning the RIGHT stack's y-range. Emitted only when the right column
+    # holds ≥1 group (a cloud-tier/backend to separate off) AND the gutter is
+    # real (a center column exists to its left). Opt-out: metadata
+    # networkSeparator == false (default on). x is derived from the SAME
+    # col_x_extent the router (Task 8) reads, so the bar and the routing
+    # obstacle can't drift.
+    network_sep = None
+    if cols["right"] and getattr(diagram, "networkSeparator", True):
+        cx1 = col_x_extent["center"][1]
+        rx0 = col_x_extent["right"][0]
+        ry0, ry1 = col_y_extent["right"]
+        if cx1 < rx0:  # a genuine gutter between center and right
+            network_sep = {
+                "x": int(round((cx1 + rx0) / 2.0)),
+                "y0": int(round(ry0)),
+                "y1": int(round(ry1)),
+            }
 
     columns_right = cursor - ZONE_HGAP if cursor > MARGIN else MARGIN
     columns_bottom = content_top + max_h
@@ -657,6 +689,11 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
             # re-deriving them).
             "columns": {c: (int(round(col_x_extent[c][0])), int(round(col_x_extent[c][1])))
                         for c in ("left", "center", "right")},
+            # NETWORK separator geometry ({x, y0, y1}) or None when there's no
+            # right stack to separate / it's opted out. Consumed by the emitter
+            # (Task 7) and, as a routing obstacle edges must not cross, by the
+            # channel router (Task 8).
+            "networkSeparator": network_sep,
         },
     }
 
@@ -681,12 +718,14 @@ def _insets(group, gtype, is_mol, has_children, M, contract) -> tuple[float, flo
 
 
 def _frame_size(group, gtype, is_mol, content_w, content_h,
-                pad_x, pad_top, pad_bot, M, contract) -> tuple[float, float]:
+                pad_x, pad_top, pad_bot, M, contract, show_chip=True) -> tuple[float, float]:
     """Final (w, h) of a group frame: molecule frames clamp to
     ``max(contract-minimum, content + insets)`` (so the frame contains its
-    children AND its own decorations); v1 groups are just content + padding."""
+    children AND its own decorations); v1 groups are just content + padding.
+    ``show_chip`` reaches the subaccount frame-min so a chip-suppressed nested
+    subaccount (FIX-B) doesn't reserve the absent chip's header width."""
     if is_mol:
-        return M.footprint(group, contract, (content_w, content_h))
+        return M.footprint(group, contract, (content_w, content_h), show_chip)
     return content_w + 2 * pad_x, content_h + pad_top + pad_bot
 
 

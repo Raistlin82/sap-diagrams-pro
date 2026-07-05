@@ -377,3 +377,74 @@ def test_return_dict_shape(gen, sl):
 def test_icon_size_moved(sl):
     assert sl.icon_size("L1") == 48
     assert sl.icon_size("L2") == 32
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NETWORK separator (Task 7): a vertical bar in the center→right gutter, spanning
+# the right stack, emitted only when the right column holds ≥1 group.
+# ─────────────────────────────────────────────────────────────────────────────
+def test_network_separator_sits_in_center_right_gutter(gen, sl):
+    """The separator x is the midpoint of the center→right gutter, strictly
+    between the center column's right edge and the right column's left edge."""
+    lay = _compute(gen, sl, V2)
+    sep = lay["meta"]["networkSeparator"]
+    assert sep is not None, "v2 fixture has a right stack ⇒ separator expected"
+    cols = lay["meta"]["columns"]
+    assert cols["center"][1] < sep["x"] < cols["right"][0]
+    # midpoint of the gutter (single source of truth = meta.columns)
+    assert sep["x"] == int(round((cols["center"][1] + cols["right"][0]) / 2))
+
+
+def test_network_separator_spans_the_right_stack(gen, sl):
+    """The bar's y-range covers the right column's own vertical extent: the min
+    top and max bottom of every group placed in the right column."""
+    lay = _compute(gen, sl, V2)
+    sep = lay["meta"]["networkSeparator"]
+    right_ids = lay["meta"]["slots"]["right"]
+    assert right_ids, "fixture must have right-column groups"
+    tops = [lay["groups"][g][1] for g in right_ids]
+    bots = [lay["groups"][g][1] + lay["groups"][g][3] for g in right_ids]
+    assert abs(sep["y0"] - min(tops)) <= 2
+    assert abs(sep["y1"] - max(bots)) <= 2
+    assert sep["y0"] < sep["y1"]
+
+
+def test_network_separator_opt_out_via_metadata(gen, sl):
+    """metadata.networkSeparator == false removes the separator (default on)."""
+    def _off(p):
+        p.setdefault("metadata", {})["networkSeparator"] = False
+        return p
+    lay = _compute(gen, sl, V2, mutate=_off)
+    assert lay["meta"]["networkSeparator"] is None
+
+
+def test_network_separator_absent_without_right_column(gen, sl):
+    """No group in the right column ⇒ no separator (nothing to separate from)."""
+    ir = {
+        "metadata": {"title": "no-right", "level": "L1"},
+        "groups": [
+            {"id": "u", "type": "user", "label": "Users", "position": "left"},
+            {"id": "btp", "type": "btp-layer", "label": "BTP", "position": "center"},
+        ],
+        "nodes": [
+            {"id": "p", "label": "Person", "group": "u", "genericIcon": "user"},
+            {"id": "svc", "label": "Svc", "group": "btp"},
+        ],
+        "edges": [],
+    }
+    lay = sl.compute_layout(gen.parse_json(ir), gen.ShapeIndex.load())
+    assert lay["meta"]["slots"]["right"] == []
+    assert lay["meta"]["networkSeparator"] is None
+
+
+def test_network_separator_present_for_nova_backends(gen, sl):
+    """nova-L1 has SAP-app / ops backends in the right column ⇒ separator on."""
+    lay = _compute(gen, sl, NOVA)
+    assert lay["meta"]["slots"]["right"], "nova must have a right stack"
+    assert lay["meta"]["networkSeparator"] is not None
+
+
+def test_network_separator_deterministic(gen, sl):
+    lay1 = _compute(gen, sl, V2)
+    lay2 = _compute(gen, sl, V2)
+    assert lay1["meta"]["networkSeparator"] == lay2["meta"]["networkSeparator"]

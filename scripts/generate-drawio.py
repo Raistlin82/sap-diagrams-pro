@@ -343,6 +343,11 @@ class Diagram:
     # Group.badges, but scoped to the whole diagram (e.g. a title-block strip)
     # rather than a single subaccount/cloud-tier group.
     badges: dict[str, Any] | None = None
+    # metadata.networkSeparator — draw the vertical NETWORK bar in the
+    # center→right gutter (Task 7). Default on; set false to opt out. The
+    # skeleton layout reads this to decide whether to emit the separator geometry
+    # into its meta block.
+    networkSeparator: bool = True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -614,6 +619,7 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
         layoutHints=payload.get("layoutHints"),
         branding=meta.get("branding"),
         badges=meta.get("badges"),
+        networkSeparator=bool(meta.get("networkSeparator", True)),
     )
 
 
@@ -1248,7 +1254,8 @@ def _place_molecule(
 
 
 def _group_molecule_cells(
-    g: Group, contract: dict, size: tuple[float, float] | None = None
+    g: Group, contract: dict, size: tuple[float, float] | None = None,
+    show_chip: bool = True,
 ) -> list[dict] | None:
     """Contract-driven frame cells for an IR v2 group type (or None for v1).
 
@@ -1256,10 +1263,12 @@ def _group_molecule_cells(
     the packed children clamped to the contract minimum). Passing it lets each
     builder draw its decorations relative to the real frame edge — so a bottom-
     anchored tier-box badge row reflows instead of floating at the contract's
-    reference height (Task 6 reflow)."""
+    reference height (Task 6 reflow). ``show_chip`` suppresses the redundant
+    "SAP BTP" chip on a nested subaccount (FIX-B); it matches the value the
+    skeleton layout reserved space for."""
     M = _molecules_module()
     if g.type == "subaccount":
-        return M.subaccount_frame(g, contract, size)
+        return M.subaccount_frame(g, contract, size, show_chip)
     if g.type == "governance":
         return M.governance_strip(g, contract, size)
     if g.type == "cloud-tier":
@@ -1290,7 +1299,111 @@ def _flow_family_edge_style(
     return style
 
 
-def _emit_branding_and_badges(
+def _watermark_geometry(
+    w: float, h: float, canvas_w: int, canvas_h: int, max_frac: float = 0.4
+) -> tuple[float, float, float, float]:
+    """Scale a partner watermark to at most ``max_frac`` of the canvas width
+    (keeping aspect) and centre it on the canvas (FIX-C). The watermark should
+    read as a faint background mark like the SSAM/Brandart exemplars, never a
+    foreground element that covers the diagram."""
+    if w > max_frac * canvas_w:
+        scale = (max_frac * canvas_w) / w
+        w, h = w * scale, h * scale
+    return (canvas_w - w) / 2.0, (canvas_h - h) / 2.0, w, h
+
+
+def _emit_watermark(root: ET.Element, cell: dict, canvas_w: int, canvas_h: int) -> None:
+    """Place a resolved (image) partner watermark, scaled + centred, BEHIND
+    everything. The caller emits this first (document order == z-order) so it
+    sits under the whole diagram; opacity comes verbatim from the contract
+    ``watermark`` molecule style (a faint ~10–15%)."""
+    x, y, w, h = _watermark_geometry(float(cell["w"]), float(cell["h"]), canvas_w, canvas_h)
+    c = ET.SubElement(
+        root, "mxCell",
+        attrib={
+            "id": _stable_id("brand", "watermark"),
+            "value": "",
+            "style": cell.get("style", "") or "",
+            "vertex": "1", "parent": "1", "connectable": "0",
+        },
+    )
+    ET.SubElement(
+        c, "mxGeometry",
+        attrib={"x": _num(x), "y": _num(y), "width": _num(w), "height": _num(h), "as": "geometry"},
+    )
+
+
+def _emit_customer_logo(root: ET.Element, cell: dict, x: float = 32.0, y: float = 10.0) -> float:
+    """Place the customer logo at the canvas TOP-LEFT (in the ``branding`` slot)
+    and return the x the diagram title should start at (just to its right). The
+    logo is clamped to a header-sized box; an unresolved asset is the text-badge
+    fallback (e.g. "ACME"), which still occupies the slot."""
+    w = min(float(cell["w"]), 160.0)
+    h = min(float(cell["h"]), 44.0)
+    c = ET.SubElement(
+        root, "mxCell",
+        attrib={
+            "id": _stable_id("brand", "customer-logo"),
+            "value": cell.get("value", "") or "",
+            "style": cell.get("style", "") or "",
+            "vertex": "1", "parent": "1", "connectable": "0",
+        },
+    )
+    ET.SubElement(
+        c, "mxGeometry",
+        attrib={"x": _num(x), "y": _num(y), "width": _num(w), "height": _num(h), "as": "geometry"},
+    )
+    return x + w + 12.0
+
+
+def _emit_network_separator(root: ET.Element, sep: dict, contract: dict) -> None:
+    """Emit the NETWORK separator geometry the skeleton layout placed in
+    ``meta["networkSeparator"]``: the grey jump-gap bar (a standalone edge cell
+    with explicit source/target points, like the gold standard) + its "NETWORK"
+    caption. ``sep`` is ``{x, y0, y1}``."""
+    M = _molecules_module()
+    for c in M.network_separator(sep["x"], sep["y0"], sep["y1"], contract):
+        if c.get("edge"):
+            e_cell = ET.SubElement(
+                root, "mxCell",
+                attrib={
+                    "id": _stable_id("netsep", c["id"]),
+                    "value": c.get("value", "") or "",
+                    "style": c.get("style", "") or "",
+                    "edge": "1", "parent": "1", "connectable": "0",
+                },
+            )
+            geom = ET.SubElement(e_cell, "mxGeometry", attrib={"relative": "1", "as": "geometry"})
+            pts = c.get("points") or []
+            (sx, sy), (tx, ty) = pts[0], pts[-1]
+            # Endpoints as source/target points — the gold-standard floating-edge
+            # form draw.io renders. Mirror them into the waypoint Array too so the
+            # pure-Python preview renderer (which builds a floating edge's path
+            # from Array waypoints, not source/target mxPoints) draws the bar
+            # identically; the coincident endpoints are invisible in draw.io.
+            ET.SubElement(geom, "mxPoint", attrib={"x": _num(sx), "y": _num(sy), "as": "sourcePoint"})
+            ET.SubElement(geom, "mxPoint", attrib={"x": _num(tx), "y": _num(ty), "as": "targetPoint"})
+            arr = ET.SubElement(geom, "Array", attrib={"as": "points"})
+            for px, py in pts:
+                ET.SubElement(arr, "mxPoint", attrib={"x": _num(px), "y": _num(py)})
+        else:
+            v_cell = ET.SubElement(
+                root, "mxCell",
+                attrib={
+                    "id": _stable_id("netsep", c["id"]),
+                    "value": c.get("value", "") or "",
+                    "style": c.get("style", "") or "",
+                    "vertex": "1", "parent": "1", "connectable": "0",
+                },
+            )
+            ET.SubElement(
+                v_cell, "mxGeometry",
+                attrib={"x": _num(c["x"]), "y": _num(c["y"]),
+                        "width": _num(c["w"]), "height": _num(c["h"]), "as": "geometry"},
+            )
+
+
+def _emit_diagram_badge_strip(
     root: ET.Element,
     diagram: Diagram,
     canvas_w: int,
@@ -1299,49 +1412,12 @@ def _emit_branding_and_badges(
     icon_resolver,
     warnings: list[str],
 ) -> None:
-    """Emit metadata-level branding (customer logo + optional resolved watermark)
-    and the diagram-level hyperscaler/runtime badge strip. All degrade to
-    text-badges when the (usually .local) brand assets are absent — and, since
-    ``icon_resolver``/``warnings`` are threaded through to ``branding_block``/
-    ``badge`` below, every one of those degradations now runs the same
-    shape-index resolution leg and emits the same de-duplicated preflight
-    WARNING as the group-badge path (``_place_molecule``)."""
+    """Emit the diagram-level hyperscaler/runtime badge strip (top-right). Badges
+    degrade to text-badges when the (usually .local) brand assets are absent —
+    with ``icon_resolver``/``warnings`` threaded through so each degradation runs
+    the same shape-index resolution leg and de-duplicated preflight WARNING as
+    the group-badge path (``_place_molecule``)."""
     M = _molecules_module()
-    if diagram.branding:
-        cells = M.branding_block(
-            {"branding": diagram.branding, "title": diagram.title}, contract, brand_packs,
-            icon_resolver, warnings,
-        )
-        x_right = canvas_w - 40
-        for c in cells:
-            cid = c.get("id")
-            if cid == "watermark":
-                # Only place a genuinely-resolved (image) watermark; a text
-                # fallback would just be noise floating over the canvas.
-                if "shape=image" not in c.get("style", ""):
-                    continue
-                w, h = c["w"], c["h"]
-                px, py = (canvas_w - w) / 2, 120.0
-                parent = "1"
-            elif cid == "customer-logo":
-                w, h = c["w"], c["h"]
-                px, py = x_right - w, 12.0
-                parent = "1"
-            else:
-                continue  # brand-title: the main diagram title is already drawn
-            attrib = {
-                "id": _stable_id("brand", cid),
-                "value": c.get("value", "") or "",
-                "style": c.get("style", "") or "",
-                "vertex": "1",
-                "parent": parent,
-                "connectable": "0",
-            }
-            cell = ET.SubElement(root, "mxCell", attrib=attrib)
-            ET.SubElement(
-                cell, "mxGeometry",
-                attrib={"x": _num(px), "y": _num(py), "width": _num(w), "height": _num(h), "as": "geometry"},
-            )
     if diagram.badges:
         x = canvas_w - 40
         y = 48.0
@@ -1478,12 +1554,36 @@ def emit(
     ET.SubElement(root, "mxCell", attrib={"id": "0"})
     ET.SubElement(root, "mxCell", attrib={"id": "1", "parent": "0"})
 
+    # 0. Customer branding (Task 7). Resolve the branding block ONCE (this also
+    # records the preflight WARNING for any missing logo/watermark asset). The
+    # partner watermark is emitted FIRST so it sits BEHIND everything — a faint,
+    # centred, contract-opacity background mark (FIX-C); the customer logo goes
+    # TOP-LEFT and the diagram title shifts to its right.
+    brand_by_id: dict[str, dict] = {}
+    if diagram.branding:
+        brand_by_id = {
+            c.get("id"): c
+            for c in _M.branding_block(
+                {"branding": diagram.branding, "title": diagram.title},
+                contract, brand_packs, icon_resolver, mol_warnings,
+            )
+        }
+    wm = brand_by_id.get("watermark")
+    if wm is not None and "shape=image" in wm.get("style", ""):
+        # A text fallback would just be noise over the canvas — only a genuinely
+        # resolved image watermark is drawn.
+        _emit_watermark(root, wm, canvas_w, canvas_h)
+
     # 1. Title — SAP-canonical: bold blue (#0070F2) + "- SAP BTP Solution
     # Diagram" suffix. Convention observed in EVERY official sample
     # (SAP_Task_Center_*.drawio, SAP_Private_Link_Service_L2, etc.).
-    # Left-aligned in the top-left corner.
+    # Top-left, shifted right of the customer logo when one is present.
+    title_x = 32.0
+    logo = brand_by_id.get("customer-logo")
+    if logo is not None:
+        title_x = _emit_customer_logo(root, logo)
     title_id = _stable_id("title", diagram.title)
-    title_w = max(canvas_w - 96, 600)
+    title_w = max(int(round(canvas_w - title_x - 64)), 400)
     diagram_title = diagram.title
     if "Solution Diagram" not in diagram_title:
         diagram_title = f"{diagram_title} - SAP BTP Solution Diagram"
@@ -1506,7 +1606,7 @@ def emit(
         title_cell,
         "mxGeometry",
         attrib={
-            "x": "32",
+            "x": _num(title_x),
             "y": "12",
             "width": str(title_w),
             "height": "30",
@@ -1570,7 +1670,9 @@ def emit(
         if g.type in MOLECULE_GROUP_TYPES:
             # The layout already sized the frame (footprint ≥ contract min); the
             # builder reflows its decorations to that final size.
-            cells = _group_molecule_cells(g, contract, size=(float(w), float(h)))
+            show_chip = _M.subaccount_shows_chip(g.type, _group_type.get(g.parent))
+            cells = _group_molecule_cells(g, contract, size=(float(w), float(h)),
+                                          show_chip=show_chip)
             _place_molecule(
                 root, cells, anchor_id=cell_id, anchor_parent="1",
                 off_x=x, off_y=y, contract=contract, brand_packs=brand_packs,
@@ -1617,7 +1719,9 @@ def emit(
         # IR v2 group types → contract-driven molecule frames (nested: relative
         # to the parent cell's origin).
         if g.type in MOLECULE_GROUP_TYPES:
-            cells = _group_molecule_cells(g, contract, size=(float(w), float(h)))
+            show_chip = _M.subaccount_shows_chip(g.type, _group_type.get(g.parent))
+            cells = _group_molecule_cells(g, contract, size=(float(w), float(h)),
+                                          show_chip=show_chip)
             _place_molecule(
                 root, cells, anchor_id=cell_id, anchor_parent=parent_cell_id,
                 off_x=rel_x, off_y=rel_y, contract=contract, brand_packs=brand_packs,
@@ -1985,13 +2089,22 @@ def emit(
     for preset in diagram.presets:
         _embed_preset(root, preset, shape_index)
 
+    # 5b. NETWORK separator — the vertical bar in the center→right gutter,
+    # spanning the right stack (Task 7). The skeleton layout computed its
+    # geometry (or None when there's no right stack / it's opted out).
+    if layout != "greedy":
+        sep = layout_result["meta"].get("networkSeparator")
+        if sep:
+            _emit_network_separator(root, sep, contract)
+
     # 6. Legend molecule (bottom-right). Two paths:
     #    - User asked for 'sap' or 'sap-short' preset → embed SAP essential
     #    - Otherwise auto-generate based on actual styles used.
     _emit_legend(root, diagram, canvas_w, canvas_h, shape_index)
 
-    # 7. IR v2 metadata: customer branding + diagram-level badge strip.
-    _emit_branding_and_badges(
+    # 7. IR v2 metadata: the diagram-level hyperscaler/runtime badge strip
+    # (customer branding + watermark are emitted up front, in step 0/1).
+    _emit_diagram_badge_strip(
         root, diagram, canvas_w, contract, brand_packs, icon_resolver, mol_warnings
     )
 
