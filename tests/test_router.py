@@ -171,3 +171,72 @@ def test_8a_channels_have_valid_axes(gen, sl):
     assert all(c.axis in ("v", "h") for c in res.channels)
     assert any(c.axis == "v" for c in res.channels)   # gutters exist
     assert any(c.axis == "h" for c in res.channels)   # corridors exist
+
+
+# ── 8b: parallel lane offsets ────────────────────────────────────────────────
+def _lanes_layout(n):
+    """A three-column layout with ``n`` left nodes and ``n`` center nodes, all
+    at distinct y — so ``n`` adjacent edges share the single left↔center gutter."""
+    nodes = {}
+    for i in range(n):
+        y = 100 + i * 100
+        nodes[f"L{i}"] = (20, y, 60, 40)
+        nodes[f"C{i}"] = (350, y + 30, 60, 40)   # offset y so each has a real V-seg
+    return {
+        "nodes": nodes, "groups": {}, "canvas": (900, 200 + n * 100),
+        "meta": {"columns": {"left": (0, 100), "center": (300, 500), "right": (700, 800)},
+                 "networkSeparator": None},
+    }
+
+
+def _norm_seg(a, b):
+    return (a, b) if (a, b) <= (b, a) else (b, a)
+
+
+def test_8b_five_edges_through_one_gutter_get_distinct_parallel_lanes():
+    """Five edges sharing one gutter get five distinct lane offsets, ≥10px
+    apart pairwise, and no two polylines share a segment."""
+    lay = _lanes_layout(5)
+    dia = _diagram([_edge(f"e{i}", f"L{i}", f"C{i}") for i in range(5)])
+    res = router.route(dia, lay)
+
+    gutter = next(c for c in res.channels if c.axis == "v" and c.rect.x == 100)
+    assert len(gutter.lanes) == 5
+
+    # the vertical-lane x of each edge = the x shared by its two waypoints
+    lane_x = {}
+    for i in range(5):
+        wps = res.waypoints[f"e{i}"]
+        xs = {round(x, 3) for x, _y in wps}
+        assert len(xs) == 1, "each adjacent edge travels on a single vertical lane"
+        lane_x[f"e{i}"] = xs.pop()
+
+    xs = sorted(lane_x.values())
+    assert len(set(xs)) == 5, "five DISTINCT lane offsets"
+    assert all(b - a >= 10.0 for a, b in zip(xs, xs[1:])), "lanes >= 10px apart"
+    assert all(gutter.rect.x <= x <= gutter.rect.right for x in xs), "lanes in gutter"
+
+    # no two polylines share a segment
+    seen: dict = {}
+    for i in range(5):
+        path = _full_path(res, f"e{i}")
+        for a, b in _segments(path):
+            if abs(a[0] - b[0]) < 0.5 and abs(a[1] - b[1]) < 0.5:
+                continue                              # skip zero-length
+            key = _norm_seg((round(a[0], 2), round(a[1], 2)),
+                            (round(b[0], 2), round(b[1], 2)))
+            assert key not in seen, f"edges e{i} and {seen[key]} share a segment"
+            seen[key] = f"e{i}"
+
+
+def test_8b_lanes_are_deterministic_and_centered():
+    """Lane assignment is stable (sorted by src.y, dst.y, id) and the bundle is
+    centred on the gutter centre-line."""
+    lay = _lanes_layout(4)
+    dia = _diagram([_edge(f"e{i}", f"L{i}", f"C{i}") for i in range(4)])
+    r1 = router.route(dia, lay)
+    r2 = router.route(dia, lay)
+    assert r1.waypoints == r2.waypoints
+    gutter = next(c for c in r1.channels if c.axis == "v" and c.rect.x == 100)
+    xs = [next(iter({x for x, _y in r1.waypoints[f"e{i}"]})) for i in range(4)]
+    assert abs(sum(xs) / len(xs) - gutter.center) < 1e-6

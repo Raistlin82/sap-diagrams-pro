@@ -269,13 +269,41 @@ def _assign_ports(plans: list[_Plan]) -> dict[str, tuple[tuple, tuple]]:
     return out
 
 
-# ── Lanes (8b fleshes out the offsets; here: everyone on the centre-line) ────
+# ── Lanes (8b) ───────────────────────────────────────────────────────────────
 def _allocate_lanes(channels: list[Channel], plans: list[_Plan]
                     ) -> dict[str, float]:
-    """Per-edge perpendicular offset from its channel centre-line. 8a returns 0
-    for every edge (all on the centre-line); 8b assigns distinct parallel
-    lanes so segments sharing a channel never overlap."""
-    return {p.eid: 0.0 for p in plans if p.channel is not None}
+    """Per-edge perpendicular offset from its channel centre-line.
+
+    Every edge sharing a channel gets its own parallel lane, so their in-channel
+    segments are overlap-free *by construction*. Within a channel the edges are
+    sorted by ``(src_bary, dst_bary, eid)`` (the "(src.y, dst.y, id)" rule of
+    the plan, projected onto the channel's relevant axis) and handed lane
+    indices ``0..n-1``; the offset is ``(i-(n-1)/2)*pitch``, centring the bundle
+    on the centre-line. The pitch is ``LANE_PITCH`` (12px) but is reduced to fit
+    a narrow vertical gutter — never below 10px, so the parallel lanes always
+    stay a legible distance apart. ``channel.lanes`` records each edge's index.
+    """
+    by_channel: dict[int, list[_Plan]] = {}
+    for p in plans:
+        if p.channel is not None:
+            by_channel.setdefault(id(p.channel), []).append(p)
+
+    offsets: dict[str, float] = {}
+    for ch in channels:
+        group = by_channel.get(id(ch), [])
+        if not group:
+            continue
+        group.sort(key=lambda p: (p.src_bary, p.dst_bary, p.eid))
+        n = len(group)
+        pitch = LANE_PITCH
+        if ch.axis == "v" and n > 1:                  # keep the bundle in-gutter
+            usable = max(1.0, ch.rect.w - 16.0)
+            if (n - 1) * pitch > usable:
+                pitch = max(10.0, usable / (n - 1))
+        for i, p in enumerate(group):
+            ch.lanes[p.eid] = i
+            offsets[p.eid] = (i - (n - 1) / 2.0) * pitch
+    return offsets
 
 
 # ── Waypoint construction ────────────────────────────────────────────────────
