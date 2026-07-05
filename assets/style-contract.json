@@ -39,6 +39,13 @@
       "#FFF8D6",
       "#FFFFFF"
     ],
+    "placeholders": [
+      "hyperscaler",
+      "persona",
+      "runtime",
+      "service",
+      "watermark"
+    ],
     "scriptVersion": "1.0.0"
   },
   "molecules": {
@@ -72,7 +79,7 @@
         "h": 32,
         "w": 32
       },
-      "notes": "No dedicated Cloud Foundry/Kyma runtime badge cell is selectable by name in the raw mxlibrary (friendly names live only in the derived shape index), so the runtime badge reuses the official service-icon image skeleton; the concrete CF/Kyma logo is supplied at emit time via @{runtime} (brand pack cf-badge).",
+      "notes": "A CF-specific cell exists in the all-size-M library ('10017-sap-btp_cloud-foundry-runtime_sd' — entries are titled only by tech-id, not friendly name); its style skeleton is byte-identical to the generic service-icon skeleton, which we reuse with @{runtime}. The concrete CF/Kyma logo is supplied at emit time (brand pack cf-badge).",
       "source": "official",
       "style": "shape=image;verticalLabelPosition=bottom;verticalAlign=top;imageAspect=0;aspect=fixed;image=@{runtime};fontStyle=0;fontSize=12;fontColor=#1D2D3E"
     },
@@ -103,7 +110,7 @@
         "padX": 42.5,
         "w": 315
       },
-      "notes": "SSAM white rounded capability chip: the SBPA product box's child panel enclosing the 'Decision' label. SSAM draws capabilities as ONE white chip with an icon grid (no per-capability rects). Icon grid measured from enclosed image cells (rows/cols clustered at 8px tolerance): padX/padTop = top-left icon offset, gapX/gapY = column/row pitch, labelDy = label top relative to its icon.",
+      "notes": "SSAM white rounded capability chip: the SBPA product box's child panel enclosing the 'Decision' label. SSAM draws capabilities as ONE white chip with an icon grid (no per-capability rects). Icon grid measured from enclosed image cells (rows/cols clustered at 8px tolerance): padX/padTop = top-left icon offset, gapX/gapY = column/row pitch, labelDy = label top relative to its icon. Exemplar icon columns are uneven (pitches 87.36, 97.28); gapX records the first (canonical) pitch.",
       "source": "exemplar",
       "style": "rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=24;absoluteArcSize=1;imageWidth=64;imageHeight=64;strokeWidth=1.5;"
     },
@@ -218,13 +225,21 @@
       "from": "GOLD:luLoTX2QmnEtCnTCh1jC-44 NETWORK bar (+label luLoTX2QmnEtCnTCh1jC-34)",
       "geometry": {
         "h": 447,
-        "labelH": 30,
-        "labelW": 80,
         "strokeWidth": 3
       },
-      "notes": "SAP_Task_Center_L1 NETWORK zone separator: the vertical grey bar (#5B738B, strokeWidth=3, jumpStyle=gap). The zone LABEL cell style is: 'text;html=1;align=left;verticalAlign=middle;resizable=0;autosize=1;strokeColor=none;fillColor=none;fontSize=12;fontColor=#1D2D3E;fontFamily=Helvetica;' (80x30). Line height (h) is the exemplar span; layout drives the real length.",
+      "notes": "SAP_Task_Center_L1 NETWORK zone separator: the vertical grey bar (#5B738B, strokeWidth=3, jumpStyle=gap). Its caption is the separate molecule 'network-separator-label'. Line height (h) is the exemplar span; layout drives the real length.",
       "source": "official",
       "style": "endArrow=none;html=1;strokeColor=#5B738B;bendable=1;rounded=1;endFill=0;endSize=3;strokeWidth=3;jumpStyle=gap;"
+    },
+    "network-separator-label": {
+      "from": "GOLD:luLoTX2QmnEtCnTCh1jC-34 NETWORK label",
+      "geometry": {
+        "h": 30,
+        "w": 80
+      },
+      "notes": "SAP_Task_Center_L1 NETWORK zone caption: the text cell placed beside the network-separator bar (see that molecule for the line style).",
+      "source": "official",
+      "style": "text;html=1;align=left;verticalAlign=middle;resizable=0;autosize=1;strokeColor=none;fillColor=none;fontSize=12;fontColor=#1D2D3E;fontFamily=Helvetica;"
     },
     "persona": {
       "from": "essentials.xml:User and client",

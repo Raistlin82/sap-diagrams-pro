@@ -29,6 +29,11 @@
           "items": {"type": "string"},
           "description": "The SAP Horizon palette the contract normalizes all fill/stroke/font colors to."
         },
+        "placeholders": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Machine-readable vocabulary of every @{…} image placeholder key used in molecule styles, resolved from the brand pack at emit time."
+        },
         "officialRepo": {"type": "string"},
         "notes": {"type": "string"}
       }

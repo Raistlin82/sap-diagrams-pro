@@ -143,9 +143,11 @@ def normalize_color(attr: str, value: str, molecule: str) -> str:
                 f"{molecule}: {attr}={value} normalizes to {snapped}, off the Horizon palette"
             )
         return snapped
-    # A named/theme token we don't expand — leave as-is (test only guards colors
-    # it can parse as hex/none/default-expanded); flag anything unexpected.
-    return v
+    # Named CSS/theme tokens (e.g. 'red') are never part of the Horizon design
+    # language — reject them so the palette promise holds for every guarded attr.
+    raise ContractError(
+        f"{molecule}: {attr}={value!r} is not a Horizon hex color, 'none', or 'default'"
+    )
 
 
 def _drop_tokens(style: str, keys: set[str]) -> str:
@@ -535,10 +537,11 @@ def x_service_icon(c: Ctx):
 def x_badge_runtime(c: Ctx):
     img, geom = _service_image_cell(c)
     return _spec(img.get("style"), geom, "official",
-                 "No dedicated Cloud Foundry/Kyma runtime badge cell is selectable by name in "
-                 "the raw mxlibrary (friendly names live only in the derived shape index), so the "
-                 "runtime badge reuses the official service-icon image skeleton; the concrete "
-                 "CF/Kyma logo is supplied at emit time via @{runtime} (brand pack cf-badge).",
+                 "A CF-specific cell exists in the all-size-M library "
+                 "('10017-sap-btp_cloud-foundry-runtime_sd' — entries are titled only by "
+                 "tech-id, not friendly name); its style skeleton is byte-identical to the "
+                 "generic service-icon skeleton, which we reuse with @{runtime}. The concrete "
+                 "CF/Kyma logo is supplied at emit time (brand pack cf-badge).",
                  f"{Path(SERVICE_LIB).name}:runtime-badge", image_placeholder="runtime")
 
 
@@ -565,7 +568,7 @@ def x_subaccount_frame(c: Ctx):
                              "padX": num(lab.x - box.x), "padTop": num(lab.y - box.y)},
                  "exemplar",
                  "SSAM tightest white rounded frame (blue border) enclosing the "
-                 f"'Subaccount: Extension …' label; padX/padTop measured from the label offset.",
+                 "'Subaccount: Extension …' label; padX/padTop measured from the label offset.",
                  f"SSAM:{box.id} (Subaccount: Extension)")
 
 
@@ -650,6 +653,11 @@ def x_capability_chip(c: Ctx):
         note += (" Icon grid measured from enclosed image cells (rows/cols clustered "
                  "at 8px tolerance): padX/padTop = top-left icon offset, gapX/gapY = "
                  "column/row pitch, labelDy = label top relative to its icon.")
+        col_pitches = [num(b - a) for a, b in zip(cols, cols[1:])]
+        if len(set(col_pitches)) > 1:
+            note += (f" Exemplar icon columns are uneven (pitches "
+                     f"{', '.join(str(p) for p in col_pitches)}); gapX records the "
+                     "first (canonical) pitch.")
     return _spec(chip.style, geom, "exemplar", note,
                  f"SSAM:{chip.id} (capability panel w/ 'Decision')")
 
@@ -766,23 +774,34 @@ def x_pill_protocol(c: Ctx):
                  f"SSAM:{pill.id} ({pill.vclean})")
 
 
-def x_network_separator(c: Ctx):
-    gold = c.gold
-    labels = gold.labels(r"^NETWORK$")
+def _network_label(c: Ctx) -> Cell:
+    labels = c.gold.labels(r"^NETWORK$")
     if not labels:
         raise ContractError("GOLD: no NETWORK label in SAP_Task_Center_L1")
-    label = labels[0]
-    line = gold.edge_by_stroke("#5B738B", extra="jumpStyle=gap")
+    return labels[0]
+
+
+def x_network_separator(c: Ctx):
+    label = _network_label(c)
+    line = c.gold.edge_by_stroke("#5B738B", extra="jumpStyle=gap")
     _dx, dy = edge_span(line)
-    label_style = normalize_style(label.style, "network-separator")
     return _spec(line.style,
-                 {"h": num(dy), "strokeWidth": 3, "labelW": num(label.w), "labelH": num(label.h)},
+                 {"h": num(dy), "strokeWidth": 3},
                  "official",
                  "SAP_Task_Center_L1 NETWORK zone separator: the vertical grey bar "
-                 "(#5B738B, strokeWidth=3, jumpStyle=gap). The zone LABEL cell style is: "
-                 f"'{label_style}' ({num(label.w)}x{num(label.h)}). Line height (h) is the "
-                 "exemplar span; layout drives the real length.",
+                 "(#5B738B, strokeWidth=3, jumpStyle=gap). Its caption is the separate "
+                 "molecule 'network-separator-label'. Line height (h) is the exemplar "
+                 "span; layout drives the real length.",
                  f"GOLD:{line.id} NETWORK bar (+label {label.id})", is_edge=True)
+
+
+def x_network_separator_label(c: Ctx):
+    label = _network_label(c)
+    return _spec(label.style, {"w": num(label.w), "h": num(label.h)},
+                 "official",
+                 "SAP_Task_Center_L1 NETWORK zone caption: the text cell placed beside the "
+                 "network-separator bar (see that molecule for the line style).",
+                 f"GOLD:{label.id} NETWORK label")
 
 
 def x_edge_identity(c: Ctx):
@@ -838,6 +857,7 @@ EXTRACTORS = [
     ("db", x_db),
     ("legend", x_legend),
     ("network-separator", x_network_separator),
+    ("network-separator-label", x_network_separator_label),
     ("badge-hyperscaler", x_badge_hyperscaler),
     ("badge-runtime", x_badge_runtime),
     ("watermark", x_watermark),
@@ -878,12 +898,19 @@ def build(ctx: Ctx, date: str, corpus_files: list[str]) -> dict:
             "contract extraction FAILED for %d molecule(s):\n%s"
             % (len(errors), "\n".join(errors))
         )
+    # Machine-readable placeholder vocabulary: every @{…} key used in styles.
+    placeholders = sorted({
+        m.group(1)
+        for mol in molecules.values()
+        for m in re.finditer(r"@\{([\w-]+)\}", mol["style"])
+    })
     return {
         "meta": {
             "generatedAt": date,
             "scriptVersion": SCRIPT_VERSION,
             "corpus": sorted(corpus_files),
             "palette": sorted(HORIZON),
+            "placeholders": placeholders,
             "notes": "Colors normalized to SAP Horizon; image payloads are @{…} placeholders "
                      "resolved from the brand pack at emit time (no base64 in this file).",
         },
@@ -895,10 +922,16 @@ def validate(contract: dict, schema_path: Path) -> None:
     schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
     try:
         import jsonschema  # type: ignore
-        jsonschema.validate(contract, schema)
-        return
     except ImportError:
-        pass
+        jsonschema = None
+    if jsonschema is not None:
+        try:
+            jsonschema.validate(contract, schema)
+        except jsonschema.ValidationError as exc:
+            # Surface schema violations through the normal failure path (main()
+            # catches ContractError) instead of a raw traceback.
+            raise ContractError(f"schema: {exc.message}") from exc
+        return
     # Pure-python fallback (no dependency): check the load-bearing constraints.
     if set(contract) < {"meta", "molecules"}:
         raise ContractError("schema: top-level must have meta + molecules")

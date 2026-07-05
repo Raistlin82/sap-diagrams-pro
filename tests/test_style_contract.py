@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 import json, re
 from pathlib import Path
+import pytest
+from conftest import load_script
 ROOT = Path(__file__).resolve().parent.parent
 REQUIRED = {"title-block","btp-area","subaccount-frame","governance-strip","product-box",
   "capability-chip","custom-app-box","tier-box-sap","tier-box-nonsap","backend-box",
@@ -38,3 +40,39 @@ def test_no_style_literals_in_engine_sources():
         p = ROOT/"scripts"/f
         if p.exists():
             assert "fillColor=#" not in p.read_text(), f"{f} hardcodes styles"
+
+def test_artifact_validates_against_schema():
+    # CI-guards the committed artifact against the committed schema.
+    jsonschema = pytest.importorskip("jsonschema")
+    schema = json.loads((ROOT/"assets/style-contract.schema.json").read_text())
+    jsonschema.validate(contract(), schema)
+
+def test_image_values_are_declared_placeholders():
+    c = contract()
+    declared = set(c["meta"]["placeholders"])
+    used = set()
+    for name, m in c["molecules"].items():
+        for val in re.findall(r"image=([^;]+)", m["style"]):
+            assert re.fullmatch(r"@\{[\w-]+\}", val), f"{name}: image= is not a placeholder: {val}"
+            used.add(val[2:-1])
+    assert used == declared, f"meta.placeholders out of sync: used={sorted(used)} declared={sorted(declared)}"
+
+def test_normalize_style_unit():
+    bsc = load_script("build-style-contract")
+    ns = bsc.normalize_style
+    # near-Horizon snap + uppercasing
+    assert "strokeColor=#0070F2" in ns("rounded=1;strokeColor=#0070f3;", "m")
+    assert "fillColor=#EBF8FF" in ns("rounded=1;fillColor=#ecf8ff;", "m")
+    # 'none' passes through untouched
+    assert "fillColor=none" in ns("text;html=1;fillColor=none;", "m")
+    # named colors are rejected (palette promise holds for guarded attrs)
+    with pytest.raises(bsc.ContractError):
+        ns("rounded=1;fillColor=red;", "m")
+    # image payloads -> @{placeholder}, no base64 residue
+    s = ns("shape=image;image=data:image/png;base64,AAAA;aspect=fixed;", "m",
+           image_placeholder="service")
+    assert "image=@{service}" in s and "base64" not in s and "AAAA" not in s
+    # per-instance routing anchors are dropped from edge styles
+    s = ns("endArrow=blockThin;strokeColor=#475E75;exitX=0.5;entryY=1;dashed=1;", "m",
+           is_edge=True)
+    assert "exitX" not in s and "entryY" not in s and "dashed=1" in s
