@@ -11,8 +11,10 @@ and — crucially — assert the collision-free / determinism guarantees via the
 _geom_checks kernel rather than merely "it ran".
 """
 import copy
+import hashlib
 import json
 import types
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -326,3 +328,109 @@ def test_8c_lane_keeps_clearance_from_network_separator(gen, sl):
                 lo, hi = sorted((ay, by))
                 if hi >= y0 and lo <= y1:                    # overlaps the bar's y-range
                     pytest.fail(f"edge {eid} vertical lane hugs the separator at x={ax}")
+
+
+# ── 8d: waypoint emission into the .drawio ────────────────────────────────────
+def _stable(prefix, key):
+    return f"{prefix}-{hashlib.sha1(key.encode('utf-8')).hexdigest()[:8]}"
+
+
+def _cells_by_id(root):
+    return {c.get("id"): c for c in root.iter("mxCell") if c.get("id")}
+
+
+def _abs_topleft(cell_id, cells, _seen=None):
+    """Absolute (x, y) of a cell, walking the parent chain (like the layout /
+    validator do): a cell's mxGeometry is relative to its non-layer parent."""
+    _seen = _seen or set()
+    if cell_id in _seen or cell_id not in cells:
+        return 0.0, 0.0
+    _seen.add(cell_id)
+    cell = cells[cell_id]
+    geom = cell.find("mxGeometry")
+    if geom is None:
+        return 0.0, 0.0
+    x = float(geom.get("x", "0") or 0)
+    y = float(geom.get("y", "0") or 0)
+    parent = cell.get("parent")
+    if parent and parent not in ("0", "1"):
+        px, py = _abs_topleft(parent, cells, _seen)
+        x, y = x + px, y + py
+    return x, y
+
+
+def _node_abs_from_drawio(root, cells, diagram):
+    """Reconstruct {node_id: (x,y,w,h)} from the emitted file — exactly the
+    drawn geometry the emitter fed the router (node_abs_geom)."""
+    out = {}
+    for n in diagram.nodes:
+        cid = _stable("n", n.id)
+        cell = cells.get(cid)
+        if cell is None:
+            continue
+        geom = cell.find("mxGeometry")
+        if geom is None:
+            continue
+        x, y = _abs_topleft(cid, cells)
+        out[n.id] = (x, y, float(geom.get("width", "0")), float(geom.get("height", "0")))
+    return out
+
+
+def _parse_style(style):
+    out = {}
+    for chunk in (style or "").split(";"):
+        if "=" in chunk:
+            k, _, v = chunk.partition("=")
+            out[k.strip()] = v.strip()
+    return out
+
+
+@pytest.mark.parametrize("path", [V2, NOVA], ids=["ir-v2", "nova"])
+def test_8d_every_edge_has_array_points_matching_router_and_anchors(gen, sl, path):
+    """Every emitted edge carries an <Array as="points"> whose mxPoints match
+    the router output (±1px, reconstructed from the drawn geometry) plus
+    exitX/exitY/entryX/entryY in its style."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    diagram = gen.parse_json(payload)
+    layout = sl.compute_layout(diagram, gen.ShapeIndex.load())
+    xml = gen.emit(diagram, layout="auto")
+    root = ET.fromstring(xml)
+    cells = _cells_by_id(root)
+
+    router_layout = dict(layout)
+    router_layout["nodes"] = _node_abs_from_drawio(root, cells, diagram)
+    res = router.route(diagram, router_layout)
+
+    for e in diagram.edges:
+        cid = _stable("e", e.id)
+        cell = cells.get(cid)
+        assert cell is not None, f"edge {e.id} not emitted"
+        arr = cell.find("./mxGeometry/Array[@as='points']")
+        assert arr is not None, f"edge {e.id} has no <Array as='points'>"
+        pts = [(float(p.get("x")), float(p.get("y"))) for p in arr.findall("mxPoint")]
+        assert len(pts) >= 1, f"edge {e.id} has no mxPoint"
+
+        expected = res.waypoints[e.id]
+        assert len(pts) == len(expected), f"edge {e.id} waypoint count mismatch"
+        for (px, py), (ex, ey) in zip(pts, expected):
+            assert abs(px - ex) <= 1.0 and abs(py - ey) <= 1.0, (
+                f"edge {e.id} mxPoint ({px},{py}) != router ({ex},{ey}) ±1px"
+            )
+
+        style = _parse_style(cell.get("style"))
+        for k in ("exitX", "exitY", "entryX", "entryY"):
+            assert k in style, f"edge {e.id} style missing {k}"
+
+
+@pytest.mark.parametrize("path", [V2, NOVA], ids=["ir-v2", "nova"])
+def test_8d_validate_drawio_zero_critical(gen, sl, tmp_path, path):
+    """The generated .drawio passes validate-drawio.py with 0 CRITICAL."""
+    validate = load_script("validate-drawio")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    diagram = gen.parse_json(payload)
+    xml = gen.emit(diagram, layout="auto")
+    out = tmp_path / f"{path.stem}.drawio"
+    out.write_text(xml, encoding="utf-8")
+    issues = validate.validate(out)
+    critical = [i for i in issues if i.severity == "CRITICAL"]
+    assert not critical, f"{path.name}: {[i.message for i in critical]}"

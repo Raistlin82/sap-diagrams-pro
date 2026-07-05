@@ -1191,6 +1191,29 @@ def _molecules_module():
     return _MOLECULES_MOD
 
 
+_CHANNEL_ROUTER_MOD = None
+
+
+def _channel_router_module():
+    """Lazily import scripts/_channel_router.py (Task 8 — the edge router).
+    Cached for the process, loaded the same path-based way as _molecules."""
+    global _CHANNEL_ROUTER_MOD
+    if _CHANNEL_ROUTER_MOD is None:
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "_channel_router", Path(__file__).resolve().parent / "_channel_router.py"
+        )
+        _mod = _ilu.module_from_spec(_spec)
+        # Register BEFORE exec: _channel_router uses `from __future__ import
+        # annotations` + @dataclass, so dataclass creation needs
+        # sys.modules["_channel_router"] populated to resolve string annotations
+        # (KW_ONLY/ClassVar lookups). See tests/conftest.load_script's note.
+        sys.modules["_channel_router"] = _mod
+        _spec.loader.exec_module(_mod)
+        _CHANNEL_ROUTER_MOD = _mod
+    return _CHANNEL_ROUTER_MOD
+
+
 def _num(v: float) -> str:
     """Serialise a molecule coordinate to a rounded-int drawio string."""
     return str(int(round(float(v))))
@@ -1947,9 +1970,22 @@ def emit(
                 },
             )
 
-    # 4. Edges — anchors distributed across node sides so connectors fan out
-    #    instead of stacking on a single side-midpoint.
-    edge_anchors = _distribute_anchors(diagram.edges, node_abs_geom)
+    # 4. Edges — the channel router (Task 8) computes overlap-free waypoints
+    #    through reserved corridors + barycenter-distributed exit/entry ports,
+    #    plus collision-free pill/label slots. It routes against the ACTUAL
+    #    drawn node geometry (node_abs_geom), not the footprint cells, so ports
+    #    hug the real icon/box edges. The greedy debug layout keeps the legacy
+    #    side-midpoint distribution and draw.io default routing.
+    route_result = None
+    if layout != "greedy":
+        _cr = _channel_router_module()
+        router_layout = dict(layout_result)
+        router_layout["nodes"] = dict(node_abs_geom)
+        route_result = _cr.route(diagram, router_layout)
+        edge_anchors = dict(route_result.port_fracs)
+        edge_waypoints = dict(route_result.waypoints)
+    else:
+        edge_anchors = _distribute_anchors(diagram.edges, node_abs_geom)
     for e in diagram.edges:
         edge_id = _stable_id("e", e.id)
         # For pill-rendered kinds (trust, authenticate, authorize,
