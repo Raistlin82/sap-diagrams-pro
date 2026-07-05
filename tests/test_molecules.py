@@ -291,22 +291,34 @@ def test_badge_appends_warning_when_unresolved(M, contract):
     assert any("'aws'" in w for w in warnings)
 
 
-def test_golden_branding_and_diagram_badges_warn_on_unresolved_assets(capsys):
-    # End-to-end proof (FIX-1): render the v2 fixture (customerLogo="acme",
-    # partnerWatermark="lutech", metadata.badges.hyperscalers=["azure"]) with
-    # NO .local brand pack. Before the fix, only "azure" warned — via the
-    # group-badge path (cloud-tier-right's own hyperscaler badge, wired
-    # through `_place_molecule`) — because `_emit_branding_and_badges`
-    # received icon_resolver/warnings but never passed them into
-    # `branding_block`/`badge`. Now all three degrade-and-warn identically.
+def test_branding_and_badges_warn_on_unresolvable_assets(capsys):
+    # End-to-end proof (FIX-1), DETERMINISTIC regardless of whether the
+    # gitignored .local brand pack is hydrated: point every branding/badge
+    # slot at names that exist in NO pack (public or .local), so all three
+    # code paths degrade-and-warn. Before the fix, the customer-logo and
+    # watermark paths (metadata.branding → branding_block → badge) silently
+    # dropped the WARNING because `_emit_branding_and_badges` received
+    # icon_resolver/warnings but never threaded them through; only the
+    # group-badge path (via `_place_molecule`) warned. Now all three do.
     gen = load_script("generate-drawio")
-    diagram = gen.parse_json(json.loads(V2_FIXTURE.read_text(encoding="utf-8")))
+    ir = {
+        "metadata": {
+            "title": "Warn Test",
+            "branding": {"customerLogo": "zzz-no-logo",
+                         "partnerWatermark": "zzz-no-watermark"},
+        },
+        "groups": [{"id": "tier1", "type": "cloud-tier", "kind": "public",
+                    "label": "Public", "badges": {"hyperscalers": ["zzz-no-badge"]}}],
+        "nodes": [{"id": "n1", "label": "Sys", "group": "tier1"}],
+        "edges": [],
+    }
+    diagram = gen.parse_json(ir)
     gen.emit(diagram, layout="auto")
     stderr = capsys.readouterr().err
     assert "WARNING" in stderr
-    assert "'acme'" in stderr, "customer logo (metadata.branding) must warn — was silent pre-fix"
-    assert "'lutech'" in stderr, "partner watermark (metadata.branding) must warn — was silent pre-fix"
-    assert "'azure'" in stderr, "hyperscaler badge must keep warning (already worked pre-fix)"
+    assert "zzz-no-logo" in stderr, "customer logo (metadata.branding) must warn — was silent pre-fix"
+    assert "zzz-no-watermark" in stderr, "partner watermark (metadata.branding) must warn — was silent pre-fix"
+    assert "zzz-no-badge" in stderr, "hyperscaler badge must warn on unresolvable asset"
 
 
 def test_flow_family_style_maps_all_six(M, contract):
