@@ -39,31 +39,19 @@ Usage:
         --official-repo ~/tools/btp-solution-diagrams \\
         exemplar1.drawio exemplar2.drawio ...
 
-This script is standalone (no imports from the other scripts/*.py files)
-so it can be dropped in or run in isolation.
+Page-decompression and mxlibrary parsing live in the shared ``_drawio_io``
+module (also used by build-style-contract.py); everything else is local.
 """
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import re
 import sys
-import urllib.parse
 import xml.etree.ElementTree as ET
-import zlib
 from pathlib import Path
 
-# Prefer defusedxml for parsing untrusted .drawio/.xml input (guards XXE /
-# billion-laughs); fall back to the stdlib parser when it isn't installed.
-# Mirrors scripts/validate-drawio.py's posture — duplicated here (not
-# imported) so this script stays standalone.
-try:
-    from defusedxml.ElementTree import fromstring as _xml_fromstring
-    from defusedxml.ElementTree import parse as _xml_parse
-except Exception:  # pragma: no cover - defusedxml optional
-    from xml.etree.ElementTree import fromstring as _xml_fromstring
-    from xml.etree.ElementTree import parse as _xml_parse
+from _drawio_io import decode_diagram_pages, parse_entry_cells, parse_mxlibrary
 
 OFFICIAL_LICENSE_NOTE = "SAP btp-solution-diagrams, Apache-2.0"
 EXEMPLAR_LICENSE_NOTE = "trademark — local use only, do not redistribute"
@@ -71,51 +59,9 @@ LIB_SUBPATH = Path("assets/shape-libraries-and-editable-presets/draw.io")
 
 
 # ── draw.io page decompression ───────────────────────────────────────────
-def _decode_diagram_text(text: str) -> str | None:
-    """Turn a compressed <diagram> text payload back into raw XML.
-
-    draw.io stores each page either inline (child <mxGraphModel> element —
-    handled by the caller before this is reached) or compressed: base64 →
-    raw DEFLATE (zlib, -15 window bits ⇒ no header/checksum) → URL-decoded
-    UTF-8 text. Content that already starts with '<' is passed through.
-    """
-    stripped = text.strip()
-    if not stripped:
-        return None
-    if stripped.startswith("<"):
-        return stripped
-    try:
-        raw = base64.b64decode(stripped)
-        inflated = zlib.decompress(raw, -15)
-        return urllib.parse.unquote(inflated.decode("utf-8"))
-    except Exception as exc:
-        print(f"WARNING: could not decompress a <diagram> page: {exc}", file=sys.stderr)
-        return None
-
-
-def _diagram_pages(root: ET.Element) -> list[ET.Element]:
-    """Return one parsed element per diagram page, decompressing as needed."""
-    diagrams = root.findall("diagram") if root.tag == "mxfile" else [root]
-    pages: list[ET.Element] = []
-    for d in diagrams:
-        if list(d):
-            # Already-parsed XML tree (uncompressed page): mxCells are
-            # reachable directly via .iter() below.
-            pages.append(d)
-            continue
-        xml_text = _decode_diagram_text(d.text or "")
-        if not xml_text:
-            continue
-        try:
-            pages.append(_xml_fromstring(xml_text))
-        except ET.ParseError as exc:
-            print(f"WARNING: could not parse a decompressed diagram page: {exc}", file=sys.stderr)
-    return pages
-
-
 def _load_pages(path: Path) -> list[ET.Element]:
-    tree = _xml_parse(path)
-    return _diagram_pages(tree.getroot())
+    """Page root elements only (names are unused by the harvester)."""
+    return [root for _name, root in decode_diagram_pages(path)]
 
 
 # ── style parsing ────────────────────────────────────────────────────────
@@ -239,29 +185,6 @@ def _best_exemplar_match(
 
 
 # ── official-library resolution ──────────────────────────────────────────
-def _parse_mxlibrary(path: Path) -> list[dict] | None:
-    """Parse an mxlibrary XML file (<mxlibrary>[JSON array]</mxlibrary>)."""
-    if not path.exists():
-        return None
-    try:
-        tree = _xml_parse(path)
-    except Exception as exc:
-        print(f"WARNING: could not parse library {path}: {exc}", file=sys.stderr)
-        return None
-    root = tree.getroot()
-    if root.tag != "mxlibrary":
-        print(f"WARNING: {path} is not an <mxlibrary> file (root=<{root.tag}>)", file=sys.stderr)
-        return None
-    text = (root.text or "").strip()
-    if not text:
-        return []
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        print(f"WARNING: could not JSON-decode library body of {path}: {exc}", file=sys.stderr)
-        return None
-
-
 def _resolve_official(
     asset: dict, official_repo: Path | None, lib_cache: dict[str, list[dict] | None]
 ) -> tuple[str, str] | None:
@@ -282,7 +205,7 @@ def _resolve_official(
         return None
 
     if filename not in lib_cache:
-        lib_cache[filename] = _parse_mxlibrary(Path(official_repo) / LIB_SUBPATH / filename)
+        lib_cache[filename] = parse_mxlibrary(Path(official_repo) / LIB_SUBPATH / filename)
     entries = lib_cache[filename]
     if entries is None:
         print(
@@ -302,7 +225,7 @@ def _resolve_official(
     best: str | None = None
     best_size = -1
     for entry in matches:
-        # entry["xml"] comes from _parse_mxlibrary(), which reads it via
+        # entry["xml"] comes from parse_mxlibrary(), which reads it via
         # ElementTree's .text — that already performs ONE round of XML
         # entity-decoding as a normal part of parsing the outer <mxlibrary>
         # wrapper. entry["xml"] is therefore already at exactly the escaping
@@ -310,11 +233,10 @@ def _resolve_official(
         # (that over-decodes any cell whose value="..." itself holds
         # escaped rich text — e.g. the "(Text Only)" chips — turning their
         # escaped `&lt;font ...&gt;` markup into literal unescaped `<`/`"`
-        # characters and breaking the parse).
-        try:
-            page_root = _xml_fromstring(entry.get("xml") or "")
-        except ET.ParseError as exc:
-            print(f"WARNING: could not parse library entry {title!r} in {filename}: {exc}", file=sys.stderr)
+        # characters and breaking the parse). parse_entry_cells preserves
+        # exactly this single-decode behavior.
+        page_root = parse_entry_cells(entry.get("xml") or "")
+        if page_root is None:
             continue
         for cell in page_root.iter("mxCell"):
             data_uri = _extract_image_data_uri(cell.get("style") or "")

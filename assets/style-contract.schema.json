@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Raistlin82/sap-diagrams-pro/schemas/style-contract.schema.json",
+  "title": "SAP Diagrams Pro — Style Contract",
+  "description": "Canonical draw.io style string + geometry for every diagram molecule (containers, chips, personas, pills, badges, edges, separators), extracted from SAP's official btp-solution-diagrams libraries and the Lutech exemplar corpus. The single source of truth consumed by the molecule/skeleton/router engine so no style is ever hardcoded in engine sources.",
+  "type": "object",
+  "required": ["meta", "molecules"],
+  "additionalProperties": false,
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["generatedAt", "scriptVersion", "corpus"],
+      "properties": {
+        "generatedAt": {
+          "type": "string",
+          "description": "Generation date, passed in via --date (never datetime.now) so the artifact is reproducible."
+        },
+        "scriptVersion": {
+          "type": "string",
+          "description": "Version of build-style-contract.py that produced this file."
+        },
+        "corpus": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Basenames of the official libraries + exemplar files the styles were extracted from."
+        },
+        "palette": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "The SAP Horizon palette the contract normalizes all fill/stroke/font colors to."
+        },
+        "officialRepo": {"type": "string"},
+        "notes": {"type": "string"}
+      }
+    },
+    "molecules": {
+      "type": "object",
+      "description": "Molecule key -> style contract entry. The required keys below MUST all be present; extra keys (e.g. sap-btp-chip) are allowed.",
+      "required": [
+        "title-block", "btp-area", "subaccount-frame", "governance-strip", "product-box",
+        "capability-chip", "custom-app-box", "tier-box-sap", "tier-box-nonsap", "backend-box",
+        "persona", "service-icon", "chip", "db", "legend", "network-separator", "badge-hyperscaler",
+        "badge-runtime", "watermark", "pill-protocol", "pill-interface", "step-circle",
+        "edge-default", "edge-identity", "edge-provisioning", "edge-master-data", "edge-transport", "edge-firewall"
+      ],
+      "additionalProperties": {"$ref": "#/definitions/molecule"}
+    }
+  },
+  "definitions": {
+    "molecule": {
+      "type": "object",
+      "required": ["style", "geometry", "source", "notes"],
+      "additionalProperties": false,
+      "properties": {
+        "style": {
+          "type": "string",
+          "description": "draw.io mxGraph 'key=value;' style string. Colors are uppercase Horizon hex or 'none'; image payloads are replaced by '@{asset-key}' placeholders resolved from the brand pack at emit time."
+        },
+        "geometry": {
+          "type": "object",
+          "description": "Reference geometry from the source cell's mxGeometry plus any derived paddings/gaps.",
+          "additionalProperties": {"type": "number"}
+        },
+        "source": {
+          "type": "string",
+          "enum": ["official", "exemplar"]
+        },
+        "from": {
+          "type": "string",
+          "description": "Chosen source cell descriptor: file + value/title/id."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Selection rationale, derivations, and any documented color/border normalizations."
+        }
+      }
+    }
+  }
+}
