@@ -207,6 +207,19 @@ class Group:
     flow: str | None = None    # "row" | "col" | "grid" — intra-group packing
     zone: str | None = None    # "left" | "center" | "right" — column override
     nodes: list[str] = field(default_factory=list)
+    # ─── IR v2 (Task 4) ─────────────────────────────────────────────────────
+    # All v2 fields are optional and default to None so v1 IRs parse
+    # unchanged. `type` additionally accepts "subaccount", "governance",
+    # "cloud-tier" and "custom-app" (validated by scripts/validate-ir.py, not
+    # here — see that script's ALLOWED_GROUP_TYPES). Molecule emission for
+    # these is wired in Task 5; this task only adds the fields + parsing.
+    #
+    # Cloud-tier kind, meaningful when type == "cloud-tier":
+    #   "public" | "private" | "any-premise"
+    kind: str | None = None
+    # Badge collection rendered on subaccount / cloud-tier groups, e.g.:
+    #   {"hyperscalers": ["aws", "azure"], "runtimes": ["cloud-foundry"]}
+    badges: dict[str, Any] | None = None
 
 
 @dataclass
@@ -243,6 +256,17 @@ class Node:
     # Optional one-line caption under the title in a backend-box molecule
     # (RIGHT-zone systems, e.g. "Mobile or Desktop"). Ignored for bare icons.
     subtitle: str | None = None
+    # ─── IR v2 (Task 4) ─────────────────────────────────────────────────────
+    # Optional; None default keeps v1 IRs unchanged. Molecule emission (Task
+    # 5) and validation (scripts/validate-ir.py) own the actual vocabulary.
+    #
+    # Node archetype: "product" | "chip" | "db". `product` is a leaf molecule
+    # (a box whose `capabilities` are data, not addressable child nodes).
+    type: str | None = None
+    # Capability list for `type == "product"` nodes, e.g.:
+    #   [{"label": "Decision", "icon": "decision"}, {"label": "Actions"}]
+    # Each entry is {label: str, icon?: str} — checked by validate-ir.py.
+    capabilities: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -269,6 +293,18 @@ class Edge:
     # (Trust-like), grey (protocol-like), blue (REST/SAML2/OIDC), teal (BTP
     # accent). The pill is always rendered with arcSize=50 + fontStyle=1.
     pillColor: str = "purple"
+    # ─── IR v2 (Task 4) ─────────────────────────────────────────────────────
+    # Optional; None default keeps v1 IRs unchanged.
+    #
+    # Protocol/annotation text rendered as a pill on the edge (e.g. "SCIM",
+    # "SAML2/OIDC", "CTMS"). Distinct from `kind`/`pillColor` (the v1 "SAP
+    # canonical pill" mechanism) — positioning is owned by the channel
+    # router (Task 8e); this task only carries the text through parsing.
+    pill: str | None = None
+    # Semantic flow family driving edge colour + dash from the style
+    # contract (Task 5): "identity" | "provisioning" | "master-data" |
+    # "transport" | "default". Checked by validate-ir.py when not None.
+    flowFamily: str | None = None
 
 
 @dataclass
@@ -290,6 +326,22 @@ class Diagram:
     nodes: list[Node]
     edges: list[Edge]
     presets: list[Preset] = field(default_factory=list)
+    # ─── IR v2 (Task 4) ─────────────────────────────────────────────────────
+    # All optional; None default keeps v1 IRs unchanged.
+    #
+    # Mechanical patch vocabulary consumed by the visual rubric (Task 13),
+    # e.g. [{"op": "set_group_flow", "group": "btp-core", "value": "row"}].
+    # Opaque to this task — carried through parsing only.
+    layoutHints: list[dict[str, Any]] | None = None
+    # metadata.branding — refs into assets/brand-pack(.local)/, e.g.:
+    #   {"customerLogo": "acme", "partnerWatermark": "lutech"}
+    # Missing local assets degrade gracefully at emit time (Task 5+); never
+    # a hard failure here.
+    branding: dict[str, Any] | None = None
+    # metadata.badges — same {hyperscalers: [...], runtimes: [...]} shape as
+    # Group.badges, but scoped to the whole diagram (e.g. a title-block strip)
+    # rather than a single subaccount/cloud-tier group.
+    badges: dict[str, Any] | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -473,6 +525,8 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
             flow=g.get("flow"),
             zone=g.get("zone"),
             nodes=[],
+            kind=g.get("kind"),
+            badges=g.get("badges"),
         )
 
     nodes: list[Node] = []
@@ -490,6 +544,8 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
             stepKind=n.get("stepKind", "default"),
             genericIcon=n.get("genericIcon"),
             subtitle=n.get("subtitle"),
+            type=n.get("type"),
+            capabilities=n.get("capabilities"),
         )
         nodes.append(node)
         if node.group and node.group in group_map:
@@ -530,6 +586,8 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
                 direction=e.get("direction", "forward"),
                 kind=kind,
                 pillColor=pill_color,
+                pill=e.get("pill"),
+                flowFamily=e.get("flowFamily"),
             )
         )
 
@@ -552,6 +610,9 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
         nodes=nodes,
         edges=edges,
         presets=presets,
+        layoutHints=payload.get("layoutHints"),
+        branding=meta.get("branding"),
+        badges=meta.get("badges"),
     )
 
 
