@@ -434,3 +434,85 @@ def test_8d_validate_drawio_zero_critical(gen, sl, tmp_path, path):
     issues = validate.validate(out)
     critical = [i for i in issues if i.severity == "CRITICAL"]
     assert not critical, f"{path.name}: {[i.message for i in critical]}"
+
+
+# ── 8e: collision-free pill & label slots ────────────────────────────────────
+def _rect_at(center, dims):
+    (cx, cy), (w, h) = center, dims
+    return Rect(cx - w / 2, cy - h / 2, w, h)
+
+
+@pytest.mark.parametrize("path", [V2, NOVA], ids=["ir-v2", "nova"])
+def test_8e_pills_and_labels_are_collision_free(gen, sl, path):
+    """No pill/label rect overlaps any node/box or any other pill/label rect,
+    and no LABEL rect is crossed by a foreign edge segment — all checked with
+    the _geom_checks kernel the router used."""
+    diagram, layout, res = _fixture_route(gen, sl, path)
+    node_rects = [Rect(*t) for t in layout["nodes"].values()]
+
+    # collect every placed pill/label as (eid, kind, rect)
+    placed = []
+    for eid, c in res.pill_pos.items():
+        e = next(x for x in diagram.edges if x.id == eid)
+        placed.append((eid, "pill", _rect_at(c, router.pill_dims(e.pill))))
+    for eid, c in res.label_pos.items():
+        e = next(x for x in diagram.edges if x.id == eid)
+        placed.append((eid, "label", _rect_at(c, router.label_dims(e.label))))
+    assert placed, "fixture must exercise some pills/labels"
+
+    # 1. no pill/label overlaps any node box
+    for eid, kind, r in placed:
+        for nr in node_rects:
+            assert not gc.rects_overlap(r, nr), f"{kind} {eid} overlaps a node"
+
+    # 2. no pill/label overlaps another pill/label
+    for i in range(len(placed)):
+        for j in range(i + 1, len(placed)):
+            assert not gc.rects_overlap(placed[i][2], placed[j][2]), (
+                f"{placed[i][1]} {placed[i][0]} overlaps {placed[j][1]} {placed[j][0]}"
+            )
+
+    # 3. no LABEL rect is crossed by a FOREIGN edge segment
+    segs_by_edge = {eid: _segments(_full_path(res, eid)) for eid in res.waypoints}
+    for eid, kind, r in placed:
+        if kind != "label":
+            continue
+        for other, segs in segs_by_edge.items():
+            if other == eid:
+                continue
+            for a, b in segs:
+                assert not gc.seg_intersects_rect(a, b, r), (
+                    f"label {eid} crossed by foreign edge {other}"
+                )
+
+
+def test_8e_pill_starts_from_longest_segment_midpoint():
+    """With space available, a lone edge's pill lands on its longest segment's
+    midpoint (the base slot, no shift needed)."""
+    lay = _synthetic()
+    dia = _diagram([_edge("e1", "L1", "C1", pill="SCIM")])
+    res = router.route(dia, lay)
+    path = _full_path(res, "e1")
+    a, b = router._longest_segment(path)
+    mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+    px, py = res.pill_pos["e1"]
+    assert abs(px - mid[0]) < 1e-6 and abs(py - mid[1]) < 1e-6
+
+
+def test_8e_pill_and_label_on_same_edge_do_not_overlap():
+    """An edge carrying BOTH a pill and a label gets two non-overlapping slots."""
+    lay = _synthetic()
+    dia = _diagram([_edge("e1", "L1", "C1", pill="SCIM", label="Provision users")])
+    res = router.route(dia, lay)
+    pr = _rect_at(res.pill_pos["e1"], router.pill_dims("SCIM"))
+    lr = _rect_at(res.label_pos["e1"], router.label_dims("Provision users"))
+    assert not gc.rects_overlap(pr, lr)
+
+
+def test_8e_deterministic_slots(gen, sl):
+    """Pill/label slots are byte-identical across runs."""
+    for path in (V2, NOVA):
+        _d1, _l1, r1 = _fixture_route(gen, sl, path)
+        _d2, _l2, r2 = _fixture_route(gen, sl, path)
+        assert r1.pill_pos == r2.pill_pos
+        assert r1.label_pos == r2.label_pos

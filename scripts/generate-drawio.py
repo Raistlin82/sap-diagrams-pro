@@ -1467,6 +1467,25 @@ def _emit_diagram_badge_strip(
                 x -= 8
 
 
+def _emit_slot_cell(root, cid, value, style, center, w, h):
+    """Emit a top-level (parent="1") vertex centred on absolute ``center`` — the
+    channel router's collision-free slot for an edge pill/label. Absolute (not
+    edge-relative) placement is what makes the slot overlap-free by construction
+    (Task 8e); the router guarantees no foreign edge crosses the rect, so
+    z-order against the connectors is a non-issue."""
+    cx, cy = center
+    c = ET.SubElement(
+        root, "mxCell",
+        attrib={"id": cid, "value": value, "style": style,
+                "vertex": "1", "parent": "1", "connectable": "0"},
+    )
+    ET.SubElement(
+        c, "mxGeometry",
+        attrib={"x": _num(cx - w / 2.0), "y": _num(cy - h / 2.0),
+                "width": _num(w), "height": _num(h), "as": "geometry"},
+    )
+
+
 def emit(
     diagram: Diagram,
     shape_index: "ShapeIndex | None" = None,
@@ -1977,11 +1996,11 @@ def emit(
     #    hug the real icon/box edges. The greedy debug layout keeps the legacy
     #    side-midpoint distribution and draw.io default routing.
     route_result = None
+    _crmod = _channel_router_module()
     if layout != "greedy":
-        _cr = _channel_router_module()
         router_layout = dict(layout_result)
         router_layout["nodes"] = dict(node_abs_geom)
-        route_result = _cr.route(diagram, router_layout)
+        route_result = _crmod.route(diagram, router_layout)
         edge_anchors = dict(route_result.port_fracs)
         edge_waypoints = dict(route_result.waypoints)
     else:
@@ -1993,7 +2012,13 @@ def emit(
         # separate rounded vertex child. drawio does NOT honour arcSize on
         # inline edge labels, so the multi-cell pattern is the only way.
         has_pill = e.kind in _EDGE_KIND_PILL or e.kind == "annotation"
-        inline_value = "" if has_pill else e.label
+        # The channel router (8e) drops labels + protocol pills into
+        # collision-free slots, emitted as ABSOLUTE cells; so when routing is
+        # active the edge itself carries no inline label. The greedy debug
+        # path keeps the legacy inline label / edge-child pills.
+        pill_center = route_result.pill_pos.get(e.id) if route_result else None
+        label_center = route_result.label_pos.get(e.id) if route_result else None
+        inline_value = e.label if (route_result is None and not has_pill) else ""
         # IR v2 flow family → contract edge molecule (edge-identity / -provisioning
         # / -master-data / -transport / -firewall / -default); else the v1 style.
         if e.flowFamily:
@@ -2032,38 +2057,43 @@ def emit(
                 )
 
         # IR v2 protocol pill (e.g. "SCIM", "SAML2/OIDC"): a contract-styled
-        # child vertex of the edge, emitted at (0,0) — the channel router
-        # (Task 8e) positions it along the edge later.
+        # vertex. With routing active it's placed at the router's collision-free
+        # absolute slot (pill_center); the greedy path keeps the legacy
+        # edge-child at (0,0).
         if e.pill:
             pcell = _M.pill(e, contract)
-            p_cell = ET.SubElement(
-                root,
-                "mxCell",
-                attrib={
-                    "id": _stable_id("pp", e.id),
-                    "value": pcell["value"],
-                    "style": pcell["style"],
-                    "vertex": "1",
-                    "parent": edge_id,
-                    "connectable": "0",
-                },
-            )
-            ET.SubElement(
-                p_cell,
-                "mxGeometry",
-                attrib={
-                    "x": "0", "y": "0",
-                    "width": _num(pcell["w"]), "height": _num(pcell["h"]),
-                    "relative": "1", "as": "geometry",
-                },
-            )
+            if pill_center is not None:
+                pw, ph = _crmod.pill_dims(e.pill)
+                _emit_slot_cell(root, _stable_id("pp", e.id), pcell["value"],
+                                pcell["style"], pill_center, pw, ph)
+            else:
+                p_cell = ET.SubElement(
+                    root,
+                    "mxCell",
+                    attrib={
+                        "id": _stable_id("pp", e.id),
+                        "value": pcell["value"],
+                        "style": pcell["style"],
+                        "vertex": "1",
+                        "parent": edge_id,
+                        "connectable": "0",
+                    },
+                )
+                ET.SubElement(
+                    p_cell,
+                    "mxGeometry",
+                    attrib={
+                        "x": "0", "y": "0",
+                        "width": _num(pcell["w"]), "height": _num(pcell["h"]),
+                        "relative": "1", "as": "geometry",
+                    },
+                )
 
-        # Pill labels for the 4 SAP-canonical edge kinds (trust,
-        # authenticate, authorize, generic_protocol). Each kind has its
-        # own stroke + fill + fontColor sourced from the SAP
-        # annotations_and_interfaces.xml library. The pill's geometry uses
-        # relative=1 with offset so it centres on the edge's midpoint
-        # regardless of the edge's actual length or routing.
+        # Edge label. With routing active the router (8e) gives a collision-free
+        # absolute slot (label_center): SAP-canonical pill kinds keep their
+        # rounded coloured chip; plain / flowFamily labels get a white-backed
+        # text box (hiding the connector behind the text). The greedy path keeps
+        # the legacy edge-child pill for pill kinds (plain labels stay inline).
         if has_pill and e.label:
             if e.kind == "annotation":
                 # 1. Try canonical catalog first — if the label is a known
@@ -2084,9 +2114,29 @@ def emit(
                     )
             else:
                 pill_def = _EDGE_KIND_PILL[e.kind]
-            # Width adapts to label length (rough heuristic: ~6.5 px/char +
-            # padding) so longer labels like "Generic Protocol" don't get
-            # clipped, while short ones like "Trust" stay tight.
+
+        if e.label and label_center is not None:
+            if has_pill:
+                lw, lh = _crmod.label_dims(e.label)
+                lstyle = (
+                    f"rounded=1;whiteSpace=wrap;html=1;arcSize=50;"
+                    f"strokeColor={pill_def['stroke']};"
+                    f"fillColor={pill_def['fill']};"
+                    f"fontColor={pill_def['fontColor']};"
+                    f"fontStyle=1;strokeWidth=1.5;fontSize=10;"
+                    f"align=center;verticalAlign=middle;"
+                )
+            else:
+                lw, lh = _crmod.label_dims(e.label)
+                lstyle = (
+                    f"text;html=1;whiteSpace=wrap;rounded=0;strokeColor=none;"
+                    f"fillColor=#FFFFFF;fontColor={PALETTE['text']};fontSize=10;"
+                    f"align=center;verticalAlign=middle;"
+                )
+            _emit_slot_cell(root, _stable_id("p", e.id), e.label, lstyle,
+                            label_center, lw, lh)
+        elif has_pill and e.label:
+            # greedy fallback: edge-child pill centred on the edge midpoint
             pill_w = max(56, min(168, len(e.label) * 6 + 18))
             pill = ET.SubElement(
                 root,

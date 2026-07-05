@@ -210,20 +210,24 @@ def _bfs_columns(adj: dict[int, list[int]], start: int, goal: int) -> list[int]:
 
 
 # ── Planning ─────────────────────────────────────────────────────────────────
-def _plan_edge(eid, src, dst, src_id, dst_id, src_col, dst_col, gutters,
-               corridors) -> _Plan:
+def _plan_edge(eid, src, dst, src_id, dst_id, src_col, dst_col, region_path,
+               gutters, corridors) -> _Plan:
     """Classify one edge and pick its exit/entry sides + shared channel.
 
-    Three structural cases exploit the skeleton:
-      * ``adjacent`` (columns differ by one) — an H-V-H route whose vertical
-        segment sits in the shared gutter.
-      * ``long`` (columns two apart) — a route out to a horizontal corridor,
-        one horizontal segment across BOTH gutters, then back in.
-      * ``intra`` (same column) — an orthogonal L/Z jog inside the column,
-        dominant axis first.
+    ``region_path`` is the BFS shortest path over the column region graph from
+    the source column to the target column; its hop count (``len-1``) — the
+    number of gutters the edge must traverse — drives the three structural
+    cases that exploit the skeleton:
+      * ``adjacent`` (one hop) — an H-V-H route whose vertical segment sits in
+        the shared gutter.
+      * ``long`` (two+ hops) — a route out to a horizontal corridor, one
+        horizontal segment across BOTH gutters, then back in.
+      * ``intra`` (zero hops, same column) — an orthogonal L/Z jog inside the
+        column, dominant axis first.
     """
     dcol = dst_col - src_col
-    if abs(dcol) == 1 and gutters:
+    hops = max(0, len(region_path) - 1)
+    if hops == 1 and gutters:
         gi = min(src_col, dst_col)                    # gutter left of the higher col
         ch = gutters.get(gi)
         if ch is not None:
@@ -233,7 +237,7 @@ def _plan_edge(eid, src, dst, src_id, dst_id, src_col, dst_col, gutters,
             return _Plan(eid, src, dst, src_id, dst_id, src_col, dst_col,
                          "adjacent", "L", "R", ch, src.cy, dst.cy)
 
-    if abs(dcol) >= 2 and corridors:
+    if hops >= 2 and corridors:
         # Pick the corridor (top/bottom) closest to the edge's mid-height.
         mid_y = (src.cy + dst.cy) / 2.0
         top, bot = corridors.get("top"), corridors.get("bottom")
@@ -391,6 +395,113 @@ def _segments(path: list[tuple[float, float]]):
     return list(zip(path, path[1:]))
 
 
+# ── Pill / label slot placement (8e) ─────────────────────────────────────────
+_PILL_CHAR_W = 6.4       # px per char (bold ~10px) for a pill/label width estimate
+PILL_H = 18.0            # protocol-pill rect height used for slots + emission
+LABEL_H = 18.0           # edge-label rect height
+
+
+def pill_dims(text: str | None) -> tuple[float, float]:
+    """Rect (w, h) a protocol pill occupies — width adapts to the text so the
+    chip fits it (and the collision test, the emitter and the render all agree
+    on one size). Single-sourced here on purpose."""
+    t = text or ""
+    return (max(36.0, len(t) * _PILL_CHAR_W + 16.0), PILL_H)
+
+
+def label_dims(text: str | None) -> tuple[float, float]:
+    """Rect (w, h) an edge label occupies (its white background box)."""
+    t = text or ""
+    return (max(30.0, len(t) * _PILL_CHAR_W + 12.0), LABEL_H)
+
+
+def _longest_segment(path: list[tuple[float, float]]):
+    """The (a, b) segment of ``path`` with the greatest length (ties → earliest,
+    deterministic)."""
+    best, best_len = None, -1.0
+    for a, b in _segments(path):
+        d = abs(a[0] - b[0]) + abs(a[1] - b[1])       # manhattan (orthogonal segs)
+        if d > best_len:
+            best, best_len = (a, b), d
+    if best is None:                                  # single-point path
+        return path[0], path[0]
+    return best
+
+
+def _slot_free(rect, obstacles, foreign_segs) -> bool:
+    """A slot is free when its rect overlaps no obstacle rect (node / box /
+    already-placed pill-or-label) AND no foreign edge segment cuts through it.
+    Uses the _geom_checks kernel directly — strict ``rects_overlap`` (touching
+    is allowed, real 2-D penetration is not) and inclusive
+    ``seg_intersects_rect`` — so the emitter and the tests apply the exact same
+    predicates the placement guaranteed."""
+    for o in obstacles:
+        if rects_overlap(rect, o, pad=0.0):
+            return False
+    for p, q in foreign_segs:
+        if seg_intersects_rect(p, q, rect):
+            return False
+    return True
+
+
+def _place_in_slots(seg, dims, obstacles, foreign_segs):
+    """Return the (cx, cy) centre of the first free slot for a ``dims`` rect,
+    starting at the segment midpoint and scanning a grid: first ALONG the
+    segment (the pill/label rides its edge), then stepping perpendicular off it
+    if the segment is congested. Slot pitch = rect height + SLOT_PAD."""
+    (ax, ay), (bx, by) = seg
+    base = ((ax + bx) / 2.0, (ay + by) / 2.0)
+    seg_len = abs(bx - ax) + abs(by - ay)
+    if abs(bx - ax) >= abs(by - ay):                  # horizontal segment
+        along, perp = (1.0, 0.0), (0.0, 1.0)
+    else:                                             # vertical segment
+        along, perp = (0.0, 1.0), (1.0, 0.0)
+    w, h = dims
+    pitch = h + SLOT_PAD
+    along_max = int(seg_len / (2.0 * pitch)) + 2
+    for perp_i in range(0, 15):
+        for perp_s in ([0] if perp_i == 0 else [perp_i, -perp_i]):
+            for along_i in range(0, along_max + 1):
+                for along_s in ([0] if along_i == 0 else [along_i, -along_i]):
+                    cx = base[0] + along_s * pitch * along[0] + perp_s * pitch * perp[0]
+                    cy = base[1] + along_s * pitch * along[1] + perp_s * pitch * perp[1]
+                    rect = Rect(cx - w / 2, cy - h / 2, w, h)
+                    if _slot_free(rect, obstacles, foreign_segs):
+                        return (cx, cy), rect
+    return base, Rect(base[0] - w / 2, base[1] - h / 2, w, h)
+
+
+def _place_pills_and_labels(plans, paths, node_geo, edge_by_id):
+    """Drop each edge's protocol pill and label into a collision-free slot on
+    its longest segment. Processed in IR order; every placed rect becomes an
+    obstacle for later ones, so results are overlap-free by construction and
+    deterministic."""
+    node_rects = list(node_geo.values())
+    placed: list = []                                 # pill + label rects so far
+    all_segs = {p.eid: _segments(paths[p.eid]) for p in plans}
+    pill_pos: dict[str, tuple[float, float]] = {}
+    label_pos: dict[str, tuple[float, float]] = {}
+    for p in plans:
+        e = edge_by_id.get(p.eid)
+        if e is None:
+            continue
+        seg = _longest_segment(paths[p.eid])
+        foreign = [s for eid, segs in all_segs.items() if eid != p.eid for s in segs]
+        pill_text = getattr(e, "pill", None)
+        label_text = getattr(e, "label", None)
+        if pill_text:
+            center, rect = _place_in_slots(seg, pill_dims(pill_text),
+                                           node_rects + placed, foreign)
+            pill_pos[p.eid] = center
+            placed.append(rect)
+        if label_text:
+            center, rect = _place_in_slots(seg, label_dims(label_text),
+                                           node_rects + placed, foreign)
+            label_pos[p.eid] = center
+            placed.append(rect)
+    return pill_pos, label_pos
+
+
 def _count_crossings(paths: dict[str, list[tuple[float, float]]]) -> int:
     """Proper segment/segment crossings between DISTINCT edges (via
     ``_geom_checks.segments_cross`` — shared endpoints / collinear overlap do
@@ -500,10 +611,11 @@ def route(diagram, layout: dict) -> RouteResult:
             continue
         sc = _column_of(src, cols) if cols else 0
         dc = _column_of(dst, cols) if cols else 0
-        # walk the region graph so multi-column hops are explicit (Task 9 hook)
-        _ = _bfs_columns(adj, sc, dc)
+        # BFS the region graph → the sequence of columns (hence gutters) this
+        # edge crosses; its hop count drives the adjacent/long/intra choice.
+        region_path = _bfs_columns(adj, sc, dc)
         plans.append(_plan_edge(e.id, src, dst, e.source, e.target, sc, dc,
-                                gutters, corridors))
+                                region_path, gutters, corridors))
 
     # ── ports (8c), lanes (8b) ──────────────────────────────────────────────
     port_fracs = _assign_ports(plans)
@@ -525,12 +637,16 @@ def route(diagram, layout: dict) -> RouteResult:
              for p in plans}
     crossings = _count_crossings(paths)
 
+    # ── pill & label slots (8e) ─────────────────────────────────────────────
+    edge_by_id = {e.id: e for e in diagram.edges}
+    pill_pos, label_pos = _place_pills_and_labels(plans, paths, node_geo, edge_by_id)
+
     return RouteResult(
         waypoints=waypoints,
         ports=ports,
         port_fracs=port_fracs,
-        pill_pos={},
-        label_pos={},
+        pill_pos=pill_pos,
+        label_pos=label_pos,
         channels=channels,
         crossings=crossings,
     )
