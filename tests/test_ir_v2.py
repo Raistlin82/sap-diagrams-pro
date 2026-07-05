@@ -127,11 +127,11 @@ def test_v2_fixture_governance_cloud_tier_and_top_level_identity():
 def test_v2_fixture_edges_flow_family_and_pill_mix():
     gen = load_script("generate-drawio")
     diagram = gen.parse_json(_load(V2_FIXTURE))
-    assert len(diagram.edges) == 5
+    assert len(diagram.edges) == 7
 
     by_id = {e.id: e for e in diagram.edges}
     assert {e.flowFamily for e in diagram.edges if e.flowFamily is not None} == {
-        "identity", "provisioning", "master-data", "transport",
+        "identity", "provisioning", "master-data", "transport", "default", "firewall",
     }
     # e5 omits both flowFamily and pill entirely — proves v1-style bare
     # edges keep working inside a v2 IR.
@@ -140,6 +140,32 @@ def test_v2_fixture_edges_flow_family_and_pill_mix():
     # A mix of edges carry a protocol pill; at least one (e3) doesn't.
     assert by_id["e1"].pill == "SAML2/OIDC"
     assert by_id["e3"].pill is None
+    # e6/e7 exercise the "default" and "firewall" families — FIX-2 made the
+    # latter reachable (it maps 1:1 to the style contract's edge-firewall
+    # molecule, previously unreachable from any valid IR).
+    assert by_id["e6"].flowFamily == "default"
+    assert by_id["e7"].flowFamily == "firewall"
+
+
+def test_v2_fixture_db_custom_app_and_all_cloud_tier_kinds():
+    """Rounds out the "full vocabulary" fixture: a `db` node, a `custom-app`
+    group with service nodes, and all three cloud-tier `kind` values
+    (private was already covered; public/any-premise are new)."""
+    gen = load_script("generate-drawio")
+    diagram = gen.parse_json(_load(V2_FIXTURE))
+    by_id_g = {g.id: g for g in diagram.groups}
+    by_id_n = {n.id: n for n in diagram.nodes}
+
+    assert by_id_n["hana-db"].type == "db"
+
+    custom_app = by_id_g["custom-app-1"]
+    assert custom_app.type == "custom-app"
+    custom_app_services = {n.service for n in diagram.nodes if n.group == "custom-app-1"}
+    assert custom_app_services == {"SAP Destination service", "SAP Connectivity Service"}
+
+    assert by_id_g["cloud-tier-right"].kind == "private"
+    assert by_id_g["cloud-tier-public"].kind == "public"
+    assert by_id_g["cloud-tier-any-premise"].kind == "any-premise"
 
 
 def test_v2_fixture_metadata_branding_badges_and_layout_hints():
@@ -206,6 +232,97 @@ def test_validate_ir_rejects_bad_enums(tmp_path, capsys, mutate, where_fragment)
     assert "Allowed:" in captured.out
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# validate-ir.py — `kind` scoping: only cloud-tier groups may carry it.
+# The enum check for a bad kind ON a cloud-tier group is already covered by
+# test_validate_ir_rejects_bad_enums above (the "cloud-tier-right" case);
+# these two cover the other half of the contract.
+# ─────────────────────────────────────────────────────────────────────────
+def test_validate_ir_rejects_kind_on_non_cloud_tier_group(tmp_path, capsys):
+    payload = _load(V2_FIXTURE)
+    for g in payload["groups"]:
+        if g["id"] == "subaccount-test":
+            g["kind"] = "private"  # kind is only meaningful on cloud-tier groups
+    bad_path = tmp_path / "kind-on-subaccount.json"
+    bad_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    vir = load_script("validate-ir")
+    rc = vir.main([str(bad_path)])
+    captured = capsys.readouterr()
+
+    assert rc == 2
+    assert "group 'subaccount-test'" in captured.out
+    assert "kind is only valid on cloud-tier groups" in captured.out
+
+
+def test_validate_ir_ok_kind_valid_on_cloud_tier(tmp_path, capsys):
+    payload = {
+        "metadata": {"title": "minimal", "level": "L1"},
+        "groups": [{"id": "tier", "type": "cloud-tier", "label": "Tier", "kind": "private"}],
+        "nodes": [],
+        "edges": [],
+    }
+    path = tmp_path / "minimal-cloud-tier.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    vir = load_script("validate-ir")
+    rc = vir.main([str(path)])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert captured.out.strip() == "OK"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# validate-ir.py — light shape checks on badges/branding/layoutHints (FIX-4):
+# malformed shapes must not silently reach Task 5/6's molecule emission.
+# ─────────────────────────────────────────────────────────────────────────
+def test_validate_ir_rejects_bad_badges_shape(tmp_path, capsys):
+    payload = _load(V2_FIXTURE)
+    for g in payload["groups"]:
+        if g["id"] == "cloud-tier-right":
+            g["badges"] = {"hyperscalers": "aws"}  # must be a list, not a bare string
+    bad_path = tmp_path / "bad-badges.json"
+    bad_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    vir = load_script("validate-ir")
+    rc = vir.main([str(bad_path)])
+    captured = capsys.readouterr()
+
+    assert rc == 2
+    assert "badges.hyperscalers" in captured.out
+    assert "list of strings" in captured.out
+
+
+def test_validate_ir_rejects_bad_branding_shape(tmp_path, capsys):
+    payload = _load(V2_FIXTURE)
+    payload["metadata"]["branding"] = "acme"  # must be an object
+    bad_path = tmp_path / "bad-branding.json"
+    bad_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    vir = load_script("validate-ir")
+    rc = vir.main([str(bad_path)])
+    captured = capsys.readouterr()
+
+    assert rc == 2
+    assert "metadata.branding" in captured.out
+
+
+def test_validate_ir_rejects_bad_layout_hints_shape(tmp_path, capsys):
+    payload = _load(V2_FIXTURE)
+    payload["layoutHints"] = {"op": "toggle_separator"}  # must be a list
+    bad_path = tmp_path / "bad-layout-hints.json"
+    bad_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    vir = load_script("validate-ir")
+    rc = vir.main([str(bad_path)])
+    captured = capsys.readouterr()
+
+    assert rc == 2
+    assert "layoutHints" in captured.out
+    assert "must be a list" in captured.out
+
+
 def test_validate_ir_rejects_bad_capability_shape(tmp_path, capsys):
     payload = _load(V2_FIXTURE)
     payload["nodes"][0]["capabilities"][0] = {"icon": "no-label"}  # missing label
@@ -270,6 +387,32 @@ def test_validate_ir_reports_invalid_json(tmp_path, capsys):
     captured = capsys.readouterr()
     assert rc == 2
     assert "ERROR" in captured.err
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# validate-ir.py — exit-2 contract for non-dict top-level JSON. Before this
+# fix, [1,2,3]/42/"x"/null all parsed as valid JSON but made parse_json call
+# `.get()` on a non-dict, raising an uncaught AttributeError (traceback +
+# exit 1). Task 14's SKILL loop branches on exit 2, so this must degrade to
+# a normal, actionable validation error instead of crashing. Run via the
+# real CLI subprocess (not in-process) so the traceback-vs-clean-exit
+# behaviour is verified exactly as an end user / the SKILL loop would see
+# it.
+# ─────────────────────────────────────────────────────────────────────────
+@pytest.mark.parametrize(
+    "value", [[1, 2, 3], 42, "x", None], ids=["list", "int", "str", "null"]
+)
+def test_validate_ir_rejects_non_dict_top_level(tmp_path, value):
+    bad_path = tmp_path / "non-dict.json"
+    bad_path.write_text(json.dumps(value), encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "validate-ir.py"), str(bad_path)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 2
+    assert result.stdout.strip() == "ERROR IR: top-level value must be a JSON object."
+    assert result.stderr == ""  # no traceback
 
 
 # ─────────────────────────────────────────────────────────────────────────

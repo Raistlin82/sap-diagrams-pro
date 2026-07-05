@@ -80,9 +80,20 @@ ALLOWED_GROUP_TYPES = V1_GROUP_TYPES | V2_GROUP_TYPES
 
 ALLOWED_CLOUD_TIER_KINDS = {"public", "private", "any-premise"}
 ALLOWED_NODE_TYPES = {"product", "chip", "db"}
-ALLOWED_FLOW_FAMILIES = {"identity", "provisioning", "master-data", "transport", "default"}
+# 6 families, 1:1 with the style contract's 6 edge-* molecules (edge-default,
+# edge-firewall, edge-identity, edge-master-data, edge-provisioning,
+# edge-transport — see assets/style-contract.json). "firewall" is a
+# deliberate extension beyond the Task 4 plan prose's 5-family list
+# ("identity|provisioning|master-data|transport|default"): the plan's OWN
+# style contract already ships 6 edge molecules, so omitting "firewall" here
+# left edge-firewall permanently unreachable from any valid IR.
+ALLOWED_FLOW_FAMILIES = {
+    "identity", "provisioning", "master-data", "transport", "default", "firewall",
+}
 
 CAPABILITY_SHAPE = "{label: str, icon?: str}"
+BADGES_SHAPE = "{hyperscalers?: [str, ...], runtimes?: [str, ...]}"
+BRANDING_SHAPE = "{customerLogo?: str, partnerWatermark?: str}"
 
 
 class IRError(Exception):
@@ -150,6 +161,64 @@ def _check_capabilities(errors: list[IRError], where: str, capabilities: Any) ->
             )
 
 
+def _check_badges(errors: list[IRError], where: str, badges: Any) -> None:
+    """Shape-check a group's `badges` dict. Light on purpose: only the
+    `hyperscalers`/`runtimes` keys are constrained (must be lists of
+    strings when present); any other key passes through untouched for
+    Task 5/6 to interpret. `None` (absent) always passes."""
+    if badges is None:
+        return
+    if not isinstance(badges, dict):
+        errors.append(
+            IRError(where, f"badges must be an object (got {type(badges).__name__})", [BADGES_SHAPE])
+        )
+        return
+    for key in ("hyperscalers", "runtimes"):
+        if key not in badges:
+            continue
+        value = badges[key]
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            errors.append(
+                IRError(f"{where} badges.{key}", "must be a list of strings", [BADGES_SHAPE])
+            )
+
+
+def _check_branding(errors: list[IRError], branding: Any) -> None:
+    """Shape-check `metadata.branding`. `None` (absent) always passes."""
+    if branding is None:
+        return
+    where = "metadata.branding"
+    if not isinstance(branding, dict):
+        errors.append(
+            IRError(where, f"branding must be an object (got {type(branding).__name__})", [BRANDING_SHAPE])
+        )
+        return
+    for key in ("customerLogo", "partnerWatermark"):
+        if key in branding and branding[key] is not None and not isinstance(branding[key], str):
+            errors.append(
+                IRError(
+                    f"{where}.{key}",
+                    f"must be a string when present (got {type(branding[key]).__name__})",
+                    [BRANDING_SHAPE],
+                )
+            )
+
+
+def _check_layout_hints(errors: list[IRError], layout_hints: Any) -> None:
+    """Shape-check `layoutHints`: only the outer list shape is enforced —
+    per-entry schema is Task 13's to own. `None` (absent) always passes."""
+    if layout_hints is None:
+        return
+    if not isinstance(layout_hints, list):
+        errors.append(
+            IRError(
+                "layoutHints",
+                f"layoutHints must be a list (got {type(layout_hints).__name__})",
+                ["[{...}, ...]"],
+            )
+        )
+
+
 def _check_group_parents(errors: list[IRError], groups: list[Group]) -> None:
     """Group `parent` refs must point at an existing group id, and the
     parent chain must never cycle back on itself."""
@@ -189,8 +258,16 @@ def validate_diagram(diagram: Diagram) -> list[IRError]:
     errors: list[IRError] = []
 
     for g in diagram.groups:
-        _check_enum(errors, f"group {g.id!r}", "type", g.type, ALLOWED_GROUP_TYPES)
-        _check_enum(errors, f"group {g.id!r}", "kind", g.kind, ALLOWED_CLOUD_TIER_KINDS)
+        where = f"group {g.id!r}"
+        _check_enum(errors, where, "type", g.type, ALLOWED_GROUP_TYPES)
+        # `kind` is only meaningful on cloud-tier groups (public|private|
+        # any-premise); a `kind` on any other group type is author error,
+        # not a free-form field — flag it instead of silently ignoring it.
+        if g.type == "cloud-tier":
+            _check_enum(errors, where, "kind", g.kind, ALLOWED_CLOUD_TIER_KINDS)
+        elif g.kind is not None:
+            errors.append(IRError(where, "kind is only valid on cloud-tier groups"))
+        _check_badges(errors, where, g.badges)
     _check_group_parents(errors, diagram.groups)
 
     for n in diagram.nodes:
@@ -200,14 +277,26 @@ def validate_diagram(diagram: Diagram) -> list[IRError]:
     for e in diagram.edges:
         _check_enum(errors, f"edge {e.id!r}", "flowFamily", e.flowFamily, ALLOWED_FLOW_FAMILIES)
 
+    _check_branding(errors, diagram.branding)
+    _check_layout_hints(errors, diagram.layoutHints)
+
     return errors
 
 
-def validate_payload(payload: dict[str, Any]) -> list[IRError]:
-    """Parse + validate a raw IR dict. Parse failures (malformed structure,
-    or a v1 field `parse_json` itself rejects, e.g. an unknown edge style)
-    are reported as a single IRError rather than raising, so the CLI always
-    exits cleanly with an actionable message."""
+def validate_payload(payload: Any) -> list[IRError]:
+    """Parse + validate a raw IR payload. Parse failures (malformed
+    structure, or a v1 field `parse_json` itself rejects, e.g. an unknown
+    edge style) are reported as a single IRError rather than raising, so the
+    CLI always exits cleanly with an actionable message.
+
+    A non-dict top-level JSON value (a list, number, string, or null) is
+    rejected here, BEFORE calling parse_json: parse_json assumes a dict and
+    calls `.get()` on it immediately, which raises an uncaught
+    AttributeError (traceback + exit 1) instead of the documented "exit 2,
+    one ERROR line" contract that Task 14's SKILL loop branches on.
+    """
+    if not isinstance(payload, dict):
+        return [IRError("IR", "top-level value must be a JSON object")]
     try:
         diagram = parse_json(payload)
     except (KeyError, ValueError, TypeError) as exc:
