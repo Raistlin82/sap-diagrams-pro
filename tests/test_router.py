@@ -330,6 +330,98 @@ def test_8c_lane_keeps_clearance_from_network_separator(gen, sl):
                     pytest.fail(f"edge {eid} vertical lane hugs the separator at x={ax}")
 
 
+def _gutter_for(res, x0):
+    return next(c for c in res.channels if c.axis == "v" and c.rect.x == x0)
+
+
+def test_allocate_lanes_reconciles_clamp_against_separator_crossing():
+    """Neither shipped fixture is dense enough to conflict the in-gutter
+    clamp against SEP_CLEARANCE (see the comment in _allocate_lanes), so
+    craft one: 5 edges through a 200px gutter with the separator close to
+    its right edge. The right-edge clamp alone would pull the bundle back
+    far enough to cross the separator (left-most lane at x=248 < sep_x=250)
+    -- the reconciliation must fix that WITHOUT re-violating the gutter's
+    far edge (a plain further shift alone would land max_x=298, past
+    rect.right-4=296) -- it must also shrink the pitch so the bundle fits
+    the space actually available between the two."""
+    nodes = {}
+    for i in range(5):
+        y = 100 + i * 100
+        nodes[f"L{i}"] = (20, y, 60, 40)
+        nodes[f"C{i}"] = (350, y + 30, 60, 40)
+    lay = {
+        "nodes": nodes, "groups": {}, "canvas": (900, 700),
+        "meta": {
+            "columns": {"left": (0, 100), "center": (300, 500), "right": (700, 800)},
+            "networkSeparator": {"x": 250, "y0": 90, "y1": 550},
+        },
+    }
+    dia = _diagram([_edge(f"e{i}", f"L{i}", f"C{i}") for i in range(5)])
+    res = router.route(dia, lay)
+    gutter = _gutter_for(res, 100)
+
+    lane_xs = sorted({round(x, 6) for wps in res.waypoints.values() for x, _y in wps})
+    assert len(lane_xs) == 5, "still five distinct, collision-free lanes"
+    assert min(lane_xs) >= 250.0 - 1e-9, (
+        f"left-most lane at x={min(lane_xs)} crosses the separator at x=250"
+    )
+    assert max(lane_xs) <= gutter.rect.right - 4.0 + 1e-9, (
+        f"right-most lane at x={max(lane_xs)} spills past the gutter's far "
+        f"edge at x={gutter.rect.right - 4.0} -- into the next column"
+    )
+
+
+def test_allocate_lanes_never_spills_past_gutter_far_edge_dense_real_geometry():
+    """The HARD invariant (never spill a lane past the gutter into the next
+    column) must hold even when it can no longer coexist with SEP_CLEARANCE
+    at all -- using the actual production geometry (ZONE_HGAP=96 gutter,
+    separator at the gutter's exact centre, per _skeleton_layout.py) with
+    six direct edges sharing one gutter (an ordinary count for an L1 SAP
+    diagram, e.g. several services all pointing at one shared target) -- not
+    a contrived extreme. A shift-only reconciliation fixes the near side by
+    pushing the far side 12px past the gutter's edge; the pitch must shrink
+    instead so the far edge is respected exactly, even giving up on
+    SEP_CLEARANCE (and, in this dense a case, even on "never cross the
+    separator" at all -- the softer of the two)."""
+    # L{i}/C{i} deliberately sit in the CENTER/RIGHT columns (not left/center)
+    # so the edge routes through the center<->right gutter -- the one that
+    # carries the NETWORK separator in production (_skeleton_layout.py).
+    x0, cw = 300.0, 200.0                 # the "center" column
+    gx0 = x0 + cw                         # gutter starts at the center column's right edge
+    gw = 96.0                             # ZONE_HGAP
+    sep_x = gx0 + gw / 2.0                # separator at the gutter's exact centre
+    nodes = {}
+    for i in range(6):
+        y = 100 + i * 100
+        nodes[f"L{i}"] = (x0 + 20, y, 60, 40)              # center column, cx=350
+        nodes[f"C{i}"] = (gx0 + gw + 20, y + 30, 60, 40)   # right column, cx=650
+    lay = {
+        "nodes": nodes, "groups": {}, "canvas": (1200, 900),
+        "meta": {
+            "columns": {"left": (0, 100), "center": (x0, x0 + cw),
+                        "right": (gx0 + gw, gx0 + gw + 200)},
+            "networkSeparator": {"x": sep_x, "y0": 90, "y1": 650},
+        },
+    }
+    dia = _diagram([_edge(f"e{i}", f"L{i}", f"C{i}") for i in range(6)])
+    res = router.route(dia, lay)
+    gutter = _gutter_for(res, gx0)
+    assert gutter.rect.w == gw
+
+    lane_xs = sorted({round(x, 6) for wps in res.waypoints.values() for x, _y in wps})
+    assert len(lane_xs) == 6, "still six distinct, collision-free lanes"
+    assert all(b - a >= 10.0 - 1e-9 for a, b in zip(lane_xs, lane_xs[1:])), (
+        "lanes must never drop below the 10px legibility floor"
+    )
+    assert max(lane_xs) <= gutter.rect.right - 4.0 + 1e-9, (
+        f"right-most lane at x={max(lane_xs)} spills past the gutter's far "
+        f"edge at x={gutter.rect.right - 4.0} -- into the RIGHT column's content"
+    )
+    assert min(lane_xs) >= gutter.rect.x + 4.0 - 1e-9, (
+        "left-most lane must not spill past the gutter's near edge either"
+    )
+
+
 # ── 8d: waypoint emission into the .drawio ────────────────────────────────────
 def _stable(prefix, key):
     return f"{prefix}-{hashlib.sha1(key.encode('utf-8')).hexdigest()[:8]}"
@@ -516,3 +608,187 @@ def test_8e_deterministic_slots(gen, sl):
         _d2, _l2, r2 = _fixture_route(gen, sl, path)
         assert r1.pill_pos == r2.pill_pos
         assert r1.label_pos == r2.label_pos
+
+
+# ── review round: the plan / assign_ports_lanes / build_waypoints seam ───────
+# route() used to be monolithic (plan -> ports -> lanes -> waypoints inline),
+# which meant Task 9's greedy lane/port reordering search could only fork the
+# internals. These tests pin: (1) the composed default path is
+# byte-identical to route()'s own output (the refactor must not change
+# today's diagrams), and (2) a caller-supplied lane_order/port_order (the
+# lever Task 9 needs) deterministically changes the result.
+def test_seam_default_composition_equals_route_output(gen, sl):
+    """plan() -> assign_ports_lanes() -> build_waypoints(), composed with the
+    default (None) lane_order/port_order, reproduces route()'s output
+    exactly on both real fixtures -- route() IS this composition now, not a
+    parallel implementation that could drift from it."""
+    for path in (V2, NOVA):
+        diagram, layout, expected = _fixture_route(gen, sl, path)
+
+        plans = router.plan(diagram, layout)
+        port_fracs, lane_offsets = router.assign_ports_lanes(plans, layout)
+        waypoints, pill_pos, label_pos, crossings, slot_fallbacks = (
+            router.build_waypoints(plans, port_fracs, lane_offsets, layout)
+        )
+
+        assert waypoints == expected.waypoints
+        assert port_fracs == expected.port_fracs
+        assert pill_pos == expected.pill_pos
+        assert label_pos == expected.label_pos
+        assert crossings == expected.crossings
+        assert slot_fallbacks == expected.slot_fallbacks == []
+
+
+def test_seam_plan_exposes_channels_for_route_result(gen, sl):
+    """plan()'s return carries the SAME Channel objects route() republishes
+    as RouteResult.channels (not a second, un-mutated rebuild) -- the lever
+    a reordering search needs to inspect a channel's final lane order."""
+    diagram, layout, expected = _fixture_route(gen, sl, NOVA)
+    plans = router.plan(diagram, layout)
+    assert plans.channels                                  # non-empty
+    assert [c.id for c in plans.channels] == [c.id for c in expected.channels]
+
+
+def test_seam_custom_lane_order_changes_waypoints_deterministically():
+    """A lane_order hook that reverses each channel's default-sorted group
+    (Task 9's crossing-reduction search reorders lanes this way) must yield
+    DIFFERENT waypoints from the default path, and the SAME waypoints again
+    on a repeat call -- deterministic, not merely different."""
+    lay = _lanes_layout(5)
+    dia = _diagram([_edge(f"e{i}", f"L{i}", f"C{i}") for i in range(5)])
+    plans = router.plan(dia, lay)
+
+    port_fracs, lane_default = router.assign_ports_lanes(plans, lay)
+    wp_default, *_ = router.build_waypoints(plans, port_fracs, lane_default, lay)
+
+    def reversed_order(group):
+        return list(reversed(group))
+
+    _, lane_reversed = router.assign_ports_lanes(plans, lay, lane_order=reversed_order)
+    wp_reversed, *_rest = router.build_waypoints(plans, port_fracs, lane_reversed, lay)
+    assert wp_reversed != wp_default, "reversing lane order must change waypoints"
+
+    # determinism: same custom order, same input -> byte-identical output
+    _, lane_reversed_2 = router.assign_ports_lanes(plans, lay, lane_order=reversed_order)
+    wp_reversed_2, *_rest2 = router.build_waypoints(plans, port_fracs, lane_reversed_2, lay)
+    assert wp_reversed_2 == wp_reversed
+
+    # and the DEFAULT path is unaffected by having exercised a custom one
+    port_fracs_again, lane_default_again = router.assign_ports_lanes(plans, lay)
+    wp_default_again, *_rest3 = router.build_waypoints(
+        plans, port_fracs_again, lane_default_again, lay)
+    assert wp_default_again == wp_default
+
+
+def test_seam_custom_port_order_changes_port_fracs_deterministically():
+    """Symmetric to the lane_order test above, for the per-side port groups
+    lever: a port_order hook that reverses a 3-way exit group changes
+    port_fracs, deterministically, without touching the default path."""
+    layout = {
+        "nodes": {
+            "S": (20, 300, 60, 40),
+            "T0": (350, 100, 60, 40),
+            "T1": (350, 300, 60, 40),
+            "T2": (350, 500, 60, 40),
+        },
+        "groups": {}, "canvas": (900, 700),
+        "meta": {"columns": {"left": (0, 100), "center": (300, 500), "right": (700, 800)},
+                 "networkSeparator": None},
+    }
+    dia = _diagram([_edge("e0", "S", "T0"), _edge("e1", "S", "T1"),
+                    _edge("e2", "S", "T2")])
+    plans = router.plan(dia, layout)
+    default_fracs, _ = router.assign_ports_lanes(plans, layout)
+
+    def reversed_order(group):
+        return list(reversed(group))
+
+    reordered_fracs, _ = router.assign_ports_lanes(plans, layout, port_order=reversed_order)
+    assert reordered_fracs != default_fracs
+
+    reordered_fracs_2, _ = router.assign_ports_lanes(plans, layout, port_order=reversed_order)
+    assert reordered_fracs_2 == reordered_fracs
+
+    default_fracs_again, _ = router.assign_ports_lanes(plans, layout)
+    assert default_fracs_again == default_fracs
+
+
+def test_seam_port_groups_introspection_matches_default_ordering():
+    """port_groups() (the read-only lever for a custom port_order) exposes
+    the SAME per-side grouping/order _assign_ports uses by default."""
+    layout = {
+        "nodes": {
+            "S": (20, 300, 60, 40),
+            "T0": (350, 100, 60, 40),
+            "T1": (350, 300, 60, 40),
+            "T2": (350, 500, 60, 40),
+        },
+        "groups": {}, "canvas": (900, 700),
+        "meta": {"columns": {"left": (0, 100), "center": (300, 500), "right": (700, 800)},
+                 "networkSeparator": None},
+    }
+    dia = _diagram([_edge("e0", "S", "T0"), _edge("e1", "S", "T1"),
+                    _edge("e2", "S", "T2")])
+    plans = router.plan(dia, layout)
+    exit_groups, _entry_groups = router.port_groups(plans)
+    group = exit_groups[("S", "R")]
+    assert [p.eid for p in group] == ["e0", "e1", "e2"]      # T0(y120) < T1 < T2
+
+
+# ── review round: slot-exhaustion signal (RouteResult.slot_fallbacks) ────────
+def test_slot_fallbacks_empty_on_real_fixtures(gen, sl):
+    """Neither shipped fixture exhausts the pill/label slot scan window."""
+    for path in (V2, NOVA):
+        _d, _l, res = _fixture_route(gen, sl, path)
+        assert res.slot_fallbacks == []
+
+
+def test_place_in_slots_reports_exhaustion():
+    """_place_in_slots itself must report placed_ok=False -- not silently
+    succeed -- when every candidate in its scan window collides with an
+    obstacle; it still returns a usable (if possibly colliding) fallback
+    position (the segment midpoint) so callers always have something to
+    render."""
+    seg = ((200.0, 320.0), (350.0, 320.0))
+    dims = router.pill_dims("SCIM")
+    giant = Rect(0.0, -50.0, 500.0, 750.0)          # blankets the whole scan grid
+    center, rect, ok = router._place_in_slots(seg, dims, [giant], [])
+    assert ok is False
+    assert center == (275.0, 320.0)                 # unchecked segment midpoint
+
+
+def test_slot_fallbacks_flags_edge_in_crafted_dense_case():
+    """End-to-end wiring: when a pill's slot scan is exhausted, route()
+    surfaces the edge id in RouteResult.slot_fallbacks rather than accepting
+    the fallback position silently like an ordinary collision-free slot."""
+    lay = _synthetic()
+    lay = dict(lay)
+    lay["nodes"] = dict(lay["nodes"])
+    # A wall-sized "node" blankets e1's pill scan grid (its longest segment
+    # runs (200,320)-(350,320); see test_8e_pill_starts_from_longest_
+    # segment_midpoint for the same geometry) without moving the gutter's
+    # centre-line (a "v" channel's centre is x-only, from meta.columns).
+    lay["nodes"]["WALL"] = (0.0, -50.0, 500.0, 750.0)
+    dia = _diagram([_edge("e1", "L1", "C1", pill="SCIM")])
+    res = router.route(dia, lay)
+    assert res.slot_fallbacks == ["e1"]
+    assert "e1" in res.pill_pos                     # still placed (fallback position)
+
+
+# ── review round: _channel_router_module() reuses an already-loaded module ──
+def test_channel_router_module_reuses_already_loaded_module(gen):
+    """generate-drawio's lazy _channel_router loader must check sys.modules
+    FIRST (the same guarded pattern _load_sibling / conftest.load_script
+    use) instead of unconditionally exec'ing a second copy -- which would
+    clobber sys.modules["_channel_router"] and leave two non-identical
+    Channel/RouteResult classes alive in the same process."""
+    import sys as _sys
+    canonical = load_script("_channel_router")
+    assert _sys.modules.get("_channel_router") is canonical
+
+    saved = gen._CHANNEL_ROUTER_MOD
+    gen._CHANNEL_ROUTER_MOD = None            # force _channel_router_module() to re-check
+    try:
+        assert gen._channel_router_module() is canonical
+    finally:
+        gen._CHANNEL_ROUTER_MOD = saved       # don't leak state into other tests

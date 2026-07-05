@@ -1196,21 +1196,33 @@ _CHANNEL_ROUTER_MOD = None
 
 def _channel_router_module():
     """Lazily import scripts/_channel_router.py (Task 8 — the edge router).
-    Cached for the process, loaded the same path-based way as _molecules."""
+    Cached for the process, loaded the same path-based way as _molecules.
+
+    Checks ``sys.modules`` FIRST — the same guarded pattern
+    ``_channel_router.py``'s own ``_load_sibling`` and tests'
+    ``conftest.load_script`` already use — instead of unconditionally
+    exec'ing a fresh copy and overwriting ``sys.modules["_channel_router"]``.
+    Skipping the check would silently leave two live copies of the module
+    (this one and whichever the test process loaded first) with distinct
+    ``Channel``/``RouteResult`` classes, breaking any future ``isinstance``
+    or dataclass-identity check across the two."""
     global _CHANNEL_ROUTER_MOD
     if _CHANNEL_ROUTER_MOD is None:
-        import importlib.util as _ilu
-        _spec = _ilu.spec_from_file_location(
-            "_channel_router", Path(__file__).resolve().parent / "_channel_router.py"
-        )
-        _mod = _ilu.module_from_spec(_spec)
-        # Register BEFORE exec: _channel_router uses `from __future__ import
-        # annotations` + @dataclass, so dataclass creation needs
-        # sys.modules["_channel_router"] populated to resolve string annotations
-        # (KW_ONLY/ClassVar lookups). See tests/conftest.load_script's note.
-        sys.modules["_channel_router"] = _mod
-        _spec.loader.exec_module(_mod)
-        _CHANNEL_ROUTER_MOD = _mod
+        if "_channel_router" in sys.modules:
+            _CHANNEL_ROUTER_MOD = sys.modules["_channel_router"]
+        else:
+            import importlib.util as _ilu
+            _spec = _ilu.spec_from_file_location(
+                "_channel_router", Path(__file__).resolve().parent / "_channel_router.py"
+            )
+            _mod = _ilu.module_from_spec(_spec)
+            # Register BEFORE exec: _channel_router uses `from __future__ import
+            # annotations` + @dataclass, so dataclass creation needs
+            # sys.modules["_channel_router"] populated to resolve string annotations
+            # (KW_ONLY/ClassVar lookups). See tests/conftest.load_script's note.
+            sys.modules["_channel_router"] = _mod
+            _spec.loader.exec_module(_mod)
+            _CHANNEL_ROUTER_MOD = _mod
     return _CHANNEL_ROUTER_MOD
 
 
@@ -2094,30 +2106,33 @@ def emit(
         # rounded coloured chip; plain / flowFamily labels get a white-backed
         # text box (hiding the connector behind the text). The greedy path keeps
         # the legacy edge-child pill for pill kinds (plain labels stay inline).
-        if has_pill and e.label:
-            if e.kind == "annotation":
-                # 1. Try canonical catalog first — if the label is a known
-                #    SAP-canonical pill (SAML2/OIDC, Group, OIDC, ORD, …),
-                #    use its exact stroke/fill from the 138 SAP examples.
-                canonical = _CANONICAL_PILLS.get(e.label)
-                if canonical:
-                    pill_def = {
-                        "stroke": canonical.get("stroke") or "#475F75",
-                        "fill":   canonical.get("fill") or "#F5F6F7",
-                        "fontColor": canonical.get("stroke") or "#475F75",
-                    }
-                else:
-                    # 2. Fall back to the user-chosen palette family
-                    #    (purple/green/pink/grey/blue/teal).
-                    pill_def = _ANNOTATION_PILL_PALETTE.get(
-                        e.pillColor, _ANNOTATION_PILL_PALETTE["purple"]
-                    )
-            else:
-                pill_def = _EDGE_KIND_PILL[e.kind]
-
-        if e.label and label_center is not None:
+        #
+        # ONE block: `pill_def` is computed and consumed right here (a future
+        # reorder can't strand a read of `pill_def` past where it's set), and
+        # `label_dims` is computed exactly once, up front, for whichever style
+        # below ends up using it.
+        if e.label and (has_pill or label_center is not None):
+            lw, lh = _crmod.label_dims(e.label)
             if has_pill:
-                lw, lh = _crmod.label_dims(e.label)
+                if e.kind == "annotation":
+                    # 1. Try canonical catalog first — if the label is a known
+                    #    SAP-canonical pill (SAML2/OIDC, Group, OIDC, ORD, …),
+                    #    use its exact stroke/fill from the 138 SAP examples.
+                    canonical = _CANONICAL_PILLS.get(e.label)
+                    if canonical:
+                        pill_def = {
+                            "stroke": canonical.get("stroke") or "#475F75",
+                            "fill":   canonical.get("fill") or "#F5F6F7",
+                            "fontColor": canonical.get("stroke") or "#475F75",
+                        }
+                    else:
+                        # 2. Fall back to the user-chosen palette family
+                        #    (purple/green/pink/grey/blue/teal).
+                        pill_def = _ANNOTATION_PILL_PALETTE.get(
+                            e.pillColor, _ANNOTATION_PILL_PALETTE["purple"]
+                        )
+                else:
+                    pill_def = _EDGE_KIND_PILL[e.kind]
                 lstyle = (
                     f"rounded=1;whiteSpace=wrap;html=1;arcSize=50;"
                     f"strokeColor={pill_def['stroke']};"
@@ -2126,47 +2141,43 @@ def emit(
                     f"fontStyle=1;strokeWidth=1.5;fontSize=10;"
                     f"align=center;verticalAlign=middle;"
                 )
+                if label_center is not None:
+                    _emit_slot_cell(root, _stable_id("p", e.id), e.label, lstyle,
+                                    label_center, lw, lh)
+                else:
+                    # greedy fallback: edge-child pill centred on the edge midpoint
+                    pill_w = max(56, min(168, len(e.label) * 6 + 18))
+                    pill = ET.SubElement(
+                        root,
+                        "mxCell",
+                        attrib={
+                            "id": _stable_id("p", e.id),
+                            "value": e.label,
+                            "style": lstyle,
+                            "vertex": "1",
+                            "parent": edge_id,
+                            "connectable": "0",
+                        },
+                    )
+                    pill_geom = ET.SubElement(
+                        pill,
+                        "mxGeometry",
+                        attrib={"width": str(pill_w), "height": "22", "relative": "1", "as": "geometry"},
+                    )
+                    ET.SubElement(
+                        pill_geom,
+                        "mxPoint",
+                        attrib={"x": str(-pill_w // 2), "y": "-11", "as": "offset"},
+                    )
             else:
-                lw, lh = _crmod.label_dims(e.label)
+                # plain / flowFamily label: white-backed text box (routing active)
                 lstyle = (
                     f"text;html=1;whiteSpace=wrap;rounded=0;strokeColor=none;"
                     f"fillColor=#FFFFFF;fontColor={PALETTE['text']};fontSize=10;"
                     f"align=center;verticalAlign=middle;"
                 )
-            _emit_slot_cell(root, _stable_id("p", e.id), e.label, lstyle,
-                            label_center, lw, lh)
-        elif has_pill and e.label:
-            # greedy fallback: edge-child pill centred on the edge midpoint
-            pill_w = max(56, min(168, len(e.label) * 6 + 18))
-            pill = ET.SubElement(
-                root,
-                "mxCell",
-                attrib={
-                    "id": _stable_id("p", e.id),
-                    "value": e.label,
-                    "style": (
-                        f"rounded=1;whiteSpace=wrap;html=1;arcSize=50;"
-                        f"strokeColor={pill_def['stroke']};"
-                        f"fillColor={pill_def['fill']};"
-                        f"fontColor={pill_def['fontColor']};"
-                        f"fontStyle=1;strokeWidth=1.5;fontSize=10;"
-                        f"align=center;verticalAlign=middle;"
-                    ),
-                    "vertex": "1",
-                    "parent": edge_id,
-                    "connectable": "0",
-                },
-            )
-            pill_geom = ET.SubElement(
-                pill,
-                "mxGeometry",
-                attrib={"width": str(pill_w), "height": "22", "relative": "1", "as": "geometry"},
-            )
-            ET.SubElement(
-                pill_geom,
-                "mxPoint",
-                attrib={"x": str(-pill_w // 2), "y": "-11", "as": "offset"},
-            )
+                _emit_slot_cell(root, _stable_id("p", e.id), e.label, lstyle,
+                                label_center, lw, lh)
 
     # 5. SAP essential presets — embed pre-composed organisms (User and
     # client, Cloud Connector, SAML/OIDC, 3rd party IdP and protocols, …)

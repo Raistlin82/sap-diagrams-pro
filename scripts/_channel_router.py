@@ -8,18 +8,32 @@ but returns ``edges: {}`` — edge routing was left to draw.io's defaults, which
 produced the tangled centre the user saw (crossing lines, colliding labels,
 edges piercing box borders). This module replaces that with a *structural*
 router that exploits the fixed skeleton composition instead of solving a
-general orthogonal-routing problem:
+general orthogonal-routing problem.
+
+What this router guarantees TODAY:
 
 * The **gutters** between the left / center / right columns are reserved
   vertical channels; horizontal **corridors** are reserved above and below the
   column content. Every inter-column edge travels through these corridors, so
   its segments are overlap-free *by construction* once each edge gets its own
-  parallel **lane** within a channel (offset by a fixed pitch).
+  parallel **lane** within a channel (offset by a fixed pitch) — clean
+  vertical travel plus inter-edge lane separation.
 * **Ports** — where an edge attaches to a box — are distributed across each
   box side by barycenter so a fan of connectors leaving one node spreads out
   instead of stacking on the side midpoint.
 * Edge **pills** (protocol chips like "SCIM") and **labels** are dropped into a
-  per-channel slot grid, scanned to the first collision-free slot.
+  per-channel slot grid, scanned to the first collision-free slot — pill and
+  label rects are collision-free by construction (``RouteResult.
+  slot_fallbacks`` flags the rare edge whose scan window was exhausted, see
+  ``_place_in_slots``).
+* Every in-gutter lane bundle crosses the NETWORK separator bar (Task 7) once,
+  cleanly, kept ``SEP_CLEARANCE`` off it wherever the gutter is wide enough.
+
+What it does NOT yet guarantee: an edge's interior segment can still pierce a
+*node* box inside a wide, densely-populated column — obstacle-aware routing
+around other nodes within a column (and the crossing-reduction search that
+benefits from it) is Task 9's job. Task 9 forks the router at the seam below
+(custom ``lane_order`` / ``port_order``), not the internals of ``route()``.
 
 Everything is pure-Python and deterministic: no datetime, no randomness, every
 sort carries a stable ``(…, id)`` tie-break, so the same IR yields byte-
@@ -33,13 +47,33 @@ Public API::
 
     route(diagram, layout) -> RouteResult
 
+is the composition of three independently callable steps — so a caller (Task
+9's lane/port reordering search) can iterate without forking internals::
+
+    plan(diagram, layout) -> plans
+    assign_ports_lanes(plans, layout, *, lane_order=None, port_order=None)
+        -> (port_fracs, lane_offsets)
+    build_waypoints(plans, port_fracs, lane_offsets, layout)
+        -> (waypoints, pill_pos, label_pos, crossings, slot_fallbacks)
+
 ``layout`` is the dict returned by ``compute_layout`` (needs ``nodes``,
-``groups``, ``canvas`` and ``meta`` with ``columns`` + ``networkSeparator``).
+``groups``, ``canvas`` and ``meta`` with ``columns`` + ``networkSeparator``);
+thread the SAME ``layout`` through all three calls. ``plans`` (from ``plan``)
+behaves like ``list[_Plan]`` (iterate / len()) and also carries ``.channels``
+— the exact ``Channel`` objects each plan's ``.channel`` references, reused
+(not rebuilt) by the later steps and by ``RouteResult.channels``.
+``lane_order`` / ``port_order`` are optional reordering hooks (see
+``_allocate_lanes`` / ``_assign_ports``) that default to ``None``, reproducing
+today's stable barycenter ordering exactly; ``port_groups(plans)`` exposes the
+per-side groups those hooks reorder, read-only, without forking this module.
+
 ``RouteResult`` exposes ``waypoints`` (interior bend points per edge — the
 renderer prepends the exit port and appends the entry port), ``ports`` /
 ``port_fracs`` (absolute + fractional attach points), ``pill_pos`` /
-``label_pos`` (absolute centres), ``channels`` (the reserved corridors) and a
-``crossings`` count (segment/segment crossings, the baseline Task 9 reduces).
+``label_pos`` (absolute centres), ``channels`` (the reserved corridors),
+``slot_fallbacks`` (edge ids whose pill/label slot scan was exhausted — empty
+on both shipped fixtures) and a ``crossings`` count (segment/segment
+crossings, the baseline Task 9 reduces).
 """
 from __future__ import annotations
 
@@ -112,6 +146,12 @@ class RouteResult:
     label_pos: dict[str, tuple[float, float]]
     channels: list[Channel]
     crossings: int
+    # Edge ids whose pill/label _place_in_slots scan was exhausted (fell back
+    # to a possibly-overlapping base position instead of a verified
+    # collision-free slot). Empty on both shipped fixtures today; lets Task
+    # 12's quality gate distinguish "collision-free" from "fell back" instead
+    # of silently accepting either.
+    slot_fallbacks: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -131,22 +171,31 @@ class _Plan:
     # perpendicular-axis key used to order ports on a side / lanes in a channel
     src_bary: float = 0.0
     dst_bary: float = 0.0
+    # pill/label TEXT, captured once by plan() from the source edge — so
+    # build_waypoints (step 3) never needs `diagram`/`edge_by_id` again.
+    pill: str | None = None
+    label: str | None = None
+
+
+class _Plans(list):
+    """``plan()``'s return value: a ``list[_Plan]`` (every existing helper
+    that does ``for p in plans`` keeps working unchanged) that ALSO carries
+    ``.channels`` — the exact gutter + corridor ``Channel`` objects this
+    ``plan()`` call built (used or not by any edge). Downstream steps reuse
+    these SAME objects (``assign_ports_lanes`` mutates ``channel.lanes`` in
+    place; ``route()`` republishes them as ``RouteResult.channels``) instead
+    of rebuilding a second, un-mutated, identity-mismatched copy from the
+    layout."""
+    channels: list[Channel]
+
+    def __init__(self, items: list[_Plan], channels: list[Channel]):
+        super().__init__(items)
+        self.channels = channels
 
 
 # ── Geometry helpers ─────────────────────────────────────────────────────────
 def _rect(t: tuple[float, float, float, float]):
     return Rect(float(t[0]), float(t[1]), float(t[2]), float(t[3]))
-
-
-def _side_point(r, side: str, frac: float) -> tuple[float, float]:
-    """Absolute point on ``side`` of rect ``r`` at fraction ``frac`` along it."""
-    if side == "R":
-        return (r.right, r.y + frac * r.h)
-    if side == "L":
-        return (r.x, r.y + frac * r.h)
-    if side == "T":
-        return (r.x + frac * r.w, r.y)
-    return (r.x + frac * r.w, r.bottom)              # "B"
 
 
 def _side_frac(r, side: str, frac: float) -> tuple[float, float]:
@@ -158,6 +207,14 @@ def _side_frac(r, side: str, frac: float) -> tuple[float, float]:
     if side == "T":
         return (frac, 0.0)
     return (frac, 1.0)                               # "B"
+
+
+def _abs_port(rect, frac: tuple[float, float]) -> tuple[float, float]:
+    """Absolute (x, y) for a fractional ``(fx, fy)`` anchor on ``rect`` — the
+    frac→abs conversion ``build_waypoints`` (its own path-building) and
+    ``route()`` (``RouteResult.ports``) both need, single-sourced so the two
+    call sites can't silently drift apart."""
+    return (rect.x + frac[0] * rect.w, rect.y + frac[1] * rect.h)
 
 
 def _dedupe(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -281,7 +338,40 @@ def _spread(n: int, i: int) -> float:
     return PORT_LO + i * (PORT_HI - PORT_LO) / (n - 1)
 
 
-def _assign_ports(plans: list[_Plan]) -> dict[str, tuple[tuple, tuple]]:
+def _group_ports(plans: list[_Plan]
+                 ) -> tuple[dict[tuple[str, str], list[_Plan]],
+                            dict[tuple[str, str], list[_Plan]]]:
+    """``(exit_groups, entry_groups)``: plans bucketed by ``(node_id, side)``
+    and sorted by the default barycenter key — the exact grouping
+    ``_assign_ports`` distributes fractions over. Factored out so there is
+    ONE grouping implementation, shared by ``_assign_ports`` and the public
+    ``port_groups`` introspection helper below."""
+    from collections import defaultdict
+    exit_groups: dict[tuple[str, str], list[_Plan]] = defaultdict(list)
+    entry_groups: dict[tuple[str, str], list[_Plan]] = defaultdict(list)
+    for p in plans:
+        exit_groups[(p.src_id, p.exit_side)].append(p)
+        entry_groups[(p.dst_id, p.entry_side)].append(p)
+    for (_nid, side), group in exit_groups.items():
+        group.sort(key=lambda p: (_port_bary(p.dst, side), p.eid))
+    for (_nid, side), group in entry_groups.items():
+        group.sort(key=lambda p: (_port_bary(p.src, side), p.eid))
+    return dict(exit_groups), dict(entry_groups)
+
+
+def port_groups(plans: list[_Plan]
+               ) -> tuple[dict[tuple[str, str], list[_Plan]],
+                          dict[tuple[str, str], list[_Plan]]]:
+    """Public, read-only introspection: ``(exit_groups, entry_groups)`` — see
+    ``_group_ports``. Lets a caller (Task 9's crossing-reduction search)
+    inspect the default per-(node, side) port ordering before building a
+    custom ``port_order`` hook for ``assign_ports_lanes``, without forking
+    this module."""
+    return _group_ports(plans)
+
+
+def _assign_ports(plans: list[_Plan], *, port_order=None
+                  ) -> dict[str, tuple[tuple, tuple]]:
     """Fractional (exit, entry) anchor per edge, distributed per box side.
 
     Edges leaving the SAME side of the SAME box are grouped, ordered by the
@@ -289,22 +379,26 @@ def _assign_ports(plans: list[_Plan]) -> dict[str, tuple[tuple, tuple]]:
     ``[0.25, 0.75]`` of that side — so a fan of connectors diverges instead of
     stacking on the side midpoint. Entry ports are distributed the same way on
     the target side. Deterministic: every group is sorted with an ``eid``
-    tie-break."""
-    from collections import defaultdict
-    exit_groups: dict[tuple[str, str], list[_Plan]] = defaultdict(list)
-    entry_groups: dict[tuple[str, str], list[_Plan]] = defaultdict(list)
-    for p in plans:
-        exit_groups[(p.src_id, p.exit_side)].append(p)
-        entry_groups[(p.dst_id, p.entry_side)].append(p)
+    tie-break.
+
+    ``port_order``, if given, is called as ``port_order(group)`` for every
+    per-(node, side) group AFTER the default barycenter sort (every plan in
+    ``group`` shares that one (node, side)); it must return a permutation of
+    ``group`` — Task 9's crossing-reduction search reorders ports here. The
+    default (``None``) skips the call entirely, reproducing today's output
+    exactly."""
+    exit_groups, entry_groups = _group_ports(plans)
 
     exit_frac: dict[str, tuple[float, float]] = {}
     entry_frac: dict[str, tuple[float, float]] = {}
     for (_nid, side), group in exit_groups.items():
-        group.sort(key=lambda p: (_port_bary(p.dst, side), p.eid))
+        if port_order is not None:
+            group = port_order(group)
         for i, p in enumerate(group):
             exit_frac[p.eid] = _side_frac(p.src, side, _spread(len(group), i))
     for (_nid, side), group in entry_groups.items():
-        group.sort(key=lambda p: (_port_bary(p.src, side), p.eid))
+        if port_order is not None:
+            group = port_order(group)
         for i, p in enumerate(group):
             entry_frac[p.eid] = _side_frac(p.dst, side, _spread(len(group), i))
 
@@ -313,7 +407,8 @@ def _assign_ports(plans: list[_Plan]) -> dict[str, tuple[tuple, tuple]]:
 
 # ── Lanes (8b) ───────────────────────────────────────────────────────────────
 def _allocate_lanes(channels: list[Channel], plans: list[_Plan],
-                    net_sep: dict | None = None) -> dict[str, float]:
+                    net_sep: dict | None = None, *, lane_order=None
+                    ) -> dict[str, float]:
     """Per-edge perpendicular offset from its channel centre-line.
 
     Every edge sharing a channel gets its own parallel lane, so their in-channel
@@ -323,7 +418,13 @@ def _allocate_lanes(channels: list[Channel], plans: list[_Plan],
     indices ``0..n-1``; the offset is ``(i-(n-1)/2)*pitch``, centring the bundle
     on the centre-line. The pitch is ``LANE_PITCH`` (12px) but is reduced to fit
     a narrow vertical gutter — never below 10px, so the parallel lanes always
-    stay a legible distance apart. ``channel.lanes`` records each edge's index.
+    stay a legible distance apart. ``channel.lanes`` records each edge's index
+    (in final lane order — the "per-channel ordered edge list").
+
+    ``lane_order``, if given, is called as ``lane_order(group)`` for every
+    channel's default-sorted group and must return a permutation of it — Task
+    9's crossing-reduction search reorders lanes here. The default (``None``)
+    skips the call entirely, reproducing today's output exactly.
     """
     by_channel: dict[int, list[_Plan]] = {}
     for p in plans:
@@ -338,6 +439,8 @@ def _allocate_lanes(channels: list[Channel], plans: list[_Plan],
         if not group:
             continue
         group.sort(key=lambda p: (p.src_bary, p.dst_bary, p.eid))
+        if lane_order is not None:
+            group = lane_order(group)
         n = len(group)
         pitch = LANE_PITCH
         if ch.axis == "v" and n > 1:                  # keep the bundle in-gutter
@@ -357,6 +460,34 @@ def _allocate_lanes(channels: list[Channel], plans: list[_Plan],
             max_x = ch.center + (n - 1) / 2.0 * pitch + base
             if max_x > ch.rect.right - 4.0:                     # clamp in-gutter
                 base -= (max_x - (ch.rect.right - 4.0))
+                min_x = ch.center - (n - 1) / 2.0 * pitch + base
+                if min_x < sep_x:
+                    # The clamp above traded away SEP_CLEARANCE to keep the
+                    # bundle inside the gutter; a dense-enough bundle can
+                    # still cross the separator itself. Try the cheap fix
+                    # first — a further shift, which preserves lane SPACING
+                    # exactly and is all either shipped fixture needs.
+                    fixed_base = base + (sep_x - min_x)
+                    fixed_max = ch.center + (n - 1) / 2.0 * pitch + fixed_base
+                    if fixed_max <= ch.rect.right - 4.0:
+                        base = fixed_base
+                    else:
+                        # A shift alone can't satisfy both ends at once: the
+                        # bundle is wider than the space between the
+                        # separator and the gutter's far edge (e.g. enough
+                        # direct edges through one gutter — not exercised by
+                        # either shipped fixture). Shrink the pitch to what's
+                        # actually available there instead, never below the
+                        # 10px legibility floor, and hug the gutter's far
+                        # edge — the HARD invariant: never spill a lane into
+                        # the next column's node content, even if that means
+                        # giving up the rest of SEP_CLEARANCE (soft).
+                        avail_lo, avail_hi = sep_x, ch.rect.right - 4.0
+                        if n > 1:
+                            pitch = max(10.0, (avail_hi - avail_lo) / (n - 1))
+                        span = (n - 1) * pitch
+                        left_edge = min(avail_lo, avail_hi - span)
+                        base = left_edge - (ch.center - (n - 1) / 2.0 * pitch)
 
         for i, p in enumerate(group):
             ch.lanes[p.eid] = i
@@ -445,10 +576,20 @@ def _slot_free(rect, obstacles, foreign_segs) -> bool:
 
 
 def _place_in_slots(seg, dims, obstacles, foreign_segs):
-    """Return the (cx, cy) centre of the first free slot for a ``dims`` rect,
-    starting at the segment midpoint and scanning a grid: first ALONG the
-    segment (the pill/label rides its edge), then stepping perpendicular off it
-    if the segment is congested. Slot pitch = rect height + SLOT_PAD."""
+    """Return ``((cx, cy), rect, placed_ok)`` for a ``dims`` rect, starting at
+    the segment midpoint and scanning a grid: first ALONG the segment (the
+    pill/label rides its edge), then stepping perpendicular off it if the
+    segment is congested. Slot pitch = rect height + SLOT_PAD.
+
+    ``placed_ok`` is ``True`` when the scan found a genuinely collision-free
+    slot, ``False`` when the whole scan window (15 perpendicular steps, each
+    with ``along_max`` steps along the segment, both directions) was
+    exhausted — in which case ``(cx, cy)``/``rect`` silently fall back to the
+    unchecked segment-midpoint position (still returned, so callers keep a
+    position to render) but MAY overlap another rect. Making this observable
+    (rather than a silent fallback) is what lets ``RouteResult.
+    slot_fallbacks`` — and Task 12's quality gate — distinguish "collision-
+    free" from "fell back"."""
     (ax, ay), (bx, by) = seg
     base = ((ax + bx) / 2.0, (ay + by) / 2.0)
     seg_len = abs(bx - ax) + abs(by - ay)
@@ -467,39 +608,46 @@ def _place_in_slots(seg, dims, obstacles, foreign_segs):
                     cy = base[1] + along_s * pitch * along[1] + perp_s * pitch * perp[1]
                     rect = Rect(cx - w / 2, cy - h / 2, w, h)
                     if _slot_free(rect, obstacles, foreign_segs):
-                        return (cx, cy), rect
-    return base, Rect(base[0] - w / 2, base[1] - h / 2, w, h)
+                        return (cx, cy), rect, True
+    return base, Rect(base[0] - w / 2, base[1] - h / 2, w, h), False
 
 
-def _place_pills_and_labels(plans, paths, node_geo, edge_by_id):
+def _place_pills_and_labels(plans, paths, node_geo):
     """Drop each edge's protocol pill and label into a collision-free slot on
     its longest segment. Processed in IR order; every placed rect becomes an
     obstacle for later ones, so results are overlap-free by construction and
-    deterministic."""
+    deterministic. Pill/label TEXT comes from ``_Plan.pill``/``_Plan.label``
+    (captured once, in ``plan()``, from the source diagram's edges) — this
+    function needs no ``diagram``/``edge_by_id`` of its own.
+
+    Returns ``(pill_pos, label_pos, slot_fallbacks)`` — ``slot_fallbacks`` is
+    the list of edge ids (order of first fallback: pill before label) whose
+    ``_place_in_slots`` scan was exhausted (see there); empty when every slot
+    was placed collision-free."""
     node_rects = list(node_geo.values())
     placed: list = []                                 # pill + label rects so far
     all_segs = {p.eid: _segments(paths[p.eid]) for p in plans}
     pill_pos: dict[str, tuple[float, float]] = {}
     label_pos: dict[str, tuple[float, float]] = {}
+    slot_fallbacks: list[str] = []
     for p in plans:
-        e = edge_by_id.get(p.eid)
-        if e is None:
-            continue
         seg = _longest_segment(paths[p.eid])
         foreign = [s for eid, segs in all_segs.items() if eid != p.eid for s in segs]
-        pill_text = getattr(e, "pill", None)
-        label_text = getattr(e, "label", None)
-        if pill_text:
-            center, rect = _place_in_slots(seg, pill_dims(pill_text),
-                                           node_rects + placed, foreign)
+        if p.pill:
+            center, rect, ok = _place_in_slots(seg, pill_dims(p.pill),
+                                               node_rects + placed, foreign)
             pill_pos[p.eid] = center
             placed.append(rect)
-        if label_text:
-            center, rect = _place_in_slots(seg, label_dims(label_text),
-                                           node_rects + placed, foreign)
+            if not ok:
+                slot_fallbacks.append(p.eid)
+        if p.label:
+            center, rect, ok = _place_in_slots(seg, label_dims(p.label),
+                                               node_rects + placed, foreign)
             label_pos[p.eid] = center
             placed.append(rect)
-    return pill_pos, label_pos
+            if not ok:
+                slot_fallbacks.append(p.eid)
+    return pill_pos, label_pos, slot_fallbacks
 
 
 def _count_crossings(paths: dict[str, list[tuple[float, float]]]) -> int:
@@ -581,15 +729,16 @@ def _build_channels(layout: dict) -> tuple[list[tuple[str, float, float]],
     return cols, gutters, corridors, channels
 
 
-# ── Public entry point ───────────────────────────────────────────────────────
-def route(diagram, layout: dict) -> RouteResult:
-    """Route every edge of ``diagram`` through the reserved channels of
-    ``layout``. See the module docstring for the model. Deterministic: edges
-    are processed in IR order and every tie-break carries the edge id."""
-    node_geo = {nid: _rect(t) for nid, t in layout.get("nodes", {}).items()}
-    meta = layout.get("meta", {})
-    net_sep = meta.get("networkSeparator")
+# ── Public entry point (composable pipeline — see module docstring) ─────────
+def plan(diagram, layout: dict) -> _Plans:
+    """STEP 1 — region graph + per-edge channel-segment classification.
 
+    Pure function of ``(diagram, layout)``; edges are processed in IR order
+    and every tie-break carries the edge id, so re-running it on the same
+    input reproduces identical plans. Returns a ``_Plans`` (use it exactly
+    like ``list[_Plan]``; it also carries ``.channels`` — see ``_Plans``).
+    """
+    node_geo = {nid: _rect(t) for nid, t in layout.get("nodes", {}).items()}
     cols, gutters, corridors, channels = _build_channels(layout)
 
     # region adjacency (left↔center↔right chain)
@@ -602,8 +751,7 @@ def route(diagram, layout: dict) -> RouteResult:
             nb.append(i + 1)
         adj[i] = nb
 
-    # ── plan every edge (IR order) ──────────────────────────────────────────
-    plans: list[_Plan] = []
+    items: list[_Plan] = []
     for e in diagram.edges:
         src = node_geo.get(e.source)
         dst = node_geo.get(e.target)
@@ -614,23 +762,100 @@ def route(diagram, layout: dict) -> RouteResult:
         # BFS the region graph → the sequence of columns (hence gutters) this
         # edge crosses; its hop count drives the adjacent/long/intra choice.
         region_path = _bfs_columns(adj, sc, dc)
-        plans.append(_plan_edge(e.id, src, dst, e.source, e.target, sc, dc,
-                                region_path, gutters, corridors))
+        p = _plan_edge(e.id, src, dst, e.source, e.target, sc, dc,
+                       region_path, gutters, corridors)
+        p.pill = getattr(e, "pill", None)
+        p.label = getattr(e, "label", None)
+        items.append(p)
+    return _Plans(items, channels)
 
-    # ── ports (8c), lanes (8b) ──────────────────────────────────────────────
-    port_fracs = _assign_ports(plans)
-    lane_off = _allocate_lanes(channels, plans, net_sep)
 
-    # ── absolute ports + waypoints ──────────────────────────────────────────
+def assign_ports_lanes(plans: list[_Plan], layout: dict, *,
+                       lane_order=None, port_order=None
+                       ) -> tuple[dict[str, tuple[tuple, tuple]], dict[str, float]]:
+    """STEP 2 — fractional port assignment (8c) + per-edge lane offsets (8b).
+
+    Returns ``(port_fracs, lane_offsets)``:
+      * ``port_fracs``    ``{eid: ((exitX,exitY), (entryX,entryY))}`` —
+        fractional anchors on the box side, barycenter-distributed.
+      * ``lane_offsets``  ``{eid: float}`` — perpendicular offset from the
+        edge's shared channel centre-line (0.0 for edges with no channel,
+        e.g. ``"intra"`` — same meaning as it always has).
+
+    ``lane_order`` / ``port_order`` are optional reordering hooks forwarded
+    to ``_allocate_lanes`` / ``_assign_ports`` (see their docstrings) for
+    Task 9's crossing-reduction search; both default to ``None``, which
+    reproduces today's stable barycenter ordering exactly — the default path
+    is byte-identical to the pre-seam ``route()``. Each hook MUST return a
+    true permutation of the group it's given (same edge ids, none dropped or
+    duplicated) — ``_assign_ports`` fails loudly (``KeyError``) on a dropped
+    id, but a lane_order that drops one is NOT caught here: the missing
+    edge's ``lane_offsets`` entry is simply absent, and ``build_waypoints``
+    silently substitutes ``0.0`` for it. A search implementation should only
+    ever permute, never filter, the group it receives.
+
+    Works with any ``list[_Plan]``, not just a ``_Plans`` from ``plan()``: if
+    ``plans`` has no ``.channels`` (e.g. a hand-built list in a test), the
+    channels actually referenced by ``plans`` are used instead — every
+    channel with zero plans routed through it contributes nothing to lane
+    allocation anyway (see ``_allocate_lanes``), so this is equivalent to the
+    full list for this function's purpose.
+
+    NOTE for a search loop trying several candidates on the same ``plans``:
+    ``_allocate_lanes`` mutates ``channel.lanes`` (and hence ``plans.
+    channels[*].lanes``) in place on EVERY call, so after comparing several
+    ``lane_order`` candidates it reflects only whichever call ran last, not
+    necessarily the winner. Re-run ``assign_ports_lanes`` with the winning
+    ``lane_order`` immediately before reading ``.lanes`` (or before the final
+    ``build_waypoints`` call that produces the diagram to keep).
+    """
+    channels = getattr(plans, "channels", None)
+    if channels is None:
+        seen: dict[str, Channel] = {}
+        for p in plans:
+            if p.channel is not None:
+                seen[p.channel.id] = p.channel
+        channels = list(seen.values())
+
+    net_sep = (layout.get("meta") or {}).get("networkSeparator")
+    port_fracs = _assign_ports(plans, port_order=port_order)
+    lane_offsets = _allocate_lanes(channels, plans, net_sep, lane_order=lane_order)
+    return port_fracs, lane_offsets
+
+
+def build_waypoints(plans: list[_Plan],
+                    port_fracs: dict[str, tuple[tuple, tuple]],
+                    lane_offsets: dict[str, float],
+                    layout: dict
+                    ) -> tuple[dict[str, list[tuple[float, float]]],
+                               dict[str, tuple[float, float]],
+                               dict[str, tuple[float, float]],
+                               int, list[str]]:
+    """STEP 3 — absolute ports, interior waypoints, pill/label slots and the
+    crossing count, given ``plans`` (from ``plan()``) and the
+    ``(port_fracs, lane_offsets)`` ``assign_ports_lanes()`` computed.
+
+    Returns ``(waypoints, pill_pos, label_pos, crossings, slot_fallbacks)``.
+    ``layout`` supplies node geometry for the pill/label obstacle set — pass
+    the SAME ``layout`` used for ``plan()``/``assign_ports_lanes()``.
+
+    This is the step Task 9 re-runs after reordering lanes/ports: same
+    ``plans``, a different ``(port_fracs, lane_offsets)`` from
+    ``assign_ports_lanes(plans, layout, lane_order=..., port_order=...)`` in,
+    different (still deterministic) waypoints out — the routing decisions
+    already made by steps 1-2 are mechanically realised here, no re-planning.
+    """
+    node_geo = {nid: _rect(t) for nid, t in layout.get("nodes", {}).items()}
+
     ports: dict[str, tuple[tuple, tuple]] = {}
     waypoints: dict[str, list[tuple[float, float]]] = {}
     for p in plans:
         efr, nfr = port_fracs[p.eid]
-        exit_pt = (p.src.x + efr[0] * p.src.w, p.src.y + efr[1] * p.src.h)
-        entry_pt = (p.dst.x + nfr[0] * p.dst.w, p.dst.y + nfr[1] * p.dst.h)
+        exit_pt = _abs_port(p.src, efr)
+        entry_pt = _abs_port(p.dst, nfr)
         ports[p.eid] = (exit_pt, entry_pt)
         waypoints[p.eid] = _build_waypoints(p, exit_pt, entry_pt,
-                                            lane_off.get(p.eid, 0.0))
+                                            lane_offsets.get(p.eid, 0.0))
 
     # ── full paths (exit + waypoints + entry) for crossing count ────────────
     paths = {p.eid: [ports[p.eid][0]] + waypoints[p.eid] + [ports[p.eid][1]]
@@ -638,8 +863,34 @@ def route(diagram, layout: dict) -> RouteResult:
     crossings = _count_crossings(paths)
 
     # ── pill & label slots (8e) ─────────────────────────────────────────────
-    edge_by_id = {e.id: e for e in diagram.edges}
-    pill_pos, label_pos = _place_pills_and_labels(plans, paths, node_geo, edge_by_id)
+    pill_pos, label_pos, slot_fallbacks = _place_pills_and_labels(plans, paths, node_geo)
+
+    return waypoints, pill_pos, label_pos, crossings, slot_fallbacks
+
+
+def route(diagram, layout: dict) -> RouteResult:
+    """Route every edge of ``diagram`` through the reserved channels of
+    ``layout``. See the module docstring for the model. Deterministic: edges
+    are processed in IR order and every tie-break carries the edge id.
+
+    ``route()`` is exactly the composition of the three pipeline steps above
+    (default ``lane_order``/``port_order`` — i.e. today's stable ordering)
+    plus the absolute-ports arithmetic ``RouteResult.ports`` needs; it exists
+    as a convenience wrapper for callers who don't need to intervene between
+    steps. Task 9's crossing-reduction search calls ``plan`` /
+    ``assign_ports_lanes`` / ``build_waypoints`` directly instead, so it can
+    try several ``lane_order``/``port_order`` candidates against the SAME
+    ``plans`` without re-planning or forking this module.
+    """
+    plans = plan(diagram, layout)
+    port_fracs, lane_offsets = assign_ports_lanes(plans, layout)
+    waypoints, pill_pos, label_pos, crossings, slot_fallbacks = build_waypoints(
+        plans, port_fracs, lane_offsets, layout)
+
+    ports: dict[str, tuple[tuple, tuple]] = {}
+    for p in plans:
+        efr, nfr = port_fracs[p.eid]
+        ports[p.eid] = (_abs_port(p.src, efr), _abs_port(p.dst, nfr))
 
     return RouteResult(
         waypoints=waypoints,
@@ -647,6 +898,7 @@ def route(diagram, layout: dict) -> RouteResult:
         port_fracs=port_fracs,
         pill_pos=pill_pos,
         label_pos=label_pos,
-        channels=channels,
+        channels=plans.channels,
         crossings=crossings,
+        slot_fallbacks=slot_fallbacks,
     )
