@@ -158,18 +158,19 @@ def test_identity_slot_by_parent(gen, sl):
     assert _contains(ident2, btp2), f"parented identity {ident2} not inside btp {btp2}"
 
 
-def test_identity_techid_marker_matches_shape_index_typo(gen, sl):
-    """FIX-5: assets/shape-index.json's real techId for Identity Provisioning is
-    misspelled ("...identity-provisoning", missing the 2nd 'i') — the marker
-    tuple must match the DATA as it actually is, or the techId fallback
-    silently never fires. Uses the "IP" alias (not a literal "identity
-    provisioning" substring) so a hit can ONLY come through the techId path,
-    not the (already-working) service-name marker path."""
+def test_identity_techid_marker_matches_shape_index_techid(gen, sl):
+    """The identity-group detection relies on matching the resolved service's
+    techId against ``_IDENTITY_TECHID_MARKERS``. The SVG re-harvest gave
+    Identity Provisioning the clean techId "32072-identity-provisioning_sd"
+    (the old data misspelled it "...identity-provisoning"; both spellings stay
+    in the marker tuple for back-compat). Uses the "IP" alias (not a literal
+    "identity provisioning" substring) so a hit can ONLY come through the
+    techId path, not the (already-working) service-name marker path."""
     from types import SimpleNamespace as NS
     shape_index = gen.ShapeIndex.load()
     resolved = shape_index.resolve("IP")
-    assert resolved and "provisoning" in resolved["techId"].lower(), \
-        "fixture assumption: shape-index still misspells this techId"
+    assert resolved and "identity-provisioning" in resolved["techId"].lower(), \
+        "fixture assumption: 'IP' resolves to the Identity Provisioning entry"
     node = NS(id="n", service="IP")
     assert sl._is_identity_group(NS(id="g"), {"g": [node]}, shape_index)
 

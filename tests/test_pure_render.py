@@ -252,7 +252,7 @@ def test_real_icon_atlas_hit_paints_the_actual_atlas_png(tmp_path):
 
     style = json.loads((ROOT / "assets/shape-index.json").read_text(encoding="utf-8"))
     entry = next(s for s in style["services"]
-                 if s["name"] == "SAP Digital Assistant Service" and s["size"] == "S")
+                 if s["name"] == "SAP Digital Assistant Service" and s["size"] == "M")
     uri = pr.extract_image_value(entry["drawioStyle"])
     digest = pr.sha1_of(uri)
     atlas_index = json.loads(ATLAS_INDEX_PATH.read_text(encoding="utf-8"))
@@ -516,7 +516,7 @@ def test_fixture_real_icon_sha1_is_actually_in_the_committed_atlas():
     so a future atlas rebuild that drops this icon fails loudly here too."""
     style = json.loads((ROOT / "assets/shape-index.json").read_text(encoding="utf-8"))
     entry = next(s for s in style["services"]
-                 if s["name"] == "SAP Digital Assistant Service" and s["size"] == "S")
+                 if s["name"] == "SAP Digital Assistant Service" and s["size"] == "M")
     uri = pr.extract_image_value(entry["drawioStyle"])
     digest = pr.sha1_of(uri)
     atlas_index = json.loads(ATLAS_INDEX_PATH.read_text(encoding="utf-8"))
