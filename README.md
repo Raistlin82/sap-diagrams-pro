@@ -66,8 +66,8 @@ The plugin grounds the content **before** it draws:
 2. **Ground** — looks up every component in the SAP Discovery Center (via the MCP) for its canonical name, category (BTP-service vs SaaS-product) and deprecation status.
 3. **Consult** — invokes the SAP-domain skills for best-practice completeness (missing logging, Cloud Connector, identity trust, …).
 4. **Interview** — asks a focused set of questions (level, runtime, identity, integration style, backends) derived from what the docs/skills surfaced, then confirms the inventory.
-5. **Generate** — builds the JSON IR and runs `scripts/generate-drawio.py`; the deterministic **zone-composition engine** lays out consumers→BTP→systems horizontally with auto-sized containers and canonical molecules (no graphviz dependency).
-6. **Verify & save** — `validate-drawio.py` (palette/XML) + `check-composition.py` (zones/overlaps) + `render-preview.py` (PNG). Saves to `./diagrams/<title>-<level>.drawio`.
+5. **Generate** — builds the **IR v2** JSON (gated by `scripts/validate-ir.py`) and runs `scripts/generate-drawio.py`. The deterministic pipeline is **skeleton layout** (slot layout + flow ordering, `_skeleton_layout.py`) → **channel router** (obstacle-aware edges + collision-free pill/label slots, `_channel_router.py`) → **style-contract molecules** (`_molecules.py`, driven by `assets/style-contract.json`), laying out consumers→BTP→systems horizontally with auto-sized containers (no graphviz dependency).
+6. **Verify & save** — `validate-drawio.py` (palette/XML) + `check-composition.py` (geometric gate: piercing/overlaps/containment/channel discipline) with an optional **visual-rubric loop** (`apply-rubric-patches.py` consuming `references/visual-rubric.md`), then `render-preview.py` (PNG — draw.io when present, else the pure-Python renderer). Saves to `./diagrams/<title>-<level>.drawio`.
 
 ### Validate an existing diagram
 
@@ -113,14 +113,43 @@ sap-diagrams-pro/
 │   └── sap-icons-resolve/           # Helper skill (auto-invoked)
 ├── agents/
 │   └── diagram-architect.md         # Autonomous orchestrator for complex diagrams
-├── scripts/
-│   ├── bootstrap-cache.sh           # Clones SAP repos to ~/.cache/
-│   ├── build-shape-index.py         # Parses shape XML → shape-index.json
-│   ├── generate-drawio.py           # JSON intermediate → .drawio XML
-│   └── validate-drawio.py           # .drawio → compliance report
+├── scripts/                         # deterministic engine (single source of truth)
+│   ├── generate-drawio.py           # IR v2 → .drawio XML (pipeline entry point)
+│   ├── validate-ir.py               # IR v2 pre-render gate
+│   ├── validate-drawio.py           # .drawio → palette/XML compliance report
+│   ├── check-composition.py         # geometric gate (uses _geom_checks.py)
+│   ├── apply-rubric-patches.py      # visual-rubric patch-op consumer
+│   ├── render-preview.py            # PNG preview (draw.io or pure renderer)
+│   ├── _skeleton_layout.py          # slot layout + flow ordering
+│   ├── _channel_router.py           # obstacle-aware edge/pill/label router
+│   ├── _molecules.py                # style-contract-driven molecule emission
+│   ├── _geom_checks.py              # geometry kernel (router + gate)
+│   ├── _pure_render.py              # sandbox PNG renderer (no draw.io app)
+│   ├── _drawio_io.py                # .drawio page (de)serialisation
+│   ├── build-shape-index.py         # builds shape-index.json (offline)
+│   ├── build-style-contract.py      # builds style-contract.json (offline)
+│   ├── build-icon-atlas.py          # builds icon-atlas/ PNGs (offline)
+│   └── bootstrap-cache.sh           # clones SAP repos to ~/.cache/
 └── assets/
-    └── shape-index.schema.json      # JSON schema for the shape index
+    ├── shape-index.json             # parsed SAP shape catalog (+ .schema.json)
+    ├── style-contract.json          # canonical molecule style contract
+    ├── canonical-pills.json         # canonical edge-pill catalog
+    ├── brand-pack/                  # public brand chips (brand-pack.local/ gitignored)
+    ├── icon-atlas/                  # pre-rasterized icon PNGs for the pure renderer
+    └── fonts/                       # bundled Arimo (SIL OFL-1.1)
 ```
+
+## Claude Desktop / claude.ai bundle
+
+A self-contained **Agent Skill** port of the engine lives in
+`packaging/claude-desktop-skill/`. Run `bash packaging/claude-desktop-skill/build.sh`
+to assemble `dist/claude-desktop-skill/sap-diagram-generate.zip` — the full
+perfect-diagrams engine (entry points + private modules), the style contract,
+public brand pack, icon atlas, bundled fonts, shape index, canonical pills, and
+the `visual-rubric.md` reference, all bundled so it runs entirely inside the
+code-execution sandbox (draw.io **and** PNG preview, via the pure renderer). The
+gitignored `assets/brand-pack.local/` is never included. See
+[`packaging/claude-desktop-skill/README.md`](packaging/claude-desktop-skill/README.md).
 
 ## Compliance with SAP guideline
 

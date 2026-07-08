@@ -93,7 +93,7 @@ In practice for a 1600×1000 canvas:
 | Title ↔ first group | 32px |
 | Edge label ↔ edge endpoint | 8-12px |
 
-The plugin's deterministic zone-composition engine (`scripts/_zone_layout.py`) enforces these spacings while auto-sizing each container to its content.
+The plugin's deterministic skeleton-layout engine (`scripts/_skeleton_layout.py`) enforces these spacings while auto-sizing each container to its content.
 
 ## Common mistakes
 

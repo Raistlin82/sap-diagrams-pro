@@ -9,19 +9,28 @@ All notable changes to `sap-diagrams-pro` are documented in this file. The forma
 
 ## [Unreleased]
 
-### Changed — diagram quality overhaul (content + visual)
+### Changed — perfect-diagrams engine (deterministic pipeline)
 
-- **Deterministic zone-composition layout** (`scripts/_zone_layout.py`) replaces the
-  graphviz `dot` backend. SAP's horizontal big-picture is now honoured: consumers
-  LEFT → BTP CENTER → systems RIGHT, with containers that auto-size to their
-  contents and respect the `position`/`zone` fields (which `dot` ignored). The
-  graphviz dependency is removed.
+- **New render pipeline** replacing the graphviz `dot` backend, staged end-to-end:
+  **IR v2** (`scripts/validate-ir.py` gate) → **skeleton layout**
+  (`scripts/_skeleton_layout.py`, slot layout + flow ordering, successor to the
+  removed `_zone_layout.py`) → **channel router** (`scripts/_channel_router.py`,
+  obstacle-aware edge routing + collision-free pill/label slots) →
+  **style-contract molecules** (`scripts/_molecules.py`, driven by
+  `assets/style-contract.json`) → **geometric gate + visual-rubric loop**
+  (`scripts/check-composition.py` with the `_geom_checks.py` kernel, plus
+  `scripts/apply-rubric-patches.py` consuming `references/visual-rubric.md`) →
+  **draw.io emission** or **pure-Python render** (`scripts/_pure_render.py` +
+  bundled Arimo fonts + `assets/icon-atlas/`, no draw.io app required). SAP's
+  horizontal big-picture (consumers LEFT → BTP CENTER → systems RIGHT) is honoured
+  with auto-sizing containers; the graphviz dependency is removed.
 - **Canonical molecules**: users render frameless (icon + label), the BTP layer
   carries a "SAP BTP" logo chip, and RIGHT-zone systems render as white backend
   boxes (icon-left + title + optional `subtitle`).
 - **Fidelity pass**: canonical `arcSize` (32 BTP / 24 area / 16 inner / 50 pill),
-  16px title, square service icons (48 L0/L1, 32 L2), Helvetica font, firewall
-  stroke 3, 28px step circles. Reference docs + validator aligned to ground-truth.
+  16px title, square service icons (48 L0/L1, 32 L2), Arimo (Helvetica-metric)
+  font, firewall stroke 3, 28px step circles. Reference docs + validator aligned
+  to ground-truth.
 - **Safer service resolution**: word-level matching (every query word must be a
   word in the canonical name) replaces the risky substring fuzzy match.
 
@@ -34,8 +43,22 @@ All notable changes to `sap-diagrams-pro` are documented in this file. The forma
   Discovery Center (via the `mcp-sap-docs` MCP) for canonical names + category
   (BTP-service vs SaaS-product) + deprecation, consults the SAP-domain skills, and
   runs a focused requirements interview — all before rendering.
-- **Verification loop**: `scripts/check-composition.py` (zone overlaps, title band,
-  legend) and `scripts/render-preview.py` (PNG preview via draw.io). CI runs both.
+- **Verification loop**: `scripts/check-composition.py` (geometric gate — piercing,
+  overlaps, containment, channel discipline; `_geom_checks.py` kernel) and
+  `scripts/render-preview.py` (PNG preview — draw.io when present, else the bundled
+  pure renderer). CI runs both.
+- **Desktop / claude.ai bundle refresh** (`packaging/claude-desktop-skill/`): the
+  self-contained Agent Skill zip now ships the full perfect-diagrams engine —
+  `generate-drawio.py`, `validate-ir.py`, `validate-drawio.py`,
+  `check-composition.py`, `apply-rubric-patches.py`, `render-preview.py`, the
+  private modules (`_skeleton_layout.py`, `_channel_router.py`, `_molecules.py`,
+  `_geom_checks.py`, `_pure_render.py`, `_drawio_io.py`), plus
+  `assets/style-contract.json`, `assets/brand-pack/` (public chips only),
+  `assets/icon-atlas/`, the bundled Arimo fonts, `shape-index.json`,
+  `canonical-pills.json`, and the `visual-rubric.md` reference. The gitignored
+  `assets/brand-pack.local/` (trademarks / customer logos) is excluded by a build
+  guard. The pure renderer means the skill now produces a PNG preview in the
+  code-execution sandbox (no draw.io app needed).
 - IR fields: node `subtitle`; group `flow` and `zone`.
 - Initial scaffold: plugin manifest, REUSE-compliant licensing, README and CONTRIBUTING.
 - Skill `sap-diagram-generate` with 6 reference docs (Horizon palette, atomic design, levels L0/L1/L2, component groups, line styles + spacing, shape libraries index).
