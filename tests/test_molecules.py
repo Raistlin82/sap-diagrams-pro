@@ -246,6 +246,29 @@ def test_tier_box_brand_chips(M, contract):
     assert "badge-runtime-cloud-foundry" in ids
 
 
+@pytest.mark.parametrize("badges", [
+    {"hyperscalers": ["azure"], "runtimes": ["cloud-foundry"]},
+    {"runtimes": ["cloud-foundry", "kyma"]},
+    {"runtimes": ["cloud-foundry"]},
+])
+def test_tier_box_badge_row_stays_within_frame(M, contract, badges):
+    """Regression: the runtime badge renders as a ~130px text chip, so the frame
+    must reserve that width. footprint() → _frame_min → _badge_row_size →
+    _badge_slot_size (the shared geometry source) must account for the chip width;
+    if it stale-reserved the 32px image-badge width, the chip would overflow the
+    border. Exercise the PRODUCTION path: footprint sizes the frame, tier_box
+    draws into that size. Every badge cell's right edge must fit the frame."""
+    g = NS(id="t", label="Public Cloud", type="cloud-tier", kind="public", badges=badges)
+    size = M.footprint(g, contract)            # what the layout reserves + passes down
+    cells = M.tier_box(g, contract, size)
+    frame_w = cells[0]["w"]
+    for c in cells:
+        if str(c["id"]).startswith("badge-"):
+            right = c["x"] + c["w"]
+            assert right <= frame_w + 0.5, (
+                f"badge {c['id']} right edge {right} overflows frame width {frame_w}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Remaining node / frame / decorative molecules.
 # ─────────────────────────────────────────────────────────────────────────────

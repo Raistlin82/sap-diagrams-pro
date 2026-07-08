@@ -302,6 +302,22 @@ _BADGE_MOLECULE = {
 }
 
 
+def _badge_slot_size(kind: str, contract: dict) -> tuple[float, float]:
+    """(w, h) of a single badge slot of ``kind`` — the ONE source of truth for
+    badge geometry, shared by ``_badge_slot`` (what gets drawn) and
+    ``_badge_row_size`` (what a frame reserves), so the two can never drift.
+
+    Runtime badges render as the ``chip`` text chip (see ``_badge_slot``), NOT
+    the 32px ``badge-runtime`` image slot, so their reserved width must be the
+    chip's — otherwise a badge-driven frame (e.g. a min-width cloud tier) reserves
+    too little and the chip overflows the frame border."""
+    if kind == "runtime":
+        cg = _geo(contract, "chip")
+        return _f(cg, "w", 130.0), _f(cg, "h", 28.18)
+    g = _geo(contract, _BADGE_MOLECULE.get(kind, "badge-hyperscaler"))
+    return _f(g, "w", 82.5), _f(g, "h", 55.0)
+
+
 def _badge_slot(kind: str, name: str, contract: dict) -> dict:
     """Build an UNRESOLVED image-badge cell for ``name`` using the ``kind``
     contract style, with its category placeholder rewritten to ``@{name}`` and a
@@ -313,15 +329,15 @@ def _badge_slot(kind: str, name: str, contract: dict) -> dict:
     # the deliberate "chip testuale" form. No image resolution: deterministic and
     # readable everywhere (zone title bands + custom-app runtime row).
     if kind == "runtime":
-        cg = _geo(contract, "chip")
+        bw, bh = _badge_slot_size(kind, contract)
         return {
             "id": f"badge-{kind}-{name}",
             "value": display_name(name),
             "style": _fallback_chip_style(contract),
             "x": 0.0,
             "y": 0.0,
-            "w": _f(cg, "w", 130.0),
-            "h": _f(cg, "h", 28.18),
+            "w": bw,
+            "h": bh,
             "parent": None,
             "connectable": False,
             "placeholder_mode": "strip",
@@ -800,8 +816,7 @@ def _badge_row_size(group: Any, contract: dict) -> tuple[float, float]:
     w = 0.0
     h = 0.0
     for kind, coll in (("hyperscaler", "hyperscalers"), ("runtime", "runtimes")):
-        g = _geo(contract, _BADGE_MOLECULE.get(kind, "badge-hyperscaler"))
-        bw, bh = _f(g, "w", 82.5), _f(g, "h", 55.0)
+        bw, bh = _badge_slot_size(kind, contract)  # shared with _badge_slot: no drift
         for _ in (badges.get(coll) or []):
             w += bw + BADGE_GAP
             h = max(h, bh)
@@ -1045,6 +1060,9 @@ def tier_box(group: Any, contract: dict, size: tuple[float, float] | None = None
     kind = (getattr(group, "kind", None) or "public").lower()
     molname = "tier-box-nonsap" if kind == "any-premise" else "tier-box-sap"
     g = _geo(contract, molname)
+    # The layout always passes the footprint-derived ``size`` (which reserves the
+    # badge row + title via _frame_min → _badge_row_size → _badge_slot_size); the
+    # bare contract card size is only the size=None convenience default.
     box_w, box_h = size if size else (_f(g, "w", 201.0), _f(g, "h", 92.85))
     frame = {
         "id": "frame",
