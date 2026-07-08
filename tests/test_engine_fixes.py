@@ -207,7 +207,12 @@ def test_identity_group_has_no_btp_chip(gen):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIX-4 — unresolved runtime badge → text chip + WARNING (no fuzzy icon match)
+# FIX-4 — runtime badge is ALWAYS a text chip (never a wordmark image)
+#
+# Runtime brand assets (Cloud Foundry, Kyma) are wide wordmark logos that squish
+# into an illegible blob at the 32px runtime-badge size. The engine therefore
+# renders runtimes as a deterministic SAP-blue text chip — the intended form,
+# not a degradation — so it produces NO warning and ignores any pack image.
 # ─────────────────────────────────────────────────────────────────────────────
 def _fuzzy_resolver(_key):
     # Simulates the icon resolver fuzzy-matching ANY key to some glyph.
@@ -218,33 +223,35 @@ def _fuzzy_resolver(_key):
     ("cloud-foundry", "Cloud Foundry"),
     ("kyma", "Kyma"),
 ])
-def test_runtime_badge_degrades_to_text_chip_with_warning(M, contract, name, label):
+def test_runtime_badge_is_text_chip(M, contract, name, label):
     warns = []
     cell = M.badge("runtime", name, contract, {}, _fuzzy_resolver, warns)
-    # NOT the fuzzy glyph — the deterministic text chip.
+    # NOT the fuzzy glyph — the deterministic text chip with the friendly label.
     assert "FUZZYGLYPH" not in cell.get("style", "")
     assert cell.get("value") == label
     assert cell["style"].startswith(M._fallback_chip_style(contract))
-    assert any(name in w for w in warns), f"expected a WARNING for {name!r}, got {warns}"
+    # It is the intended form, not a fallback: no WARNING is emitted.
+    assert not warns, f"runtime chip must not warn, got {warns}"
 
 
-def test_runtime_badge_matches_hyperscaler_fallback(M, contract):
-    """The cloud-foundry (runtime) fallback path is identical to aws (hyperscaler):
-    both degrade to a bordered text chip + a WARNING with an empty pack."""
-    w_cf, w_aws = [], []
-    cf = M.badge("runtime", "cloud-foundry", contract, {}, _fuzzy_resolver, w_cf)
+def test_hyperscaler_still_degrades_to_fallback_with_warning(M, contract):
+    """Hyperscaler badges keep the image-with-text-fallback behaviour: an empty
+    pack degrades AWS to a bordered text chip + a WARNING. (Contrast the runtime
+    chip above, which is the intended form and never warns.)"""
+    w_aws = []
     aws = M.badge("hyperscaler", "aws", contract, {}, _fuzzy_resolver, w_aws)
-    assert cf["style"].startswith(M._fallback_chip_style(contract))
     assert aws["style"].startswith(M._fallback_chip_style(contract))
-    assert w_cf and w_aws
+    assert w_aws
 
 
-def test_runtime_badge_resolves_real_asset_from_pack(M, contract):
-    """When the brand pack DOES carry the CF asset (cf-badge alias), the badge
-    resolves to the real image — brand_only blocks only the fuzzy icon leg, not
-    the pack."""
+def test_runtime_badge_ignores_pack_image(M, contract):
+    """Even when the brand pack DOES carry the CF asset (cf-badge alias), the
+    runtime badge stays a text chip — the wordmark image is illegible at badge
+    size, so it is deliberately never used."""
     packs = {"cf-badge": {"dataUri": "data:image/png,REALCF"}}
     warns = []
     cell = M.badge("runtime", "cloud-foundry", contract, packs, _fuzzy_resolver, warns)
-    assert "REALCF" in cell.get("style", "")
+    assert "REALCF" not in cell.get("style", "")
+    assert cell["style"].startswith(M._fallback_chip_style(contract))
+    assert cell.get("value") == "Cloud Foundry"
     assert not warns

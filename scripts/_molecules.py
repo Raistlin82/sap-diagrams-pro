@@ -307,6 +307,26 @@ def _badge_slot(kind: str, name: str, contract: dict) -> dict:
     contract style, with its category placeholder rewritten to ``@{name}`` and a
     ``fallback_name`` for the text-badge path. Resolution is the caller's job
     (``resolve_cell`` / ``badge``)."""
+    # Runtime badges (Cloud Foundry, Kyma) are wide wordmark logos that squish
+    # into an illegible blob at the 32px runtime-badge size. Render them as a
+    # neutral text chip (SAP-blue bordered pill with the friendly name) instead —
+    # the deliberate "chip testuale" form. No image resolution: deterministic and
+    # readable everywhere (zone title bands + custom-app runtime row).
+    if kind == "runtime":
+        cg = _geo(contract, "chip")
+        return {
+            "id": f"badge-{kind}-{name}",
+            "value": display_name(name),
+            "style": _fallback_chip_style(contract),
+            "x": 0.0,
+            "y": 0.0,
+            "w": _f(cg, "w", 130.0),
+            "h": _f(cg, "h", 28.18),
+            "parent": None,
+            "connectable": False,
+            "placeholder_mode": "strip",
+            "fallback_name": display_name(name),
+        }
     molname = _BADGE_MOLECULE.get(kind, "badge-hyperscaler")
     base = _style(contract, molname)
     style = re.sub(r"image=@\{[^}]*\}", f"image=@{{{name}}}", base)
