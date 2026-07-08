@@ -647,7 +647,7 @@ def _slot_free(rect, obstacles, foreign_segs) -> bool:
     return True
 
 
-def _place_in_slots(seg, dims, obstacles, foreign_segs):
+def _place_in_slots(seg, dims, obstacles, foreign_segs, skip: int = 0):
     """Return ``((cx, cy), rect, placed_ok)`` for a ``dims`` rect, starting at
     the segment midpoint and scanning a grid: first ALONG the segment (the
     pill/label rides its edge), then stepping perpendicular off it if the
@@ -661,7 +661,12 @@ def _place_in_slots(seg, dims, obstacles, foreign_segs):
     position to render) but MAY overlap another rect. Making this observable
     (rather than a silent fallback) is what lets ``RouteResult.
     slot_fallbacks`` — and Task 12's quality gate — distinguish "collision-
-    free" from "fell back"."""
+    free" from "fell back".
+
+    ``skip`` (Task 13 ``nudge_label``): how many otherwise-acceptable
+    collision-free slots to PASS OVER before accepting one — the mechanical
+    "shift to the next free slot on its channel". ``skip=0`` (the default)
+    accepts the first free slot, i.e. today's behaviour byte-for-byte."""
     (ax, ay), (bx, by) = seg
     base = ((ax + bx) / 2.0, (ay + by) / 2.0)
     seg_len = abs(bx - ax) + abs(by - ay)
@@ -672,6 +677,7 @@ def _place_in_slots(seg, dims, obstacles, foreign_segs):
     w, h = dims
     pitch = h + SLOT_PAD
     along_max = int(seg_len / (2.0 * pitch)) + 2
+    seen_free = 0
     for perp_i in range(0, 15):
         for perp_s in ([0] if perp_i == 0 else [perp_i, -perp_i]):
             for along_i in range(0, along_max + 1):
@@ -680,11 +686,13 @@ def _place_in_slots(seg, dims, obstacles, foreign_segs):
                     cy = base[1] + along_s * pitch * along[1] + perp_s * pitch * perp[1]
                     rect = Rect(cx - w / 2, cy - h / 2, w, h)
                     if _slot_free(rect, obstacles, foreign_segs):
-                        return (cx, cy), rect, True
+                        if seen_free >= skip:
+                            return (cx, cy), rect, True
+                        seen_free += 1
     return base, Rect(base[0] - w / 2, base[1] - h / 2, w, h), False
 
 
-def _place_pills_and_labels(plans, paths, node_geo, header_rects=()):
+def _place_pills_and_labels(plans, paths, node_geo, header_rects=(), nudge=None):
     """Drop each edge's protocol pill and label into a collision-free slot on
     its longest segment. Processed in IR order; every placed rect becomes an
     obstacle for later ones, so results are overlap-free by construction and
@@ -700,10 +708,16 @@ def _place_pills_and_labels(plans, paths, node_geo, header_rects=()):
     (an edge is allowed to physically cross under a zone's title strip; it
     just can't park its pill/label text there).
 
+    ``nudge`` (Task 13 ``nudge_label``, default ``None``) — a set of edge ids
+    whose pill/label is shifted to the NEXT free slot (``_place_in_slots
+    skip=1``) instead of the first; every other edge keeps ``skip=0`` and is
+    byte-identical to today.
+
     Returns ``(pill_pos, label_pos, slot_fallbacks)`` — ``slot_fallbacks`` is
     the list of edge ids (order of first fallback: pill before label) whose
     ``_place_in_slots`` scan was exhausted (see there); empty when every slot
     was placed collision-free."""
+    nudge = nudge or set()
     node_rects = list(node_geo.values()) + list(header_rects)
     placed: list = []                                 # pill + label rects so far
     all_segs = {p.eid: _segments(paths[p.eid]) for p in plans}
@@ -713,16 +727,17 @@ def _place_pills_and_labels(plans, paths, node_geo, header_rects=()):
     for p in plans:
         seg = _longest_segment(paths[p.eid])
         foreign = [s for eid, segs in all_segs.items() if eid != p.eid for s in segs]
+        skip = 1 if p.eid in nudge else 0
         if p.pill:
             center, rect, ok = _place_in_slots(seg, pill_dims(p.pill),
-                                               node_rects + placed, foreign)
+                                               node_rects + placed, foreign, skip)
             pill_pos[p.eid] = center
             placed.append(rect)
             if not ok:
                 slot_fallbacks.append(p.eid)
         if p.label:
             center, rect, ok = _place_in_slots(seg, label_dims(p.label),
-                                               node_rects + placed, foreign)
+                                               node_rects + placed, foreign, skip)
             label_pos[p.eid] = center
             placed.append(rect)
             if not ok:
@@ -1340,7 +1355,8 @@ def assign_ports_lanes(plans: list[_Plan], layout: dict, *,
 def build_waypoints(plans: list[_Plan],
                     port_fracs: dict[str, tuple[tuple, tuple]],
                     lane_offsets: dict[str, float],
-                    layout: dict
+                    layout: dict,
+                    nudge=None
                     ) -> tuple[dict[str, list[tuple[float, float]]],
                                dict[str, tuple[float, float]],
                                dict[str, tuple[float, float]],
@@ -1386,42 +1402,94 @@ def build_waypoints(plans: list[_Plan],
     piercings = count_piercings(paths, node_geo,
                                 {p.eid: (p.src_id, p.dst_id) for p in plans})
 
-    # ── pill & label slots (8e; Task 14 adds zone-header bands as obstacles) ──
+    # ── pill & label slots (8e; Task 14 adds zone-header bands as obstacles;
+    #    Task 13 ``nudge`` shifts flagged edges' labels to the next free slot) ──
     pill_pos, label_pos, slot_fallbacks = _place_pills_and_labels(
-        plans, paths, node_geo, _zone_header_rects(layout))
+        plans, paths, node_geo, _zone_header_rects(layout), nudge=nudge)
 
     return waypoints, pill_pos, label_pos, crossings, piercings, slot_fallbacks
 
 
-def route(diagram, layout: dict) -> RouteResult:
+def _apply_channel_prefer(plans, prefs: dict | None) -> None:
+    """Task 13 ``channel_prefer`` — re-point flagged edges' shared channel, as a
+    HARD CONSTRAINT applied to the plans BEFORE ``reduce_crossings`` runs.
+
+    ``prefs`` is ``{edge_id: channel_id}`` (channel ids are the per-diagram
+    ``V0``/``V1``/… gutters and ``Htop``/``Hbot`` corridors ``plan()`` built;
+    an unknown edge or channel id is ignored, matching the rubric's rule that
+    ids are read off the CURRENT layout, never memorised). Besides swapping
+    ``p.channel``, the plan's ``kind`` + exit/entry sides + barycenter axis are
+    realigned to the target channel's axis so ``_build_waypoints`` draws a
+    geometrically consistent route (vertical gutter → H-V-H "adjacent";
+    horizontal corridor → out-across-back "long")."""
+    if not prefs:
+        return
+    by_id = {ch.id: ch for ch in getattr(plans, "channels", []) or []}
+    plan_by_eid = {p.eid: p for p in plans}
+    for eid, cid in prefs.items():
+        p = plan_by_eid.get(eid)
+        ch = by_id.get(cid)
+        if p is None or ch is None:
+            continue
+        p.channel = ch
+        if ch.axis == "v":                            # vertical gutter → H-V-H
+            if p.dst.cx >= p.src.cx:
+                p.kind, p.exit_side, p.entry_side = "adjacent", "R", "L"
+            else:
+                p.kind, p.exit_side, p.entry_side = "adjacent", "L", "R"
+            p.src_bary, p.dst_bary = p.src.cy, p.dst.cy
+        else:                                         # horizontal corridor → long
+            side = "T" if ch.center <= p.src.cy else "B"
+            p.kind, p.exit_side, p.entry_side = "long", side, side
+            p.src_bary, p.dst_bary = p.src.cx, p.dst.cx
+
+
+def route(diagram, layout: dict, hints=None) -> RouteResult:
     """Route every edge of ``diagram`` through the reserved channels of
     ``layout``. See the module docstring for the model. Deterministic: edges
     are processed in IR order and every tie-break carries the edge id.
 
     ``route()`` is the composition of the pipeline steps above:
-    ``plan`` → ``reduce_crossings`` (Task 9A — picks the lane/port ordering
-    that minimises crossings) → ``assign_ports_lanes`` (with those winners) →
-    ``build_waypoints`` (which now also folds in the Task 9B obstacle-avoidance
-    reroute), plus the absolute-ports arithmetic ``RouteResult.ports`` needs.
-    A caller that wants to intervene between steps (e.g. Task 12/13) calls the
-    same functions directly against the SAME ``plans`` — the seam is intact.
+    ``plan`` → (Task 13) apply rubric channel pins → ``reduce_crossings``
+    (Task 9A — picks the lane/port ordering that minimises crossings) →
+    ``assign_ports_lanes`` (with those winners) → ``build_waypoints`` (which
+    now also folds in the Task 9B obstacle-avoidance reroute), plus the
+    absolute-ports arithmetic ``RouteResult.ports`` needs. A caller that wants
+    to intervene between steps calls the same functions directly against the
+    SAME ``plans`` — the seam is intact.
 
-    NOTE for Task 13: this hardcodes ``reduce_crossings`` as the ONLY
-    ``(lane_order, port_order)`` source between ``plan`` and
-    ``assign_ports_lanes``. Task 13's rubric hooks (``channel_prefer`` /
-    ``order_override``) will need a composition path that applies BOTH a
-    rubric override AND crossing reduction (e.g. seed the greedy sweep from
-    the rubric's order instead of the default barycenter one, or run the
-    rubric override first and let ``reduce_crossings`` only accept a further
-    swap that doesn't undo it) — not designed here, just flagged so it isn't
-    a surprise.
+    ── Task 13 seam composition (resolving the tension the Task 9 review left
+    at this function) ────────────────────────────────────────────────────────
+    ``hints`` (default ``None`` → byte-identical to the pre-Task-13 route) is
+    ``{"channel_prefer": {eid: channel_id}, "nudge_label": {eid, …}}``. The
+    rubric hints are treated as HARD CONSTRAINTS applied FIRST; the hardcoded
+    ``reduce_crossings`` then optimises only within the REMAINING freedom:
+
+      * ``channel_prefer`` is applied to the plans (``_apply_channel_prefer``)
+        BEFORE ``reduce_crossings``. ``reduce_crossings`` only permutes lane
+        ORDER within each channel's membership (its ``by_channel`` map is keyed
+        by ``p.channel.id``) and port ORDER within each (node, side) group — it
+        never moves an edge to a DIFFERENT channel. So a pin survives the greedy
+        by construction: the pinned edge stays in its channel, and the greedy
+        ranges over lane/port order for everything else. (Proven by
+        ``tests/test_rubric_patches.py::test_channel_prefer_survives_reduce_crossings``.)
+      * ``nudge_label`` is a pure label-placement concern (``build_waypoints`` →
+        ``_place_pills_and_labels``, AFTER routing), so it composes trivially —
+        it shifts the flagged edge's pill/label to its next free slot without
+        touching any routing decision.
+      * ``order_override`` is a LAYOUT hint (node x-order), consumed upstream in
+        ``_skeleton_layout`` before routing even begins; the router sees only its
+        resulting geometry, so it too composes with ``reduce_crossings`` for
+        free.
     """
+    hints = hints or {}
     plans = plan(diagram, layout)
+    _apply_channel_prefer(plans, hints.get("channel_prefer"))
     lane_order, port_order = reduce_crossings(plans, layout)
     port_fracs, lane_offsets = assign_ports_lanes(
         plans, layout, lane_order=lane_order, port_order=port_order)
     waypoints, pill_pos, label_pos, crossings, piercings, slot_fallbacks = build_waypoints(
-        plans, port_fracs, lane_offsets, layout)
+        plans, port_fracs, lane_offsets, layout, nudge=hints.get("nudge_label"))
 
     ports: dict[str, tuple[tuple, tuple]] = {}
     for p in plans:

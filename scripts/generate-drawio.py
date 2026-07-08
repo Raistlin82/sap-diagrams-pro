@@ -608,7 +608,7 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
             )
         )
 
-    return Diagram(
+    diagram = Diagram(
         title=title,
         level=level,
         author=author,
@@ -621,6 +621,12 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
         badges=meta.get("badges"),
         networkSeparator=bool(meta.get("networkSeparator", True)),
     )
+    # Task 13: a toggle_separator layoutHint overrides the AUTO-DETECTION rule,
+    # not an explicit author opt-in/out. Record whether metadata set the value
+    # directly so emit() lets that explicit choice win over the hint (see the
+    # separator-hint application in emit()).
+    diagram._network_separator_explicit = "networkSeparator" in meta
+    return diagram
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1569,6 +1575,47 @@ def _emit_node_obstacles_metadata(root: ET.Element, node_obstacles: dict) -> Non
     )
 
 
+def _parse_layout_hints(hints: list[dict[str, Any]] | None) -> dict | None:
+    """Fold ``diagram.layoutHints`` (the Task 13 rubric patch vocabulary) into a
+    structured bag the engine consumes, or ``None`` when there are none (which
+    keeps the whole layout+route path byte-identical to pre-Task-13).
+
+    Lenient by design — validation is ``apply-rubric-patches.py``'s job; a
+    malformed or off-vocabulary hint here is simply skipped rather than raising,
+    so a hand-authored IR never dead-ends generation. Later hints for the same
+    target win (matching the merge semantics ``apply-rubric-patches`` writes)."""
+    if not hints:
+        return None
+    out = {
+        "zone": {},            # {group_id: "left"|"center"|"right"}
+        "flow": {},            # {group_id: "row"|"col"|"grid"}
+        "order": {},           # {group_id: [node_id, …]}
+        "icon_size": None,     # "S"|"M"|"L"
+        "separator": None,     # bool
+        "channel_prefer": {},  # {edge_id: channel_id}
+        "nudge_label": set(),  # {edge_id, …}
+    }
+    for h in hints:
+        if not isinstance(h, dict):
+            continue
+        op = h.get("op")
+        if op == "set_zone" and h.get("group"):
+            out["zone"][h["group"]] = h.get("value")
+        elif op == "set_group_flow" and h.get("group"):
+            out["flow"][h["group"]] = h.get("value")
+        elif op == "order_override" and h.get("group"):
+            out["order"][h["group"]] = list(h.get("value") or [])
+        elif op == "set_icon_size":
+            out["icon_size"] = h.get("value")
+        elif op == "toggle_separator":
+            out["separator"] = bool(h.get("value"))
+        elif op == "channel_prefer" and h.get("edge"):
+            out["channel_prefer"][h["edge"]] = h.get("value")
+        elif op == "nudge_label" and h.get("edge"):
+            out["nudge_label"].add(h["edge"])
+    return out
+
+
 def emit(
     diagram: Diagram,
     shape_index: "ShapeIndex | None" = None,
@@ -1584,6 +1631,27 @@ def emit(
     if shape_index is None:
         shape_index = ShapeIndex.load()
     nodes_by_id = {n.id: n for n in diagram.nodes}
+
+    # ── Task 13: consume diagram.layoutHints (opt-in). An IR with no hints
+    # yields ``_hints is None`` and every downstream call takes its pre-Task-13
+    # default branch, so the output is byte-identical to before. ``set_zone`` /
+    # ``set_group_flow`` reuse the existing group ``zone`` / ``flow`` fields (the
+    # skeleton layout already consumes those); ``toggle_separator`` reuses the
+    # existing ``Diagram.networkSeparator`` field. The remaining ops thread into
+    # compute_layout (``set_icon_size`` / ``order_override``) and route()
+    # (``channel_prefer`` / ``nudge_label``) below.
+    _hints = _parse_layout_hints(diagram.layoutHints)
+    if _hints:
+        for _g in diagram.groups:
+            if _g.id in _hints["zone"]:
+                _g.zone = _hints["zone"][_g.id]
+            if _g.id in _hints["flow"]:
+                _g.flow = _hints["flow"][_g.id]
+        # toggle_separator overrides the auto-detection default, but an explicit
+        # metadata.networkSeparator is the author's direct instruction and wins.
+        if (_hints["separator"] is not None
+                and not getattr(diagram, "_network_separator_explicit", False)):
+            diagram.networkSeparator = _hints["separator"]
 
     # Give user-zone nodes a default person icon when they declared neither a
     # service nor a generic icon — done BEFORE layout so the zone footprints
@@ -1608,7 +1676,7 @@ def emit(
     )
     _sl = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(_sl)
-    icon_dim = _sl.icon_size(diagram.level)
+    icon_dim = _sl.icon_size(diagram.level, _hints["icon_size"] if _hints else None)
     # Caption band the zone layout reserves under an icon node (see
     # _skeleton_layout._footprint: icon footprint height = icon + LABEL_H).
     # Router FIX-1: icon nodes are re-squared to icon_dim x icon_dim for
@@ -1625,7 +1693,7 @@ def emit(
         edge_waypoints: dict[str, list[tuple[float, float]]] = {}
         canvas_w, canvas_h = CANVAS_W, CANVAS_H
     else:
-        layout_result = _sl.compute_layout(diagram, shape_index)
+        layout_result = _sl.compute_layout(diagram, shape_index, hints=_hints)
         group_geo = layout_result["groups"]
         node_geo = layout_result["nodes"]
         edge_waypoints = layout_result["edges"]
@@ -2118,7 +2186,14 @@ def emit(
         # to the real (icon-only) drawn geometry; only the piercing check and
         # pill/label slot obstacle set see the taller box.
         router_layout["node_obstacles"] = dict(node_obstacle_geom)
-        route_result = _crmod.route(diagram, router_layout)
+        # Task 13: channel_prefer / nudge_label thread through as HARD routing
+        # constraints (see _channel_router.route's seam-composition docstring).
+        # None when there are no hints → byte-identical routing to pre-Task-13.
+        _route_hints = None
+        if _hints:
+            _route_hints = {"channel_prefer": _hints["channel_prefer"],
+                            "nudge_label": _hints["nudge_label"]}
+        route_result = _crmod.route(diagram, router_layout, hints=_route_hints)
         edge_anchors = dict(route_result.port_fracs)
         edge_waypoints = dict(route_result.waypoints)
         # Task 12: publish the channels the router reserved so the geometric

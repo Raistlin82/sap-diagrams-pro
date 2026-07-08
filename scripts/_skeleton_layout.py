@@ -146,8 +146,21 @@ def _molecules():
 CHAR_W = _molecules().CHAR_W
 
 
-def icon_size(level: str) -> int:
-    """Canonical square service/generic icon size for the given level."""
+# set_icon_size (Task 13 rubric op) → concrete px. The engine's two intrinsic
+# sizes are 48 (L0/L1) and 32 (L2); the S/M/L override maps onto those plus a
+# larger L, so a hint always resolves to a real render size honoured by both
+# the footprint sizing here and the icon squaring in generate-drawio.emit().
+_ICON_SIZE_PX = {"S": 32, "M": 48, "L": 64}
+
+
+def icon_size(level: str, size_hint: str | None = None) -> int:
+    """Canonical square service/generic icon size for the given level.
+
+    ``size_hint`` (a ``set_icon_size`` layoutHint value, ``"S"|"M"|"L"``) wins
+    over the level-derived default when present; ``None`` reproduces the
+    pre-Task-13 behaviour exactly (48 for L0/L1, 32 for L2)."""
+    if size_hint in _ICON_SIZE_PX:
+        return _ICON_SIZE_PX[size_hint]
     return 32 if str(level).upper() == "L2" else 48
 
 
@@ -165,14 +178,17 @@ def _node_is_icon(node, group_type: str, shape_index) -> bool:
     return bool(svc and svc.get("drawioStyle"))
 
 
-def _footprint(node, group_type: str, level: str, shape_index) -> tuple[float, float, bool]:
+def _footprint(node, group_type: str, level: str, shape_index,
+               icon_dim: int | None = None) -> tuple[float, float, bool]:
     """Return (width, height, is_icon) a *v1* leaf node occupies in layout space.
 
     Icon footprints reserve room for the caption underneath; backend boxes are
     sized to hold an icon + title (+ optional subtitle); plain boxes wrap a label.
-    (Moved UNCHANGED from _zone_layout.py.)
+    ``icon_dim`` (when the caller has already resolved the icon size, e.g. from a
+    ``set_icon_size`` hint) overrides the level-derived default; ``None`` keeps
+    the pre-Task-13 ``icon_size(level)`` result byte-for-byte.
     """
-    icon = icon_size(level)
+    icon = icon_dim if icon_dim is not None else icon_size(level)
     is_icon = _node_is_icon(node, group_type, shape_index)
     label = getattr(node, "label", "") or ""
 
@@ -395,10 +411,20 @@ class _Meas:
         self.child_rel = child_rel        # [(_Meas, rx, ry)]
 
 
-def compute_layout(diagram, shape_index) -> dict[str, Any]:
+def compute_layout(diagram, shape_index, hints=None) -> dict[str, Any]:
     level = diagram.level
     M = _molecules()
     contract = M.load_contract()
+
+    # ── Task 13 layoutHint consumption (opt-in; ``hints`` None → byte-identical
+    # to the pre-Task-13 layout). ``set_zone`` / ``set_group_flow`` are consumed
+    # via the existing group ``zone`` / ``flow`` fields (the emitter applies them
+    # to the Group before calling here). This function owns the two that have no
+    # existing field: ``set_icon_size`` (resolved icon dimension threaded into
+    # every v1 footprint) and ``order_override`` (per-group explicit lane order,
+    # beating the flow-rank sort below).
+    icon_dim = icon_size(level, (hints or {}).get("icon_size"))
+    order_overrides: dict[str, list] = (hints or {}).get("order") or {}
 
     groups_by_id = {g.id: g for g in diagram.groups}
 
@@ -433,9 +459,27 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
     edged = _has_any_edge(diagram)
     ir_index = {n.id: i for i, n in enumerate(diagram.nodes)}
 
-    def flow_sorted(nodes: list) -> list:
+    def flow_sorted(nodes: list, gid: str | None = None) -> list:
         # (edge-less trail, rank, ir_index): flow-connected nodes first, ordered
         # by longest-path depth then IR; edge-less nodes keep IR order after.
+        #
+        # order_override (Task 13): when this group has an explicit node order,
+        # listed nodes lead in that exact order; UNLISTED nodes fall back to the
+        # default flow-rank sort behind them. A uniform 5-tuple key keeps the two
+        # branches comparable (listed → leading 0, unlisted → leading 1).
+        ov = order_overrides.get(gid) if gid is not None else None
+        if ov:
+            pos = {nid: i for i, nid in enumerate(ov)}
+            return sorted(
+                nodes,
+                key=lambda n: (
+                    0 if n.id in pos else 1,
+                    pos.get(n.id, 0),
+                    0 if n.id in edged else 1,
+                    ranks.get(n.id, 0),
+                    ir_index[n.id],
+                ),
+            )
         return sorted(
             nodes,
             key=lambda n: (0 if n.id in edged else 1, ranks.get(n.id, 0), ir_index[n.id]),
@@ -458,11 +502,11 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
         parent_type = (groups_by_id[group.parent].type
                        if (group.parent and group.parent in groups_by_id) else None)
         show_chip = M.subaccount_shows_chip(gtype, parent_type)
-        direct = flow_sorted(nodes_by_group.get(group.id, []))
+        direct = flow_sorted(nodes_by_group.get(group.id, []), group.id)
         if direct:
             lanes[group.id] = [n.id for n in direct]
         children = children_by_parent.get(group.id, [])
-        node_fps = [(n, *_node_footprint(n, gtype, level, shape_index, contract, M))
+        node_fps = [(n, *_node_footprint(n, gtype, level, shape_index, contract, M, icon_dim))
                     for n in direct]
 
         node_rel: list = []
@@ -666,7 +710,7 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
 
     # ---- orphan nodes (no group) --------------------------------------------
     if orphans:
-        fps = [(_footprint(n, "default", level, shape_index)[:2]) for n in orphans]
+        fps = [(_footprint(n, "default", level, shape_index, icon_dim)[:2]) for n in orphans]
         pos, W, H = _pack([(w, h) for w, h in fps], "row" if len(orphans) <= 5 else "grid", NODE_GAP)
         ox = max(MARGIN, (canvas_w - W) / 2.0)
         oy = float(columns_bottom + 12)
@@ -710,13 +754,15 @@ def compute_layout(diagram, shape_index) -> dict[str, Any]:
 
 
 # ── Footprint / inset helpers (bridge to the contract-driven molecule sizing) ─
-def _node_footprint(node, group_type, level, shape_index, contract, M) -> tuple[float, float]:
+def _node_footprint(node, group_type, level, shape_index, contract, M,
+                    icon_dim: int | None = None) -> tuple[float, float]:
     """(w, h) a leaf node reserves. IR v2 molecule nodes (product/db/chip) get
     their real molecule footprint from the contract; everything else uses the v1
-    ``_footprint`` (icon + caption / backend box / labelled box)."""
+    ``_footprint`` (icon + caption / backend box / labelled box). ``icon_dim``
+    is forwarded so a ``set_icon_size`` hint reflows the v1 icon footprints."""
     if getattr(node, "type", None) in MOLECULE_NODE_TYPES:
         return M.footprint(node, contract)
-    return _footprint(node, group_type, level, shape_index)[:2]
+    return _footprint(node, group_type, level, shape_index, icon_dim)[:2]
 
 
 def _insets(group, gtype, is_mol, has_children, M, contract) -> tuple[float, float, float]:
