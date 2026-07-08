@@ -24,7 +24,6 @@ tech_id,canonical_name,aliases
 20006-sap-build-work-zone_sd,SAP Build Work Zone advanced edition,Work Zone|Launchpad|FLP
 20007-sap-cloud-application-programming-model_sd,SAP Cloud Application Programming Model,CAP|CDS|@sap/cds
 20008-sap-cloud-connector_sd,SAP Cloud Connector,Cloud Connector|SCC
-20009-sap-cloud-integration_sd,SAP Cloud Integration,CPI|Cloud Integration|iflows
 20010-sap-integration-suite_sd,SAP Integration Suite,Integration Suite|IS
 20011-sap-api-management_sd,SAP API Management,API Mgmt|APIM
 20012-sap-open-connectors_sd,SAP Open Connectors,Open Connectors|OC
@@ -59,8 +58,35 @@ tech_id,canonical_name,aliases
 31068-sap-build-work-zone_sd,SAP Build Work Zone,Work Zone Standard
 31113-sap-connectivity-service_sd,SAP Connectivity Service,Connectivity|BTP Connectivity
 32082-sap-event-broker-for-sap-cloud-applications_sd,SAP Event Broker for SAP Cloud Applications,Event Broker
-32129-sap-cloud-identity-service,SAP Cloud Identity Services,IAS|Identity Authentication
+32129-sap-cloud-identity-service,SAP Cloud Identity Services,Cloud Identity Services
 32136-edge-integration-cell_sd,SAP Edge Integration Cell,EIC|Edge Cell
 33149-sap-s4hana-for-microsoft-teams_sd,SAP S/4HANA for Microsoft Teams,S/4 Teams|S4 for Teams
 48072-sap-identity-provisoning,SAP Identity Provisioning,IPS|Identity Provisioning
 31015-sap-cloud-identity_sap-authorization-and-trust-management-service_sd,SAP Authorization and Trust Management Service,XSUAA|Authorization & Trust Mgmt|Auth Trust Mgmt|Trust Management
+# ── 2026-07-08: svg re-harvest — dedicated icons for the identity family and the
+# Integration Suite capabilities now exist; curate their names + common acronyms.
+32071-identity-authentication_sd,SAP Identity Authentication,IAS|Identity Authentication|Identity Authentication Service
+32072-identity-provisioning_sd,SAP Identity Provisioning,IPS|Identity Provisioning
+32128-identity-directory,SAP Identity Directory,Identity Directory
+32127-authorization-management,SAP Authorization Management,Authorization Management
+32129-sap-cloud-identity-services_sd,SAP Cloud Identity Services,SCI|Cloud Identity Services|Cloud Identity
+32133-sap-integration-suite_api-management_sd,SAP Integration Suite - API Management,API Management|APIM|API Mgmt
+32134-sap-integration-suite_cloud-integration_sd,SAP Integration Suite - Cloud Integration,CPI|Cloud Integration|iFlows
+32135-sap-integration-suite_data-space-integration_sd,SAP Integration Suite - Data Space Integration,Data Space Integration|DSI
+32138-sap-integration-suite_integration-advisor_sd,SAP Integration Suite - Integration Advisor,Integration Advisor
+32139-sap-integration-suite_integration-assessment_sd,SAP Integration Suite - Integration Assessment,Integration Assessment
+32140-sap-integration-suite_migration-assessment_sd,SAP Integration Suite - Migration Assessment,Migration Assessment
+32141-sap-integration-suite_open-connectors_sd,SAP Integration Suite - Open Connectors,Open Connectors|OC
+32142-sap-integration-suite_trading-partner-management_sd,SAP Integration Suite - Trading Partner Management,Trading Partner Management|TPM
+32087-sap-integration-suite_graph_sd,SAP Integration Suite - Graph,Graph
+32032-sap-integration-suite_advanced-event-mesh_sd,SAP Integration Suite - Advanced Event Mesh,Advanced Event Mesh|AEM
+31037-sap-integration-suite_event-mesh_sd,SAP Integration Suite - Event Mesh,Event Mesh|EM|Pub/Sub
+31026-sap-document-and-reporting-compliance_sd,SAP Document and Reporting Compliance,DRC|Document and Reporting Compliance
+33145-sap-process-visibility-service_sd,SAP Process Visibility,Process Visibility|PVS
+32150-sap-dynamic-forms_sd,SAP Dynamic Forms,Dynamic Forms
+31055-data-quality-services_sd,SAP Data Quality Services,Data Quality Services|DQS
+31075-sap-cloud-integration-for-data-services_sd,SAP Cloud Integration for Data Services,Cloud Integration for Data Services|CI-DS
+31114-sap-data-enrichment-service_sd,SAP Data Enrichment Service,Data Enrichment Service
+31047-sap-usage-data-management-service-for-sap-btp_sd,SAP Usage Data Management Service,Usage Data Management|UDM
+32147-ui-theme-designer_sd,SAP UI Theme Designer,UI Theme Designer|UTD
+32124-document-grounding_sd,SAP Document Grounding,Document Grounding
