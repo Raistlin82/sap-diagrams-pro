@@ -1498,6 +1498,41 @@ def _emit_slot_cell(root, cid, value, style, center, w, h):
     )
 
 
+def _emit_channels_metadata(root: ET.Element, channels: list) -> None:
+    """Task 12: serialize the router's reserved channel rects (gutters +
+    corridors) as ONE invisible metadata vertex, ``id="sapdp:channels"``, its
+    ``value`` a compact JSON array of ``{id, axis, rect:[x,y,w,h]}``.
+
+    check-composition.py (Task 12's geometric gate) runs on the plain .drawio
+    XML alone — no draw.io, no re-import of ``_channel_router`` — so it can't
+    recompute ``RouteResult.channels`` itself; this cell is the only way it
+    can see where the router intended edges to travel, for CHANNEL_DISCIPLINE.
+    Zero footprint (1×1, ``visible=0``, no style outline) — never rendered,
+    never collides with anything a GROUP_OVERLAP/PIERCING/TEXT_OVERLAP check
+    would look at. Emitted once per diagram; absent entirely when routing
+    isn't active (``layout == "greedy"``), which the gate must tolerate."""
+    payload = [
+        {"id": ch.id, "axis": ch.axis,
+         "rect": [ch.rect.x, ch.rect.y, ch.rect.w, ch.rect.h]}
+        for ch in channels
+    ]
+    cell = ET.SubElement(
+        root, "mxCell",
+        attrib={
+            "id": "sapdp:channels",
+            "value": json.dumps(payload, separators=(",", ":")),
+            "style": "text;html=0;",
+            "vertex": "1",
+            "parent": "1",
+            "visible": "0",
+        },
+    )
+    ET.SubElement(
+        cell, "mxGeometry",
+        attrib={"x": "0", "y": "0", "width": "1", "height": "1", "as": "geometry"},
+    )
+
+
 def emit(
     diagram: Diagram,
     shape_index: "ShapeIndex | None" = None,
@@ -2050,6 +2085,9 @@ def emit(
         route_result = _crmod.route(diagram, router_layout)
         edge_anchors = dict(route_result.port_fracs)
         edge_waypoints = dict(route_result.waypoints)
+        # Task 12: publish the channels the router reserved so the geometric
+        # gate can verify CHANNEL_DISCIPLINE without re-running the router.
+        _emit_channels_metadata(root, route_result.channels)
     else:
         edge_anchors = _distribute_anchors(diagram.edges, node_abs_geom)
     for e in diagram.edges:
