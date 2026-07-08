@@ -54,8 +54,26 @@ done
 # (gitignored trademarks / customer logos) MUST NEVER enter the bundle, so the
 # copies below are explicit and never glob 'brand-pack*'.
 cp -R "$ROOT/assets/brand-pack" "$STAGE/assets/brand-pack"   # public brand chips
-cp -R "$ROOT/assets/icon-atlas" "$STAGE/assets/icon-atlas"   # pre-rasterized PNG atlas
 cp -R "$ROOT/assets/fonts"      "$STAGE/assets/fonts"        # bundled Arimo (SIL OFL-1.1)
+
+# Icon atlas — the source has ~360 loose PNGs under icon-atlas/icons/, which blows
+# past claude.ai's 200-file Skills upload limit. Pack every referenced PNG as
+# base64 into a single index.json ``embedded`` map (one file, no icons/ dir);
+# _pure_render.load_icon reads embedded pixels when the loose file is absent.
+mkdir -p "$STAGE/assets/icon-atlas"
+python3 - "$ROOT/assets/icon-atlas" "$STAGE/assets/icon-atlas/index.json" <<'PY'
+import sys, json, base64, pathlib
+src, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+idx = json.loads((src / "index.json").read_text(encoding="utf-8"))
+embedded = {}
+for rel in sorted(set(idx.get("by_sha1", {}).values())):
+    f = src / rel
+    if f.exists():
+        embedded[rel] = base64.b64encode(f.read_bytes()).decode("ascii")
+idx["embedded"] = embedded
+out.write_text(json.dumps(idx), encoding="utf-8")
+print(f"  icon-atlas: packed {len(embedded)} PNGs into index.json (embedded base64)")
+PY
 
 # Visual-rubric reference (the ~25 binary checks the rubric loop applies).
 cp "$ROOT/skills/sap-diagram-generate/references/visual-rubric.md" \

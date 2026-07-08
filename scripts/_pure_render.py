@@ -76,8 +76,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import html
+import io
 import json
 import math
 import re
@@ -608,9 +610,16 @@ def load_icon(rel_path: str) -> "Image.Image | None":
     if cached is not None:
         return cached
     p = ATLAS_DIR / rel_path
-    if not p.exists():
-        return None
-    img = Image.open(p).convert("RGBA")  # .convert() fully decodes -- safe to detach from the file
+    if p.exists():
+        img = Image.open(p).convert("RGBA")  # .convert() fully decodes -- safe to detach from the file
+    else:
+        # Embedded fallback: the Claude Desktop / claude.ai bundle packs every
+        # atlas PNG as base64 into index.json's ``embedded`` map (one file instead
+        # of ~360 loose PNGs, to stay under the 200-file Skills upload limit).
+        blob = load_atlas_index().get("embedded", {}).get(rel_path)
+        if not blob:
+            return None
+        img = Image.open(io.BytesIO(base64.b64decode(blob))).convert("RGBA")
     _ICON_CACHE[rel_path] = img
     return img
 
