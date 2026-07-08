@@ -91,13 +91,16 @@ Present:
 
 Wait for the user's answer before proceeding.
 
-### Phase 5 — Generate
+### Phase 5 — Generate (IR v2 + gate + visual-rubric loop)
 
-For each requested level:
+For each requested level, follow `skills/sap-diagram-generate/SKILL.md` Steps 6-8 in full — this agent doesn't shortcut them just because it's orchestrating multiple levels:
 
-1. Build the JSON intermediate (deterministic IDs, kebab-case).
-2. Call `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate-drawio.py` with the JSON.
-3. Save to the output directory (`./diagrams/` by default).
+1. Build the IR v2 (deterministic IDs, kebab-case) using the full authoring grammar: `subaccount` (nestable)/`governance`/`cloud-tier`(`kind`)/`custom-app` groups, `product`(`capabilities`)/`chip`/`db` nodes, `flowFamily`/`pill` edges, `metadata.branding`/`badges`/`networkSeparator`. Leave `layoutHints` empty at authoring — Step 8's loop fills it.
+2. Validate: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate-ir.py <ir.json>` — must exit 0 before generating; fix and re-validate on exit 2.
+3. Generate: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate-drawio.py <ir.json> --out <file>.drawio`.
+4. Gate: `validate-drawio.py <file>.drawio --strict` + `check-composition.py <file>.drawio`. Fix the IR and regenerate on any CRITICAL/FAIL (max 2 mechanical retries).
+5. Render + vision loop: `render-preview.py <file>.drawio --engine auto --out <file>.png`, read the PNG against `references/visual-rubric.md`'s 26 checks, emit findings, `apply-rubric-patches.py` → regenerate → re-render. Max 3 vision iterations per level. If no render engine is available, skip the loop and say so as a WARNING (never dead-end).
+6. Save each `.drawio`/`.png` pair to the output directory (`./diagrams/` by default).
 
 When generating multiple levels, ensure cross-level consistency:
 
@@ -105,11 +108,11 @@ When generating multiple levels, ensure cross-level consistency:
 - L0 should be a subset of L1 should be a subset of L2.
 - L3 (deployment view) is independent — different vocabulary.
 
-### Phase 6 — Validate
+### Phase 6 — Validate (aggregate the gate + rubric scorecards)
 
-For each generated diagram, run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate-drawio.py`. Aggregate the per-file results.
+Collect each level's Phase-5 scorecard (validator CRITICAL count, composition FAIL/WARN count, rubric pass count, crossings, piercings, vision iterations used, any manual findings or degrade-path WARNING) and aggregate across levels.
 
-If any CRITICAL is reported, regenerate that level with adjustments. If warnings can be fixed by amending the JSON (e.g. add a missing title), do so transparently.
+If any level still has a CRITICAL/FAIL after its retries, regenerate with adjustments before reporting. Manual rubric findings (icon mismatch, legend content, …) are not blockers but must be surfaced in Phase 7, not silently dropped.
 
 ### Phase 7 — Report
 
@@ -131,9 +134,9 @@ Consolidate everything into one final report:
 - ℹ️  <N> INFO: <list>
 
 ### Generated artefacts
-- <path-L0.drawio>: <N> elements, validator: 0/0/<N>
-- <path-L1.drawio>: <N> elements, validator: 0/<N>/<N>
-- <path-L2.drawio>: <N> elements, validator: 0/<N>/<N>
+- <path-L0.drawio>: <N> elements — gate: 0 fail/0 warn; rubric: <N>/26 pass; <N> vision iterations
+- <path-L1.drawio>: <N> elements — gate: 0 fail/0 warn; rubric: <N>/26 pass; <N> vision iterations
+- <path-L2.drawio>: <N> elements — gate: 0 fail/0 warn; rubric: <N>/26 pass; <N> vision iterations
 
 ### Cross-level consistency
 - ✅ All components have identical canonical names across levels.
@@ -142,7 +145,7 @@ Consolidate everything into one final report:
 ### Next steps
 - Open in draw.io desktop / drawio.com
 - Submit to SAP Architecture Center: <golden-path link>
-- Resolve <N> remaining warnings (see per-file validator reports)
+- Resolve <N> remaining manual rubric findings (see per-file scorecards)
 ```
 
 ## Tool use principles

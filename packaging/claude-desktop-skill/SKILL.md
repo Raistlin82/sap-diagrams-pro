@@ -16,8 +16,9 @@ as the inventory behind it — verify component names and categories before draw
 
 ## Environment notes (read first)
 - Runs in the **code-execution sandbox**. It produces a **`.drawio` file** to
-  download and open in draw.io desktop / [drawio.com](https://drawio.com). It does
-  **not** render PNGs (there is no local draw.io app in the sandbox).
+  download and open in draw.io desktop / [drawio.com](https://drawio.com), and can
+  also emit a **PNG preview** via the bundled pure-Python renderer (no draw.io app
+  needed — `render-preview.py` + the bundled fonts and icon atlas).
 - **Grounding** uses the SAP documentation connector (`mcp-sap-docs`) *if it is
   enabled in this workspace*. If it isn't, proceed with best-effort canonical
   names and tell the user that enabling the connector
@@ -90,11 +91,14 @@ python3 scripts/generate-drawio.py ir.json --out "<title>-<level>.drawio"
 
 ### 5. Validate, then deliver
 ```bash
-python3 scripts/validate-drawio.py   "<title>-<level>.drawio"
-python3 scripts/check-composition.py "<title>-<level>.drawio"
+python3 scripts/validate-ir.py       ir.json                      # IR v2 gate (pre-render)
+python3 scripts/validate-drawio.py   "<title>-<level>.drawio"     # palette / XML
+python3 scripts/check-composition.py "<title>-<level>.drawio"     # geometric gate
+python3 scripts/render-preview.py    "<title>-<level>.drawio" --out "<title>-<level>.png"
 ```
 Regenerate if a CRITICAL (validator) or FAIL (composition) appears, then **return
-the `.drawio` file to the user** as a download and suggest opening it in draw.io.
+the `.drawio` file to the user** as a download (and the PNG preview if useful),
+suggesting they open the `.drawio` in draw.io.
 
 ## Quality bar
 Opens in draw.io · 0 validator CRITICAL / 0 composition FAIL · canonical service

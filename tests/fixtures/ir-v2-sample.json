@@ -1,0 +1,68 @@
+{
+  "_comment": "SPDX-FileCopyrightText: 2026 Gabriele Capparelli — SPDX-License-Identifier: Apache-2.0 — IR v2 sample (archetype A, Task 4): governance strip + BTP layer with nested subaccounts (Test ⊃ Production) + public/private/any-premise cloud tiers + a custom-app group + personas + top-level identity group. Exercises the FULL IR v2 vocabulary: group kind (public|private|any-premise)/badges + subaccount|governance|cloud-tier|custom-app types, node type (product|chip|db)/capabilities, edge pill/flowFamily (including the default and firewall families), metadata.branding/badges, diagram.layoutHints.",
+  "metadata": {
+    "title": "Archetype A — IR v2 Sample",
+    "level": "L1",
+    "author": "Task 4 fixture",
+    "branding": {
+      "customerLogo": "acme",
+      "partnerWatermark": "lutech"
+    },
+    "badges": {
+      "hyperscalers": ["azure"],
+      "runtimes": ["cloud-foundry"]
+    }
+  },
+  "layoutHints": [
+    {"op": "toggle_separator", "value": true}
+  ],
+  "presets": [],
+  "groups": [
+    {"id": "governance", "type": "governance", "label": "Governance", "position": "top"},
+    {"id": "btp", "type": "btp-layer", "label": "SAP BTP", "position": "center"},
+    {"id": "subaccount-test", "type": "subaccount", "label": "Test", "parent": "btp"},
+    {"id": "subaccount-production", "type": "subaccount", "label": "Production", "parent": "subaccount-test"},
+    {"id": "cloud-tier-right", "type": "cloud-tier", "label": "Private Cloud", "position": "right", "kind": "private",
+     "badges": {"hyperscalers": ["azure"], "runtimes": ["cloud-foundry"]}},
+    {"id": "personas", "type": "user", "label": "Personas", "position": "left"},
+    {"id": "identity", "type": "btp-layer", "label": "Identity", "position": "bottom"},
+    {"id": "custom-app-1", "type": "custom-app", "label": "Custom App", "position": "right"},
+    {"id": "cloud-tier-public", "type": "cloud-tier", "label": "Public Cloud", "position": "right", "kind": "public"},
+    {"id": "cloud-tier-any-premise", "type": "cloud-tier", "label": "Any Premise", "position": "right", "kind": "any-premise"}
+  ],
+  "nodes": [
+    {"id": "cloud-alm", "label": "Cloud ALM", "group": "governance", "type": "product", "service": "Cloud ALM",
+     "capabilities": [
+        {"label": "Monitor", "icon": "monitor"},
+        {"label": "Analyze"},
+        {"label": "Automate", "icon": "automate"},
+        {"label": "Alert"}
+     ]},
+    {"id": "bpa", "label": "Build Process Automation", "group": "subaccount-production", "type": "product", "service": "Build Process Automation",
+     "capabilities": [
+        {"label": "Workflow", "icon": "workflow"},
+        {"label": "Decision"},
+        {"label": "Visibility", "icon": "visibility"},
+        {"label": "RPA"}
+     ]},
+    {"id": "event-mesh", "label": "Event Mesh", "group": "subaccount-production", "service": "Event Mesh"},
+    {"id": "audit-log", "label": "Audit Log", "group": "subaccount-production", "service": "Audit Log Service"},
+    {"id": "pce", "label": "Private Cloud Edition (PCE)", "group": "cloud-tier-right", "type": "chip"},
+    {"id": "persona-admin", "label": "IT Admin", "group": "personas", "genericIcon": "user"},
+    {"id": "persona-user", "label": "Business User", "group": "personas", "genericIcon": "user"},
+    {"id": "ias", "label": "Identity Authentication", "group": "identity", "service": "Identity Authentication"},
+    {"id": "xsuaa", "label": "XSUAA", "group": "identity", "service": "Authorization & Trust Mgmt"},
+    {"id": "hana-db", "label": "SAP HANA Cloud", "group": "subaccount-production", "type": "db", "service": "SAP HANA Cloud"},
+    {"id": "custom-app-destination", "label": "Destination", "group": "custom-app-1", "service": "SAP Destination service"},
+    {"id": "custom-app-connectivity", "label": "Connectivity", "group": "custom-app-1", "service": "SAP Connectivity Service"}
+  ],
+  "edges": [
+    {"id": "e1", "source": "persona-admin", "target": "ias", "style": "solid", "label": "Login", "flowFamily": "identity", "pill": "SAML2/OIDC"},
+    {"id": "e2", "source": "xsuaa", "target": "bpa", "style": "solid", "label": "Provision users", "flowFamily": "provisioning", "pill": "SCIM"},
+    {"id": "e3", "source": "cloud-alm", "target": "bpa", "style": "dashed", "label": "Process insights", "flowFamily": "master-data"},
+    {"id": "e4", "source": "bpa", "target": "pce", "style": "solid", "label": "Deploy config", "flowFamily": "transport", "pill": "CTMS"},
+    {"id": "e5", "source": "persona-user", "target": "bpa", "style": "solid", "label": "Assign approvals"},
+    {"id": "e6", "source": "bpa", "target": "hana-db", "style": "solid", "label": "Persist data", "flowFamily": "default"},
+    {"id": "e7", "source": "custom-app-connectivity", "target": "pce", "style": "solid", "label": "Secure tunnel", "flowFamily": "firewall"}
+  ]
+}

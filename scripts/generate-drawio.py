@@ -181,8 +181,8 @@ CANVAS_H = 827
 # every mxGraph style string in the official libraries uses fontFamily=Helvetica).
 SAP_FONT_FAMILY = "Helvetica,Arial,sans-serif"
 
-# Greedy-fallback geometry only. Icon sizing in the default (zone) path comes
-# from `_zone_layout.icon_size(level)` (48px for L0/L1, 32px for L2).
+# Greedy-fallback geometry only. Icon sizing in the default (skeleton) path comes
+# from `_skeleton_layout.icon_size(level)` (48px for L0/L1, 32px for L2).
 CELL_W = CANVAS_W // 3
 CELL_H = CANVAS_H // 3
 GROUP_PADDING = 24
@@ -203,10 +203,23 @@ class Group:
     label: str
     position: str = "center"
     parent: str | None = None  # id of parent group; None = top-level
-    # Optional layout overrides honoured by the zone engine:
+    # Optional layout overrides honoured by the skeleton layout engine:
     flow: str | None = None    # "row" | "col" | "grid" — intra-group packing
     zone: str | None = None    # "left" | "center" | "right" — column override
     nodes: list[str] = field(default_factory=list)
+    # ─── IR v2 (Task 4) ─────────────────────────────────────────────────────
+    # All v2 fields are optional and default to None so v1 IRs parse
+    # unchanged. `type` additionally accepts "subaccount", "governance",
+    # "cloud-tier" and "custom-app" (validated by scripts/validate-ir.py, not
+    # here — see that script's ALLOWED_GROUP_TYPES). Molecule emission for
+    # these is wired in Task 5; this task only adds the fields + parsing.
+    #
+    # Cloud-tier kind, meaningful when type == "cloud-tier":
+    #   "public" | "private" | "any-premise"
+    kind: str | None = None
+    # Badge collection rendered on subaccount / cloud-tier groups, e.g.:
+    #   {"hyperscalers": ["aws", "azure"], "runtimes": ["cloud-foundry"]}
+    badges: dict[str, Any] | None = None
 
 
 @dataclass
@@ -243,6 +256,17 @@ class Node:
     # Optional one-line caption under the title in a backend-box molecule
     # (RIGHT-zone systems, e.g. "Mobile or Desktop"). Ignored for bare icons.
     subtitle: str | None = None
+    # ─── IR v2 (Task 4) ─────────────────────────────────────────────────────
+    # Optional; None default keeps v1 IRs unchanged. Molecule emission (Task
+    # 5) and validation (scripts/validate-ir.py) own the actual vocabulary.
+    #
+    # Node archetype: "product" | "chip" | "db". `product` is a leaf molecule
+    # (a box whose `capabilities` are data, not addressable child nodes).
+    type: str | None = None
+    # Capability list for `type == "product"` nodes, e.g.:
+    #   [{"label": "Decision", "icon": "decision"}, {"label": "Actions"}]
+    # Each entry is {label: str, icon?: str} — checked by validate-ir.py.
+    capabilities: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -269,6 +293,19 @@ class Edge:
     # (Trust-like), grey (protocol-like), blue (REST/SAML2/OIDC), teal (BTP
     # accent). The pill is always rendered with arcSize=50 + fontStyle=1.
     pillColor: str = "purple"
+    # ─── IR v2 (Task 4) ─────────────────────────────────────────────────────
+    # Optional; None default keeps v1 IRs unchanged.
+    #
+    # Protocol/annotation text rendered as a pill on the edge (e.g. "SCIM",
+    # "SAML2/OIDC", "CTMS"). Distinct from `kind`/`pillColor` (the v1 "SAP
+    # canonical pill" mechanism) — positioning is owned by the channel
+    # router (Task 8e); this task only carries the text through parsing.
+    pill: str | None = None
+    # Semantic flow family driving edge colour + dash from the style
+    # contract (Task 5): "identity" | "provisioning" | "master-data" |
+    # "transport" | "firewall" | "default" (1:1 with the six edge-* molecules).
+    # Checked by validate-ir.py when not None.
+    flowFamily: str | None = None
 
 
 @dataclass
@@ -290,6 +327,27 @@ class Diagram:
     nodes: list[Node]
     edges: list[Edge]
     presets: list[Preset] = field(default_factory=list)
+    # ─── IR v2 (Task 4) ─────────────────────────────────────────────────────
+    # All optional; None default keeps v1 IRs unchanged.
+    #
+    # Mechanical patch vocabulary consumed by the visual rubric (Task 13),
+    # e.g. [{"op": "set_group_flow", "group": "btp-core", "value": "row"}].
+    # Opaque to this task — carried through parsing only.
+    layoutHints: list[dict[str, Any]] | None = None
+    # metadata.branding — refs into assets/brand-pack(.local)/, e.g.:
+    #   {"customerLogo": "acme", "partnerWatermark": "lutech"}
+    # Missing local assets degrade gracefully at emit time (Task 5+); never
+    # a hard failure here.
+    branding: dict[str, Any] | None = None
+    # metadata.badges — same {hyperscalers: [...], runtimes: [...]} shape as
+    # Group.badges, but scoped to the whole diagram (e.g. a title-block strip)
+    # rather than a single subaccount/cloud-tier group.
+    badges: dict[str, Any] | None = None
+    # metadata.networkSeparator — draw the vertical NETWORK bar in the
+    # center→right gutter (Task 7). Default on; set false to opt out. The
+    # skeleton layout reads this to decide whether to emit the separator geometry
+    # into its meta block.
+    networkSeparator: bool = True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -405,19 +463,29 @@ class ShapeIndex:
             entry = self._generic.get((base, "sap"))
         return entry
 
-    def resolve(self, query: str | None) -> dict[str, Any] | None:
-        """Lookup priority: exact name → exact alias (case-insensitive) →
-        exact techId → safe word-level match. Returns None on miss.
+    # Trailing decorations that name decorations often add on top of the
+    # catalog's canonical service name (checked longest-first so e.g.
+    # "Standard Edition" is stripped whole rather than leaving "Edition").
+    _TRAILING_DECORATIONS = (
+        " Standard Edition",
+        " Advanced Edition",
+        " Services",
+        " Service",
+    )
+
+    def _exact_or_subset(self, query: str) -> dict[str, Any] | None:
+        """Original resolve() algorithm for a single query string: exact
+        name → exact alias (case-insensitive) → exact techId → safe
+        word-level subset match. Returns None on miss.
 
         The fuzzy step requires EVERY query word to appear as a word in the
         canonical name (e.g. "HANA Cloud" → "SAP HANA Cloud"), then picks the
-        candidate with the fewest extra words — deterministic and immune to the
-        dangerous substring matches the old code allowed (e.g. "AI" matching
-        anything containing those letters, or a short query swallowing a wrong
-        service). Wrong-icon picks were a root cause of bad "block types".
+        candidate with the fewest extra words — deterministic and immune to
+        the dangerous substring matches the old code allowed (e.g. "AI"
+        matching anything containing those letters, or a short query
+        swallowing a wrong service). Wrong-icon picks were a root cause of
+        bad "block types".
         """
-        if not query:
-            return None
         if query in self._by_name:
             return self._by_name[query]
         if query.lower() in self._by_alias:
@@ -438,6 +506,112 @@ class ShapeIndex:
                 if extra < best_extra:
                     best, best_extra = svc, extra
         return best
+
+    @classmethod
+    def _normalized_variants(cls, query: str) -> list[str]:
+        """Generate conservative, deterministic re-spellings of ``query``
+        that a catalog entry is likely to use, to recover from common name
+        decorations (leading "SAP ", trailing "Service(s)"/edition suffix,
+        or a "Family - Member" naming scheme). The original query is always
+        first so callers can skip it when it was already tried verbatim.
+        """
+        q = query.strip()
+        variants = [q]
+
+        def _add(v: str) -> None:
+            v = v.strip()
+            if v and v not in variants:
+                variants.append(v)
+
+        # "X Services - Y" / "X - Y" → try the tail "Y" (and its SAP-stripped
+        # form), since compound "family - member" names in IR payloads are
+        # frequently catalogued under just the member name.
+        if " - " in q:
+            tail = q.split(" - ")[-1]
+            _add(tail)
+            if tail.lower().startswith("sap "):
+                _add(tail[4:])
+
+        # Strip a leading "SAP " (catalog entries often omit the brand
+        # prefix, e.g. "Business Application Studio").
+        stems = [q]
+        if q.lower().startswith("sap "):
+            stems.append(q[4:])
+        for stem in stems:
+            _add(stem)
+
+        # Strip trailing decorations (edition/service suffixes) from every
+        # stem seen so far, longest suffix first so "Standard Edition" is
+        # removed as a unit.
+        for stem in list(stems):
+            for suffix in cls._TRAILING_DECORATIONS:
+                if stem.endswith(suffix):
+                    _add(stem[: -len(suffix)])
+
+        return variants
+
+    def _fuzzy_tokenset(self, query: str) -> dict[str, Any] | None:
+        """Last-resort tier: token-set match tolerant of short-form
+        abbreviations (e.g. "Application" vs "App"). Requires every query
+        token to be covered — either an exact token match, or a
+        prefix-relationship between two tokens each at least 3 chars long
+        (so short tokens like "ai" can only match exactly, keeping this
+        immune to the "AI matches everything" failure mode). Multi-token
+        queries only: a single-word query never reaches this tier.
+        """
+        best, best_score = None, None
+        for variant in self._normalized_variants(query):
+            q_tokens = set(re.findall(r"[a-z0-9]+", variant.lower()))
+            if len(q_tokens) < 2:
+                continue
+            for name, svc in sorted(self._by_name.items()):
+                n_tokens = set(re.findall(r"[a-z0-9]+", name.lower()))
+                matched: set[str] = set()
+                covered = True
+                for qt in q_tokens:
+                    if qt in n_tokens:
+                        matched.add(qt)
+                        continue
+                    hit = None
+                    for nt in n_tokens - matched:
+                        if len(qt) >= 3 and len(nt) >= 3 and (
+                            qt.startswith(nt) or nt.startswith(qt)
+                        ):
+                            hit = nt
+                            break
+                    if hit is None:
+                        covered = False
+                        break
+                    matched.add(hit)
+                if not covered:
+                    continue
+                score = (len(n_tokens - matched), len(n_tokens))
+                if best_score is None or score < best_score:
+                    best, best_score = svc, score
+        return best
+
+    def resolve(self, query: str | None) -> dict[str, Any] | None:
+        """Lookup priority: exact name → exact alias (case-insensitive) →
+        exact techId → safe word-level subset match — all tried first
+        against ``query`` verbatim (so every name that already resolved
+        keeps resolving to the exact same icon), then retried against
+        conservative normalized re-spellings (stripped "SAP " prefix,
+        stripped edition/service suffix, "Family - Member" tail) to recover
+        names with common decorations that don't affect the underlying
+        service. A final abbreviation-tolerant token-set tier (e.g.
+        "Application" ~ "App") is tried only if nothing else matched.
+        Returns None on miss.
+        """
+        if not query:
+            return None
+        hit = self._exact_or_subset(query)
+        if hit is not None:
+            return hit
+        for variant in self._normalized_variants(query)[1:]:
+            hit = self._exact_or_subset(variant)
+            if hit is not None:
+                return hit
+        return self._fuzzy_tokenset(query)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -473,6 +647,8 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
             flow=g.get("flow"),
             zone=g.get("zone"),
             nodes=[],
+            kind=g.get("kind"),
+            badges=g.get("badges"),
         )
 
     nodes: list[Node] = []
@@ -490,6 +666,8 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
             stepKind=n.get("stepKind", "default"),
             genericIcon=n.get("genericIcon"),
             subtitle=n.get("subtitle"),
+            type=n.get("type"),
+            capabilities=n.get("capabilities"),
         )
         nodes.append(node)
         if node.group and node.group in group_map:
@@ -530,6 +708,8 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
                 direction=e.get("direction", "forward"),
                 kind=kind,
                 pillColor=pill_color,
+                pill=e.get("pill"),
+                flowFamily=e.get("flowFamily"),
             )
         )
 
@@ -544,7 +724,7 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
             )
         )
 
-    return Diagram(
+    diagram = Diagram(
         title=title,
         level=level,
         author=author,
@@ -552,7 +732,17 @@ def parse_json(payload: dict[str, Any]) -> Diagram:
         nodes=nodes,
         edges=edges,
         presets=presets,
+        layoutHints=payload.get("layoutHints"),
+        branding=meta.get("branding"),
+        badges=meta.get("badges"),
+        networkSeparator=bool(meta.get("networkSeparator", True)),
     )
+    # Task 13: a toggle_separator layoutHint overrides the AUTO-DETECTION rule,
+    # not an explicit author opt-in/out. Record whether metadata set the value
+    # directly so emit() lets that explicit choice win over the hint (see the
+    # separator-hint application in emit()).
+    diagram._network_separator_explicit = "networkSeparator" in meta
+    return diagram
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -950,6 +1140,18 @@ _STEP_KIND_GRADIENT = {
     "teal":    ("#066068", "#07838F"),
 }
 
+# FIX-2 step-badge clearance tuning.
+# A step node whose top edge is within this many px of its group's top is
+# treated as a TOP-ROW node (its group title band sits just above it), so the
+# badge is kept from overhanging up into the title. Comfortably above the
+# tallest group header (~54px for a btp-layer) and below the second row's top
+# (~114px = header + node + row gap), so interior rows keep the canonical
+# half-outside corner badge.
+_STEP_HEADER_ROW_BAND = 72
+# When a node also carries a top-centre interface pill (rel y in [-8, 8]),
+# drop the step badge just below the pill's bottom edge.
+_STEP_PILL_CLEAR = 10
+
 
 def _edge_style(
     e: Edge,
@@ -1095,6 +1297,465 @@ def _distribute_anchors(
     return {e.id: (exit_a.get(e.id), entry_a.get(e.id)) for e in edges if e.id in info}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Molecule emission (IR v2) — styles sourced from assets/style-contract.json via
+# scripts/_molecules.py. The NEW group/node/edge types route through the contract
+# here; the existing v1 hardcoded paths above are untouched.
+# ─────────────────────────────────────────────────────────────────────────────
+_MOLECULES_MOD = None
+
+# IR v2 group types that render as contract-driven molecule frames.
+MOLECULE_GROUP_TYPES = {"subaccount", "governance", "cloud-tier", "custom-app"}
+# IR v2 leaf node archetypes that render as contract-driven molecules.
+MOLECULE_NODE_TYPES = {"product", "db", "chip"}
+
+
+def _molecules_module():
+    """Lazily import scripts/_molecules.py (same path-based technique emit uses
+    for _skeleton_layout). Cached for the process."""
+    global _MOLECULES_MOD
+    if _MOLECULES_MOD is None:
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "_molecules", Path(__file__).resolve().parent / "_molecules.py"
+        )
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _MOLECULES_MOD = _mod
+    return _MOLECULES_MOD
+
+
+_CHANNEL_ROUTER_MOD = None
+
+
+def _channel_router_module():
+    """Lazily import scripts/_channel_router.py (Task 8 — the edge router).
+    Cached for the process, loaded the same path-based way as _molecules.
+
+    Checks ``sys.modules`` FIRST — the same guarded pattern
+    ``_channel_router.py``'s own ``_load_sibling`` and tests'
+    ``conftest.load_script`` already use — instead of unconditionally
+    exec'ing a fresh copy and overwriting ``sys.modules["_channel_router"]``.
+    Skipping the check would silently leave two live copies of the module
+    (this one and whichever the test process loaded first) with distinct
+    ``Channel``/``RouteResult`` classes, breaking any future ``isinstance``
+    or dataclass-identity check across the two."""
+    global _CHANNEL_ROUTER_MOD
+    if _CHANNEL_ROUTER_MOD is None:
+        if "_channel_router" in sys.modules:
+            _CHANNEL_ROUTER_MOD = sys.modules["_channel_router"]
+        else:
+            import importlib.util as _ilu
+            _spec = _ilu.spec_from_file_location(
+                "_channel_router", Path(__file__).resolve().parent / "_channel_router.py"
+            )
+            _mod = _ilu.module_from_spec(_spec)
+            # Register BEFORE exec: _channel_router uses `from __future__ import
+            # annotations` + @dataclass, so dataclass creation needs
+            # sys.modules["_channel_router"] populated to resolve string annotations
+            # (KW_ONLY/ClassVar lookups). See tests/conftest.load_script's note.
+            sys.modules["_channel_router"] = _mod
+            _spec.loader.exec_module(_mod)
+            _CHANNEL_ROUTER_MOD = _mod
+    return _CHANNEL_ROUTER_MOD
+
+
+def _num(v: float) -> str:
+    """Serialise a molecule coordinate to a rounded-int drawio string."""
+    return str(int(round(float(v))))
+
+
+def _place_molecule(
+    root: ET.Element,
+    cells: list[dict],
+    *,
+    anchor_id: str,
+    anchor_parent: str,
+    off_x: float,
+    off_y: float,
+    contract: dict,
+    brand_packs: dict,
+    icon_resolver,
+    warnings: list[str],
+    anchor_size: tuple[float, float] | None = None,
+) -> str:
+    """Serialise a molecule's cell dicts to ``mxCell`` XML.
+
+    ``cells[0]`` is the anchor (``parent is None``): it takes ``anchor_id`` +
+    ``anchor_parent`` and its (x,y) is offset by (off_x, off_y). Child cells
+    (``parent`` = an in-molecule id) keep their parent-relative coords. Image
+    placeholders are resolved (dataUri) or degrade to the text-badge fallback.
+    ``anchor_size`` overrides the anchor's (w,h) — used to grow a group frame to
+    the layout-computed footprint while keeping the contract style/children.
+    """
+    M = _molecules_module()
+    idmap: dict[str, str] = {}
+    for i, c in enumerate(cells):
+        idmap[c["id"]] = anchor_id if i == 0 else f"{anchor_id}-{c['id']}"
+    for i, c in enumerate(cells):
+        eid = idmap[c["id"]]
+        if c.get("parent") is None:
+            parent = anchor_parent
+            x, y = c["x"] + off_x, c["y"] + off_y
+        else:
+            parent = idmap.get(c["parent"], anchor_id)
+            x, y = c["x"], c["y"]
+        w, h = c["w"], c["h"]
+        if i == 0 and anchor_size is not None:
+            w, h = anchor_size
+        rc = M.resolve_cell(c, brand_packs, contract, icon_resolver, warnings)
+        attrib = {
+            "id": eid,
+            "value": rc.get("value", "") or "",
+            "style": rc.get("style", "") or "",
+            "vertex": "1",
+            "parent": parent,
+        }
+        if c.get("connectable") is False:
+            attrib["connectable"] = "0"
+        cell = ET.SubElement(root, "mxCell", attrib=attrib)
+        ET.SubElement(
+            cell,
+            "mxGeometry",
+            attrib={"x": _num(x), "y": _num(y), "width": _num(w), "height": _num(h), "as": "geometry"},
+        )
+    return anchor_id
+
+
+def _group_molecule_cells(
+    g: Group, contract: dict, size: tuple[float, float] | None = None,
+    show_chip: bool = True,
+) -> list[dict] | None:
+    """Contract-driven frame cells for an IR v2 group type (or None for v1).
+
+    ``size`` is the FINAL frame size the skeleton layout computed (footprint of
+    the packed children clamped to the contract minimum). Passing it lets each
+    builder draw its decorations relative to the real frame edge — so a bottom-
+    anchored tier-box badge row reflows instead of floating at the contract's
+    reference height (Task 6 reflow). ``show_chip`` suppresses the redundant
+    "SAP BTP" chip on a nested subaccount (FIX-B); it matches the value the
+    skeleton layout reserved space for."""
+    M = _molecules_module()
+    if g.type == "subaccount":
+        return M.subaccount_frame(g, contract, size, show_chip)
+    if g.type == "governance":
+        return M.governance_strip(g, contract, size, show_chip)
+    if g.type == "cloud-tier":
+        return M.tier_box(g, contract, size)
+    if g.type == "custom-app":
+        return M.custom_app_box(g, contract, size)
+    return None
+
+
+def _flow_family_edge_style(
+    e: Edge,
+    contract: dict,
+    exit_a: tuple[float, float] | None = None,
+    entry_a: tuple[float, float] | None = None,
+) -> str:
+    """Edge style for a semantic flow family, sourced 1:1 from the style
+    contract (edge-identity / edge-provisioning / …). Distribution anchors and a
+    white label background are appended (keeping the contract style as the
+    verbatim prefix)."""
+    M = _molecules_module()
+    style = M.flow_family_style(e.flowFamily, contract)
+    style += "labelBackgroundColor=#FFFFFF;labelBorderColor=none;verticalAlign=middle;align=center;"
+    if exit_a and entry_a:
+        style += (
+            f"exitX={exit_a[0]};exitY={exit_a[1]};exitDx=0;exitDy=0;"
+            f"entryX={entry_a[0]};entryY={entry_a[1]};entryDx=0;entryDy=0;"
+        )
+    return style
+
+
+def _watermark_geometry(
+    w: float, h: float, canvas_w: int, canvas_h: int, max_frac: float = 0.4
+) -> tuple[float, float, float, float]:
+    """Scale a partner watermark to at most ``max_frac`` of the canvas width
+    (keeping aspect) and centre it on the canvas (FIX-C). The watermark should
+    read as a faint background mark like the SSAM/Brandart exemplars, never a
+    foreground element that covers the diagram."""
+    if w > max_frac * canvas_w:
+        scale = (max_frac * canvas_w) / w
+        w, h = w * scale, h * scale
+    return (canvas_w - w) / 2.0, (canvas_h - h) / 2.0, w, h
+
+
+def _emit_watermark(root: ET.Element, cell: dict, canvas_w: int, canvas_h: int) -> None:
+    """Place a resolved (image) partner watermark, scaled + centred, BEHIND
+    everything. The caller emits this first (document order == z-order) so it
+    sits under the whole diagram; opacity comes verbatim from the contract
+    ``watermark`` molecule style (a faint ~10–15%)."""
+    x, y, w, h = _watermark_geometry(float(cell["w"]), float(cell["h"]), canvas_w, canvas_h)
+    c = ET.SubElement(
+        root, "mxCell",
+        attrib={
+            "id": _stable_id("brand", "watermark"),
+            "value": "",
+            "style": cell.get("style", "") or "",
+            "vertex": "1", "parent": "1", "connectable": "0",
+        },
+    )
+    ET.SubElement(
+        c, "mxGeometry",
+        attrib={"x": _num(x), "y": _num(y), "width": _num(w), "height": _num(h), "as": "geometry"},
+    )
+
+
+def _emit_customer_logo(root: ET.Element, cell: dict, x: float = 32.0, y: float = 10.0) -> float:
+    """Place the customer logo at the canvas TOP-LEFT (in the ``branding`` slot)
+    and return the x the diagram title should start at (just to its right). The
+    logo is clamped to a header-sized box; an unresolved asset is the text-badge
+    fallback (e.g. "ACME"), which still occupies the slot."""
+    w = min(float(cell["w"]), 160.0)
+    h = min(float(cell["h"]), 44.0)
+    c = ET.SubElement(
+        root, "mxCell",
+        attrib={
+            "id": _stable_id("brand", "customer-logo"),
+            "value": cell.get("value", "") or "",
+            "style": cell.get("style", "") or "",
+            "vertex": "1", "parent": "1", "connectable": "0",
+        },
+    )
+    ET.SubElement(
+        c, "mxGeometry",
+        attrib={"x": _num(x), "y": _num(y), "width": _num(w), "height": _num(h), "as": "geometry"},
+    )
+    return x + w + 12.0
+
+
+def _emit_network_separator(root: ET.Element, sep: dict, contract: dict) -> None:
+    """Emit the NETWORK separator geometry the skeleton layout placed in
+    ``meta["networkSeparator"]``: the grey jump-gap bar (a standalone edge cell
+    with explicit source/target points, like the gold standard) + its "NETWORK"
+    caption. ``sep`` is ``{x, y0, y1}``."""
+    M = _molecules_module()
+    for c in M.network_separator(sep["x"], sep["y0"], sep["y1"], contract):
+        if c.get("edge"):
+            e_cell = ET.SubElement(
+                root, "mxCell",
+                attrib={
+                    "id": _stable_id("netsep", c["id"]),
+                    "value": c.get("value", "") or "",
+                    "style": c.get("style", "") or "",
+                    "edge": "1", "parent": "1", "connectable": "0",
+                },
+            )
+            geom = ET.SubElement(e_cell, "mxGeometry", attrib={"relative": "1", "as": "geometry"})
+            pts = c.get("points") or []
+            (sx, sy), (tx, ty) = pts[0], pts[-1]
+            # Endpoints as source/target points — the gold-standard floating-edge
+            # form draw.io renders. Mirror them into the waypoint Array too so the
+            # pure-Python preview renderer (which builds a floating edge's path
+            # from Array waypoints, not source/target mxPoints) draws the bar
+            # identically; the coincident endpoints are invisible in draw.io.
+            ET.SubElement(geom, "mxPoint", attrib={"x": _num(sx), "y": _num(sy), "as": "sourcePoint"})
+            ET.SubElement(geom, "mxPoint", attrib={"x": _num(tx), "y": _num(ty), "as": "targetPoint"})
+            arr = ET.SubElement(geom, "Array", attrib={"as": "points"})
+            for px, py in pts:
+                ET.SubElement(arr, "mxPoint", attrib={"x": _num(px), "y": _num(py)})
+        else:
+            v_cell = ET.SubElement(
+                root, "mxCell",
+                attrib={
+                    "id": _stable_id("netsep", c["id"]),
+                    "value": c.get("value", "") or "",
+                    "style": c.get("style", "") or "",
+                    "vertex": "1", "parent": "1", "connectable": "0",
+                },
+            )
+            ET.SubElement(
+                v_cell, "mxGeometry",
+                attrib={"x": _num(c["x"]), "y": _num(c["y"]),
+                        "width": _num(c["w"]), "height": _num(c["h"]), "as": "geometry"},
+            )
+
+
+def _emit_diagram_badge_strip(
+    root: ET.Element,
+    diagram: Diagram,
+    canvas_w: int,
+    contract: dict,
+    brand_packs: dict,
+    icon_resolver,
+    warnings: list[str],
+) -> None:
+    """Emit the diagram-level hyperscaler/runtime badge strip (top-right). Badges
+    degrade to text-badges when the (usually .local) brand assets are absent —
+    with ``icon_resolver``/``warnings`` threaded through so each degradation runs
+    the same shape-index resolution leg and de-duplicated preflight WARNING as
+    the group-badge path (``_place_molecule``)."""
+    M = _molecules_module()
+    if diagram.badges:
+        x = canvas_w - 40
+        y = 48.0
+        for kind, coll in (("hyperscaler", "hyperscalers"), ("runtime", "runtimes")):
+            for name in (diagram.badges.get(coll) or []):
+                b = M.badge(kind, str(name), contract, brand_packs, icon_resolver, warnings)
+                if not (b.get("value") or "").strip() and "shape=image" not in b.get("style", ""):
+                    continue
+                w, h = b["w"], b["h"]
+                x -= w
+                cell = ET.SubElement(
+                    root, "mxCell",
+                    attrib={
+                        "id": _stable_id("dbadge", f"{kind}-{name}"),
+                        "value": b.get("value", "") or "",
+                        "style": b.get("style", "") or "",
+                        "vertex": "1", "parent": "1", "connectable": "0",
+                    },
+                )
+                ET.SubElement(
+                    cell, "mxGeometry",
+                    attrib={"x": _num(x), "y": _num(y), "width": _num(w), "height": _num(h), "as": "geometry"},
+                )
+                x -= 8
+
+
+def _emit_slot_cell(root, cid, value, style, center, w, h):
+    """Emit a top-level (parent="1") vertex centred on absolute ``center`` — the
+    channel router's collision-free slot for an edge pill/label. Absolute (not
+    edge-relative) placement is what makes the slot overlap-free by construction
+    (Task 8e); the router guarantees no foreign edge crosses the rect, so
+    z-order against the connectors is a non-issue."""
+    cx, cy = center
+    c = ET.SubElement(
+        root, "mxCell",
+        attrib={"id": cid, "value": value, "style": style,
+                "vertex": "1", "parent": "1", "connectable": "0"},
+    )
+    ET.SubElement(
+        c, "mxGeometry",
+        attrib={"x": _num(cx - w / 2.0), "y": _num(cy - h / 2.0),
+                "width": _num(w), "height": _num(h), "as": "geometry"},
+    )
+
+
+def _emit_channels_metadata(root: ET.Element, channels: list) -> None:
+    """Task 12: serialize the router's reserved channel rects (gutters +
+    corridors) as ONE invisible metadata vertex, ``id="sapdp:channels"``, its
+    ``value`` a compact JSON array of ``{id, axis, rect:[x,y,w,h]}``.
+
+    check-composition.py (Task 12's geometric gate) runs on the plain .drawio
+    XML alone — no draw.io, no re-import of ``_channel_router`` — so it can't
+    recompute ``RouteResult.channels`` itself; this cell is the only way it
+    can see where the router intended edges to travel, for CHANNEL_DISCIPLINE.
+    Zero footprint (1×1, ``visible=0``, no style outline) — never rendered,
+    never collides with anything a GROUP_OVERLAP/PIERCING/TEXT_OVERLAP check
+    would look at. Emitted once per diagram; absent entirely when routing
+    isn't active (``layout == "greedy"``), which the gate must tolerate."""
+    payload = [
+        {"id": ch.id, "axis": ch.axis,
+         "rect": [ch.rect.x, ch.rect.y, ch.rect.w, ch.rect.h]}
+        for ch in channels
+    ]
+    cell = ET.SubElement(
+        root, "mxCell",
+        attrib={
+            "id": "sapdp:channels",
+            "value": json.dumps(payload, separators=(",", ":")),
+            "style": "text;html=0;",
+            "vertex": "1",
+            "parent": "1",
+            "visible": "0",
+        },
+    )
+    ET.SubElement(
+        cell, "mxGeometry",
+        attrib={"x": "0", "y": "0", "width": "1", "height": "1", "as": "geometry"},
+    )
+
+
+def _emit_node_obstacles_metadata(root: ET.Element, node_obstacles: dict) -> None:
+    """Task 12 (review round, FIX-1): serialize the router's ACTUAL node-
+    obstacle rects — ``node_obstacle_geom``'s icon+caption-extended boxes,
+    keyed by the STABLE cell id (``n-<hash>``) that ends up in the .drawio —
+    as ONE invisible metadata vertex, ``id="sapdp:node_obstacles"``, its
+    ``value`` a compact JSON object ``{cell_id: [x, y, w, h]}`` (absolute
+    coordinates, same frame ``check-composition.py``'s ``_abs_rect`` computes).
+
+    Why this exists: check-composition.py's PIERCING/CAPTION_OUT checks used
+    to RE-DERIVE the caption band with a hardcoded constant that had to be
+    kept in sync with ``_skeleton_layout.LABEL_H`` by hand — a silent-drift
+    hazard if that constant ever changed. Publishing the router's own rects
+    here means the gate checks the router's guarantee against the router's
+    OWN obstacle set: no reconstruction, no drift possible. Same zero-
+    footprint pattern as ``sapdp:channels`` (1×1, ``visible=0``, no style
+    outline). Emitted alongside it (routed layouts only — ``--layout greedy``
+    has neither cell, and the gate degrades gracefully when both are absent)."""
+    payload = {cid: [rect[0], rect[1], rect[2], rect[3]]
+               for cid, rect in node_obstacles.items()}
+    cell = ET.SubElement(
+        root, "mxCell",
+        attrib={
+            "id": "sapdp:node_obstacles",
+            "value": json.dumps(payload, separators=(",", ":")),
+            "style": "text;html=0;",
+            "vertex": "1",
+            "parent": "1",
+            "visible": "0",
+        },
+    )
+    ET.SubElement(
+        cell, "mxGeometry",
+        attrib={"x": "0", "y": "0", "width": "1", "height": "1", "as": "geometry"},
+    )
+
+
+def _parse_layout_hints(hints: list[dict[str, Any]] | None) -> dict | None:
+    """Fold ``diagram.layoutHints`` (the Task 13 rubric patch vocabulary) into a
+    structured bag the engine consumes, or ``None`` when there are none (which
+    keeps the whole layout+route path byte-identical to pre-Task-13).
+
+    The 7-op vocabulary recognised in the ``if/elif`` chain below MUST stay in
+    lockstep with two other copies: ``ALLOWED_OPS`` in
+    ``scripts/apply-rubric-patches.py`` (validates the same ops before they
+    ever reach an IR) and the table in
+    ``skills/sap-diagram-generate/references/visual-rubric.md`` (the vision
+    loop's authoring reference). Adding an 8th op here without updating both
+    leaves it validated-and-documented-nowhere or parsed-nowhere.
+
+    Lenient by design — validation is ``apply-rubric-patches.py``'s job; a
+    malformed or off-vocabulary hint here is simply skipped rather than raising,
+    so a hand-authored IR never dead-ends generation. Later hints for the same
+
+    Lenient by design — validation is ``apply-rubric-patches.py``'s job; a
+    malformed or off-vocabulary hint here is simply skipped rather than raising,
+    so a hand-authored IR never dead-ends generation. Later hints for the same
+    target win (matching the merge semantics ``apply-rubric-patches`` writes)."""
+    if not hints:
+        return None
+    out = {
+        "zone": {},            # {group_id: "left"|"center"|"right"}
+        "flow": {},            # {group_id: "row"|"col"|"grid"}
+        "order": {},           # {group_id: [node_id, …]}
+        "icon_size": None,     # "S"|"M"|"L"
+        "separator": None,     # bool
+        "channel_prefer": {},  # {edge_id: channel_id}
+        "nudge_label": set(),  # {edge_id, …}
+    }
+    for h in hints:
+        if not isinstance(h, dict):
+            continue
+        op = h.get("op")
+        if op == "set_zone" and h.get("group"):
+            out["zone"][h["group"]] = h.get("value")
+        elif op == "set_group_flow" and h.get("group"):
+            out["flow"][h["group"]] = h.get("value")
+        elif op == "order_override" and h.get("group"):
+            out["order"][h["group"]] = list(h.get("value") or [])
+        elif op == "set_icon_size":
+            out["icon_size"] = h.get("value")
+        elif op == "toggle_separator":
+            out["separator"] = bool(h.get("value"))
+        elif op == "channel_prefer" and h.get("edge"):
+            out["channel_prefer"][h["edge"]] = h.get("value")
+        elif op == "nudge_label" and h.get("edge"):
+            out["nudge_label"].add(h["edge"])
+    return out
+
+
 def emit(
     diagram: Diagram,
     shape_index: "ShapeIndex | None" = None,
@@ -1103,13 +1764,53 @@ def emit(
     """Render the diagram to .drawio XML.
 
     ``layout`` selects the positioning backend:
-      - ``"auto"`` / ``"zone"`` — the deterministic zone-composition engine
-        (``_zone_layout.py``); the default, no external dependency.
+      - ``"auto"`` / ``"zone"`` — the deterministic skeleton slot engine
+        (``_skeleton_layout.py``); the default, no external dependency.
       - ``"greedy"`` — the legacy built-in 3×3 grid (debug only).
     """
     if shape_index is None:
         shape_index = ShapeIndex.load()
     nodes_by_id = {n.id: n for n in diagram.nodes}
+
+    # ── Task 13: consume diagram.layoutHints (opt-in). An IR with no hints
+    # yields ``_hints is None`` and every downstream call takes its pre-Task-13
+    # default branch, so the output is byte-identical to before. ``set_zone`` /
+    # ``set_group_flow`` reuse the existing group ``zone`` / ``flow`` fields (the
+    # skeleton layout already consumes those); ``toggle_separator`` reuses the
+    # existing ``Diagram.networkSeparator`` field. The remaining ops thread into
+    # compute_layout (``set_icon_size`` / ``order_override``) and route()
+    # (``channel_prefer`` / ``nudge_label``) below.
+    _hints = _parse_layout_hints(diagram.layoutHints)
+    # Review-round FIX-1: a set_zone / set_group_flow / order_override hint
+    # targeting a group id that doesn't exist in THIS diagram used to be
+    # silently dropped (the loop below only touches groups it finds; Task
+    # 13's ``order_override`` consumer in ``_skeleton_layout`` is equally
+    # keyed by ``group_overrides.get(gid)``, so a stale id never matches
+    # there either) — correct per the rubric (ids are read off the CURRENT
+    # IR, never memorised) but invisible, leaving Task 14's render→patch→
+    # regenerate loop unable to tell "fix applied" from "fix discarded".
+    # Collected here (before groups even exist yet is impossible — checked
+    # against ``diagram.groups`` directly) and flushed to stderr alongside
+    # the molecule/brand WARNINGs below.
+    _hint_warnings: list[str] = []
+    if _hints:
+        _group_ids = {g.id for g in diagram.groups}
+        for _op, _key in (("set_zone", "zone"), ("set_group_flow", "flow"),
+                          ("order_override", "order")):
+            for _gid in _hints[_key]:
+                if _gid not in _group_ids:
+                    _hint_warnings.append(
+                        f"layoutHint {_op} referenced unknown group {_gid!r}; ignored")
+        for _g in diagram.groups:
+            if _g.id in _hints["zone"]:
+                _g.zone = _hints["zone"][_g.id]
+            if _g.id in _hints["flow"]:
+                _g.flow = _hints["flow"][_g.id]
+        # toggle_separator overrides the auto-detection default, but an explicit
+        # metadata.networkSeparator is the author's direct instruction and wins.
+        if (_hints["separator"] is not None
+                and not getattr(diagram, "_network_separator_explicit", False)):
+            diagram.networkSeparator = _hints["separator"]
 
     # Give user-zone nodes a default person icon when they declared neither a
     # service nor a generic icon — done BEFORE layout so the zone footprints
@@ -1123,18 +1824,32 @@ def emit(
         ):
             _n.genericIcon = "user"
 
-    # Layout backend. Default: the deterministic zone-composition engine
-    # (`_zone_layout.py`, no external dependency). `--layout greedy` forces the
-    # legacy 3×3 grid (debug only). The former graphviz `dot` backend has been
-    # removed — it ignored the SAP `position`/zone semantics; "auto"/"zone"/"dot"
-    # all route to the zone engine now.
+    # Layout backend. Default: the deterministic skeleton slot engine
+    # (`_skeleton_layout.py`, no external dependency) — slot assignment (left /
+    # top / center / right / bottom), footprint-driven molecule frame sizing and
+    # flow-rank lane ordering. `--layout greedy` forces the legacy 3×3 grid
+    # (debug only). "auto"/"zone"/"dot" all route to the skeleton engine now.
     import importlib.util as _ilu
     _spec = _ilu.spec_from_file_location(
-        "_zone_layout", Path(__file__).resolve().parent / "_zone_layout.py"
+        "_skeleton_layout", Path(__file__).resolve().parent / "_skeleton_layout.py"
     )
-    _zl = _ilu.module_from_spec(_spec)
-    _spec.loader.exec_module(_zl)
-    icon_dim = _zl.icon_size(diagram.level)
+    _sl = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_sl)
+    icon_dim = _sl.icon_size(diagram.level, _hints["icon_size"] if _hints else None)
+    # Caption band the zone layout reserves under an icon node (see
+    # _skeleton_layout._footprint: icon footprint height = icon + LABEL_H).
+    # Router FIX-1: icon nodes are re-squared to icon_dim x icon_dim for
+    # RENDERING (below), which drops this band from node_abs_geom — making the
+    # caption invisible to the router's piercing check and label-slot obstacle
+    # set. caption_reserve lets us build a SEPARATE, taller obstacle rect
+    # (node_obstacle_geom) for the router while keeping node_abs_geom exactly
+    # what's drawn (so ports/edges still anchor to the real icon border).
+    caption_reserve = getattr(_sl, "LABEL_H", 24)
+
+    # FIX-3: identity groups (SAP Cloud Identity Services family) must NOT carry
+    # a "SAP BTP" chip — neither the btp-layer logo badge nor a frame chip. The
+    # skeleton already classifies them (meta["identity"]); reuse that set.
+    identity_group_ids: set[str] = set()
 
     if layout == "greedy":
         group_geo = layout_groups(diagram.groups)
@@ -1142,11 +1857,31 @@ def emit(
         edge_waypoints: dict[str, list[tuple[float, float]]] = {}
         canvas_w, canvas_h = CANVAS_W, CANVAS_H
     else:
-        zone_result = _zl.compute_layout(diagram, shape_index)
-        group_geo = zone_result["groups"]
-        node_geo = zone_result["nodes"]
-        edge_waypoints = zone_result["edges"]
-        canvas_w, canvas_h = zone_result["canvas"]
+        layout_result = _sl.compute_layout(diagram, shape_index, hints=_hints)
+        group_geo = layout_result["groups"]
+        node_geo = layout_result["nodes"]
+        edge_waypoints = layout_result["edges"]
+        canvas_w, canvas_h = layout_result["canvas"]
+        identity_group_ids = set(layout_result["meta"].get("identity", []))
+        # layout_result["meta"] (slots / lanes / ranks) is the channel router's
+        # input — consumed when routing is wired in (Task 8).
+
+    # Molecule emission context (IR v2): the style contract + brand packs + an
+    # icon resolver reusing the ShapeIndex path. Molecule cell styles come only
+    # from the contract; missing brand assets degrade to text-badges (warnings
+    # collected here, flushed to stderr at the end — never a hard failure).
+    # Seeded with the unresolved-group layoutHint warnings collected above (FIX-1)
+    # so both flush through the SAME dedup + stderr pass below.
+    _M = _molecules_module()
+    contract = _M.load_contract()
+    brand_packs = _M.load_brand_packs()
+    mol_warnings: list[str] = list(_hint_warnings)
+
+    def icon_resolver(name: str | None) -> str | None:
+        if not name:
+            return None
+        svc = shape_index.resolve(name) or shape_index.resolve_generic(name)
+        return _extract_image_uri(svc.get("drawioStyle")) if svc else None
 
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     mxfile = ET.Element(
@@ -1188,12 +1923,36 @@ def emit(
     ET.SubElement(root, "mxCell", attrib={"id": "0"})
     ET.SubElement(root, "mxCell", attrib={"id": "1", "parent": "0"})
 
+    # 0. Customer branding (Task 7). Resolve the branding block ONCE (this also
+    # records the preflight WARNING for any missing logo/watermark asset). The
+    # partner watermark is emitted FIRST so it sits BEHIND everything — a faint,
+    # centred, contract-opacity background mark (FIX-C); the customer logo goes
+    # TOP-LEFT and the diagram title shifts to its right.
+    brand_by_id: dict[str, dict] = {}
+    if diagram.branding:
+        brand_by_id = {
+            c.get("id"): c
+            for c in _M.branding_block(
+                {"branding": diagram.branding, "title": diagram.title},
+                contract, brand_packs, icon_resolver, mol_warnings,
+            )
+        }
+    wm = brand_by_id.get("watermark")
+    if wm is not None and "shape=image" in wm.get("style", ""):
+        # A text fallback would just be noise over the canvas — only a genuinely
+        # resolved image watermark is drawn.
+        _emit_watermark(root, wm, canvas_w, canvas_h)
+
     # 1. Title — SAP-canonical: bold blue (#0070F2) + "- SAP BTP Solution
     # Diagram" suffix. Convention observed in EVERY official sample
     # (SAP_Task_Center_*.drawio, SAP_Private_Link_Service_L2, etc.).
-    # Left-aligned in the top-left corner.
+    # Top-left, shifted right of the customer logo when one is present.
+    title_x = 32.0
+    logo = brand_by_id.get("customer-logo")
+    if logo is not None:
+        title_x = _emit_customer_logo(root, logo)
     title_id = _stable_id("title", diagram.title)
-    title_w = max(canvas_w - 96, 600)
+    title_w = max(int(round(canvas_w - title_x - 64)), 400)
     diagram_title = diagram.title
     if "Solution Diagram" not in diagram_title:
         diagram_title = f"{diagram_title} - SAP BTP Solution Diagram"
@@ -1216,7 +1975,7 @@ def emit(
         title_cell,
         "mxGeometry",
         attrib={
-            "x": "32",
+            "x": _num(title_x),
             "y": "12",
             "width": str(title_w),
             "height": "30",
@@ -1275,6 +2034,23 @@ def emit(
         x, y, w, h = group_geo[g.id]
         cell_id = _stable_id("g", g.id)
         group_cell_ids[g.id] = cell_id
+        # IR v2 group types → contract-driven molecule frames (grown to the
+        # layout footprint, but never smaller than the contract frame).
+        if g.type in MOLECULE_GROUP_TYPES:
+            # The layout already sized the frame (footprint ≥ contract min); the
+            # builder reflows its decorations to that final size.
+            show_chip = _M.subaccount_shows_chip(g.type, _group_type.get(g.parent))
+            if g.id in identity_group_ids:
+                show_chip = False   # FIX-3: identity frames carry no SAP BTP chip
+            cells = _group_molecule_cells(g, contract, size=(float(w), float(h)),
+                                          show_chip=show_chip)
+            _place_molecule(
+                root, cells, anchor_id=cell_id, anchor_parent="1",
+                off_x=x, off_y=y, contract=contract, brand_packs=brand_packs,
+                icon_resolver=icon_resolver, warnings=mol_warnings,
+                anchor_size=(float(w), float(h)),
+            )
+            continue
         # The BTP layer carries a "SAP BTP" logo chip instead of a text label.
         g_value = "" if g.type == "btp-layer" else g.label
         g_cell = ET.SubElement(
@@ -1299,8 +2075,8 @@ def emit(
                 "as": "geometry",
             },
         )
-        if g.type == "btp-layer":
-            _emit_sap_btp_badge(root, cell_id)
+        if g.type == "btp-layer" and g.id not in identity_group_ids:
+            _emit_sap_btp_badge(root, cell_id)   # FIX-3: not on identity groups
 
     for g in nested_groups:
         if g.id not in group_geo or g.parent not in group_geo:
@@ -1311,6 +2087,21 @@ def emit(
         cell_id = _stable_id("g", g.id)
         group_cell_ids[g.id] = cell_id
         parent_cell_id = group_cell_ids.get(g.parent, "1")
+        # IR v2 group types → contract-driven molecule frames (nested: relative
+        # to the parent cell's origin).
+        if g.type in MOLECULE_GROUP_TYPES:
+            show_chip = _M.subaccount_shows_chip(g.type, _group_type.get(g.parent))
+            if g.id in identity_group_ids:
+                show_chip = False   # FIX-3: identity frames carry no SAP BTP chip
+            cells = _group_molecule_cells(g, contract, size=(float(w), float(h)),
+                                          show_chip=show_chip)
+            _place_molecule(
+                root, cells, anchor_id=cell_id, anchor_parent=parent_cell_id,
+                off_x=rel_x, off_y=rel_y, contract=contract, brand_packs=brand_packs,
+                icon_resolver=icon_resolver, warnings=mol_warnings,
+                anchor_size=(float(w), float(h)),
+            )
+            continue
         g_cell = ET.SubElement(
             root,
             "mxCell",
@@ -1350,8 +2141,47 @@ def emit(
     # Track each node's absolute geometry so edges can compute anchor points
     # based on their endpoints' relative positions.
     node_abs_geom: dict[str, tuple[int, int, int, int]] = {}
+    # Router FIX-1: obstacle geometry fed to the channel router for piercing
+    # avoidance + pill/label slot placement. Identical to node_abs_geom for
+    # every node EXCEPT icon nodes, whose rect is extended DOWNWARD by
+    # caption_reserve so the router treats icon+caption as one obstacle box
+    # (node_abs_geom itself stays icon-only — it's what's actually drawn, and
+    # what ports/edges anchor to).
+    node_obstacle_geom: dict[str, tuple[float, float, float, float]] = {}
 
     for n in diagram.nodes:
+        # IR v2 leaf archetypes → contract-driven molecules. Position origin
+        # comes from the existing layout (Task 6 fixes the footprint); the
+        # molecule owns the cell(s) + style. Anchor id == the node's stable id so
+        # edges connect to it exactly as for v1 nodes.
+        if n.type in MOLECULE_NODE_TYPES:
+            if n.id in node_geo:
+                nx, ny, _, _ = node_geo[n.id]
+            else:
+                nx, ny = node_xy.get(n.id, (0, 0))
+            node_cell_id = _stable_id("n", n.id)
+            parent_cell_id, off_x, off_y = "1", float(nx), float(ny)
+            if n.group and n.group in group_cell_ids and n.group in group_geo:
+                parent_cell_id = group_cell_ids[n.group]
+                gx, gy, _, _ = group_geo[n.group]
+                off_x, off_y = float(nx - gx), float(ny - gy)
+            if n.type == "product":
+                cells = _M.product_box(n, contract, icon_resolver, brand_packs)
+            elif n.type == "db":
+                cells = [_M.db_cell(n, contract)]
+            else:  # chip
+                cells = [_M.chip_cell(n, contract)]
+            _place_molecule(
+                root, cells, anchor_id=node_cell_id, anchor_parent=parent_cell_id,
+                off_x=off_x, off_y=off_y, contract=contract, brand_packs=brand_packs,
+                icon_resolver=icon_resolver, warnings=mol_warnings,
+            )
+            node_abs_geom[n.id] = (nx, ny, cells[0]["w"], cells[0]["h"])
+            # Molecule frames have no floating caption below them (any title/
+            # subtitle is drawn INSIDE the frame) — obstacle == drawn rect.
+            node_obstacle_geom[n.id] = node_abs_geom[n.id]
+            continue
+
         gtype = _group_type.get(n.group)
         if gtype in BACKEND_GROUP_TYPES:
             # RIGHT-zone backend system → white box with icon-left + title.
@@ -1359,7 +2189,7 @@ def emit(
             is_icon = False
         else:
             style, is_icon, label = _node_style(n, shape_index)
-        # The zone engine fills node_geo with exact footprint cells. Icon nodes
+        # The skeleton engine fills node_geo with exact footprint cells. Icon nodes
         # are re-squared to the level icon size (icon_dim) and top-centred (the
         # caption floats below); box/plain nodes keep their footprint. The
         # greedy fallback path uses node_xy + default sizes.
@@ -1369,16 +2199,27 @@ def emit(
                 # Square icon at the top-centre of its footprint cell; the
                 # caption (verticalLabelPosition=bottom in the icon style)
                 # floats below it, in the space the zone layout reserved.
+                footprint_h = h                            # icon + caption band
                 x = x + (w - icon_dim) / 2
                 w = h = icon_dim
             # else: box / plain node → keep the footprint size from zone layout.
         else:
             x, y = node_xy.get(n.id, (0, 0))
             if is_icon:
+                footprint_h = icon_dim + caption_reserve
                 w = h = icon_dim
             else:
                 w, h = NODE_W, NODE_H
         node_abs_geom[n.id] = (x, y, w, h)
+        # Router FIX-1: for icon nodes, the obstacle rect extends over the
+        # caption band the zone layout reserved below the icon (footprint_h,
+        # which is >= icon_dim + caption_reserve by construction) — so the
+        # router's piercing check and label-slot obstacle set see icon+caption
+        # as one box. Box/plain nodes have no floating caption: obstacle ==
+        # drawn rect.
+        node_obstacle_geom[n.id] = (
+            (x, y, w, max(h, footprint_h)) if is_icon else (x, y, w, h)
+        )
 
         # Real drawio parenting: if the node belongs to a (sub-)group, parent
         # the mxCell to that group cell and emit relative coordinates.
@@ -1464,6 +2305,25 @@ def emit(
                 n.stepKind, _STEP_KIND_GRADIENT["default"]
             )
             step_w, step_h = 28, 28
+            # FIX-2: keep the SAP-canonical badge at the node's top-left corner
+            # (half-outside, -14/-14) for interior nodes, but nudge it DOWN out
+            # of two things it used to cover on TOP-ROW nodes:
+            #   (a) the containing group's title band — the layout reserves the
+            #       header as the group's top padding, so a top-row node's top
+            #       edge sits just below the title; a -14 overhang pokes back up
+            #       into it. Clamping the badge's top to the node's own top edge
+            #       (rel y >= 0) clears the title for ANY header height.
+            #   (b) this node's top-centre interface pill (rel y in [-8, 8]),
+            #       which on a narrow icon node spans the full width and reaches
+            #       the left corner — drop the badge below it.
+            # Non-top-row step nodes keep the canonical -14/-14 corner badge.
+            step_x, step_y = -14, -14
+            if n.group and n.group in group_geo:
+                gy = group_geo[n.group][1]
+                if (y - gy) <= _STEP_HEADER_ROW_BAND:   # top-row node
+                    step_y = max(step_y, 0)
+            if n.interface in ("sap", "generic"):
+                step_y = max(step_y, _STEP_PILL_CLEAR)
             step_cell = ET.SubElement(
                 root,
                 "mxCell",
@@ -1487,22 +2347,61 @@ def emit(
                     "connectable": "0",
                 },
             )
-            # Half-outside the node's top-left corner (centred on the corner).
+            # Top-left corner badge, nudged clear of the group title / interface
+            # pill by the FIX-2 logic above (step_x / step_y).
             ET.SubElement(
                 step_cell,
                 "mxGeometry",
                 attrib={
-                    "x": "-14",
-                    "y": "-14",
+                    "x": str(step_x),
+                    "y": str(step_y),
                     "width": str(step_w),
                     "height": str(step_h),
                     "as": "geometry",
                 },
             )
 
-    # 4. Edges — anchors distributed across node sides so connectors fan out
-    #    instead of stacking on a single side-midpoint.
-    edge_anchors = _distribute_anchors(diagram.edges, node_abs_geom)
+    # 4. Edges — the channel router (Task 8) computes overlap-free waypoints
+    #    through reserved corridors + barycenter-distributed exit/entry ports,
+    #    plus collision-free pill/label slots. It routes against the ACTUAL
+    #    drawn node geometry (node_abs_geom), not the footprint cells, so ports
+    #    hug the real icon/box edges. The greedy debug layout keeps the legacy
+    #    side-midpoint distribution and draw.io default routing.
+    route_result = None
+    _crmod = _channel_router_module()
+    if layout != "greedy":
+        router_layout = dict(layout_result)
+        router_layout["nodes"] = dict(node_abs_geom)
+        # FIX-1: caption-aware obstacle rects (icon+caption for icon nodes) —
+        # kept SEPARATE from "nodes" so ports/exit-entry points still anchor
+        # to the real (icon-only) drawn geometry; only the piercing check and
+        # pill/label slot obstacle set see the taller box.
+        router_layout["node_obstacles"] = dict(node_obstacle_geom)
+        # Task 13: channel_prefer / nudge_label thread through as HARD routing
+        # constraints (see _channel_router.route's seam-composition docstring).
+        # None when there are no hints → byte-identical routing to pre-Task-13.
+        _route_hints = None
+        if _hints:
+            _route_hints = {"channel_prefer": _hints["channel_prefer"],
+                            "nudge_label": _hints["nudge_label"]}
+        route_result = _crmod.route(diagram, router_layout, hints=_route_hints)
+        # Review-round FIX-1: fold the router's own unresolved-hint warnings
+        # (unknown channel_prefer edge/channel id) into the same stderr flush.
+        mol_warnings.extend(route_result.hint_warnings)
+        edge_anchors = dict(route_result.port_fracs)
+        edge_waypoints = dict(route_result.waypoints)
+        # Task 12: publish the channels the router reserved so the geometric
+        # gate can verify CHANNEL_DISCIPLINE without re-running the router.
+        _emit_channels_metadata(root, route_result.channels)
+        # Task 12 (review round, FIX-1): publish the router's OWN node-obstacle
+        # rects (caption-extended for icon nodes) so PIERCING/CAPTION_OUT check
+        # against them directly instead of re-deriving a caption band — see
+        # _emit_node_obstacles_metadata's docstring.
+        _emit_node_obstacles_metadata(
+            root, {_stable_id("n", nid): rect for nid, rect in node_obstacle_geom.items()}
+        )
+    else:
+        edge_anchors = _distribute_anchors(diagram.edges, node_abs_geom)
     for e in diagram.edges:
         edge_id = _stable_id("e", e.id)
         # For pill-rendered kinds (trust, authenticate, authorize,
@@ -1510,14 +2409,28 @@ def emit(
         # separate rounded vertex child. drawio does NOT honour arcSize on
         # inline edge labels, so the multi-cell pattern is the only way.
         has_pill = e.kind in _EDGE_KIND_PILL or e.kind == "annotation"
-        inline_value = "" if has_pill else e.label
+        # The channel router (8e) drops labels + protocol pills into
+        # collision-free slots, emitted as ABSOLUTE cells; so when routing is
+        # active the edge itself carries no inline label. The greedy debug
+        # path keeps the legacy inline label / edge-child pills.
+        pill_center = route_result.pill_pos.get(e.id) if route_result else None
+        label_center = route_result.label_pos.get(e.id) if route_result else None
+        inline_value = e.label if (route_result is None and not has_pill) else ""
+        # IR v2 flow family → contract edge molecule (edge-identity / -provisioning
+        # / -master-data / -transport / -firewall / -default); else the v1 style.
+        if e.flowFamily:
+            edge_style = _flow_family_edge_style(
+                e, contract, *edge_anchors.get(e.id, (None, None))
+            )
+        else:
+            edge_style = _edge_style(e, *edge_anchors.get(e.id, (None, None)))
         e_cell = ET.SubElement(
             root,
             "mxCell",
             attrib={
                 "id": edge_id,
                 "value": inline_value,
-                "style": _edge_style(e, *edge_anchors.get(e.id, (None, None))),
+                "style": edge_style,
                 "edge": "1",
                 "parent": "1",
                 "source": _stable_id("n", e.source),
@@ -1540,65 +2453,116 @@ def emit(
                     attrib={"x": str(int(round(wx))), "y": str(int(round(wy)))},
                 )
 
-        # Pill labels for the 4 SAP-canonical edge kinds (trust,
-        # authenticate, authorize, generic_protocol). Each kind has its
-        # own stroke + fill + fontColor sourced from the SAP
-        # annotations_and_interfaces.xml library. The pill's geometry uses
-        # relative=1 with offset so it centres on the edge's midpoint
-        # regardless of the edge's actual length or routing.
-        if has_pill and e.label:
-            if e.kind == "annotation":
-                # 1. Try canonical catalog first — if the label is a known
-                #    SAP-canonical pill (SAML2/OIDC, Group, OIDC, ORD, …),
-                #    use its exact stroke/fill from the 138 SAP examples.
-                canonical = _CANONICAL_PILLS.get(e.label)
-                if canonical:
-                    pill_def = {
-                        "stroke": canonical.get("stroke") or "#475F75",
-                        "fill":   canonical.get("fill") or "#F5F6F7",
-                        "fontColor": canonical.get("stroke") or "#475F75",
-                    }
+        # IR v2 protocol pill (e.g. "SCIM", "SAML2/OIDC"): a contract-styled
+        # vertex. With routing active it's placed at the router's collision-free
+        # absolute slot (pill_center); the greedy path keeps the legacy
+        # edge-child at (0,0).
+        if e.pill:
+            pcell = _M.pill(e, contract)
+            if pill_center is not None:
+                pw, ph = _crmod.pill_dims(e.pill)
+                _emit_slot_cell(root, _stable_id("pp", e.id), pcell["value"],
+                                pcell["style"], pill_center, pw, ph)
+            else:
+                p_cell = ET.SubElement(
+                    root,
+                    "mxCell",
+                    attrib={
+                        "id": _stable_id("pp", e.id),
+                        "value": pcell["value"],
+                        "style": pcell["style"],
+                        "vertex": "1",
+                        "parent": edge_id,
+                        "connectable": "0",
+                    },
+                )
+                ET.SubElement(
+                    p_cell,
+                    "mxGeometry",
+                    attrib={
+                        "x": "0", "y": "0",
+                        "width": _num(pcell["w"]), "height": _num(pcell["h"]),
+                        "relative": "1", "as": "geometry",
+                    },
+                )
+
+        # Edge label. With routing active the router (8e) gives a collision-free
+        # absolute slot (label_center): SAP-canonical pill kinds keep their
+        # rounded coloured chip; plain / flowFamily labels get a white-backed
+        # text box (hiding the connector behind the text). The greedy path keeps
+        # the legacy edge-child pill for pill kinds (plain labels stay inline).
+        #
+        # ONE block: `pill_def` is computed and consumed right here (a future
+        # reorder can't strand a read of `pill_def` past where it's set), and
+        # `label_dims` is computed exactly once, up front, for whichever style
+        # below ends up using it.
+        if e.label and (has_pill or label_center is not None):
+            lw, lh = _crmod.label_dims(e.label)
+            if has_pill:
+                if e.kind == "annotation":
+                    # 1. Try canonical catalog first — if the label is a known
+                    #    SAP-canonical pill (SAML2/OIDC, Group, OIDC, ORD, …),
+                    #    use its exact stroke/fill from the 138 SAP examples.
+                    canonical = _CANONICAL_PILLS.get(e.label)
+                    if canonical:
+                        pill_def = {
+                            "stroke": canonical.get("stroke") or "#475F75",
+                            "fill":   canonical.get("fill") or "#F5F6F7",
+                            "fontColor": canonical.get("stroke") or "#475F75",
+                        }
+                    else:
+                        # 2. Fall back to the user-chosen palette family
+                        #    (purple/green/pink/grey/blue/teal).
+                        pill_def = _ANNOTATION_PILL_PALETTE.get(
+                            e.pillColor, _ANNOTATION_PILL_PALETTE["purple"]
+                        )
                 else:
-                    # 2. Fall back to the user-chosen palette family
-                    #    (purple/green/pink/grey/blue/teal).
-                    pill_def = _ANNOTATION_PILL_PALETTE.get(
-                        e.pillColor, _ANNOTATION_PILL_PALETTE["purple"]
+                    pill_def = _EDGE_KIND_PILL[e.kind]
+                lstyle = (
+                    f"rounded=1;whiteSpace=wrap;html=1;arcSize=50;"
+                    f"strokeColor={pill_def['stroke']};"
+                    f"fillColor={pill_def['fill']};"
+                    f"fontColor={pill_def['fontColor']};"
+                    f"fontStyle=1;strokeWidth=1.5;fontSize=10;"
+                    f"align=center;verticalAlign=middle;"
+                )
+                if label_center is not None:
+                    _emit_slot_cell(root, _stable_id("p", e.id), e.label, lstyle,
+                                    label_center, lw, lh)
+                else:
+                    # greedy fallback: edge-child pill centred on the edge midpoint
+                    pill_w = max(56, min(168, len(e.label) * 6 + 18))
+                    pill = ET.SubElement(
+                        root,
+                        "mxCell",
+                        attrib={
+                            "id": _stable_id("p", e.id),
+                            "value": e.label,
+                            "style": lstyle,
+                            "vertex": "1",
+                            "parent": edge_id,
+                            "connectable": "0",
+                        },
+                    )
+                    pill_geom = ET.SubElement(
+                        pill,
+                        "mxGeometry",
+                        attrib={"width": str(pill_w), "height": "22", "relative": "1", "as": "geometry"},
+                    )
+                    ET.SubElement(
+                        pill_geom,
+                        "mxPoint",
+                        attrib={"x": str(-pill_w // 2), "y": "-11", "as": "offset"},
                     )
             else:
-                pill_def = _EDGE_KIND_PILL[e.kind]
-            # Width adapts to label length (rough heuristic: ~6.5 px/char +
-            # padding) so longer labels like "Generic Protocol" don't get
-            # clipped, while short ones like "Trust" stay tight.
-            pill_w = max(56, min(168, len(e.label) * 6 + 18))
-            pill = ET.SubElement(
-                root,
-                "mxCell",
-                attrib={
-                    "id": _stable_id("p", e.id),
-                    "value": e.label,
-                    "style": (
-                        f"rounded=1;whiteSpace=wrap;html=1;arcSize=50;"
-                        f"strokeColor={pill_def['stroke']};"
-                        f"fillColor={pill_def['fill']};"
-                        f"fontColor={pill_def['fontColor']};"
-                        f"fontStyle=1;strokeWidth=1.5;fontSize=10;"
-                        f"align=center;verticalAlign=middle;"
-                    ),
-                    "vertex": "1",
-                    "parent": edge_id,
-                    "connectable": "0",
-                },
-            )
-            pill_geom = ET.SubElement(
-                pill,
-                "mxGeometry",
-                attrib={"width": str(pill_w), "height": "22", "relative": "1", "as": "geometry"},
-            )
-            ET.SubElement(
-                pill_geom,
-                "mxPoint",
-                attrib={"x": str(-pill_w // 2), "y": "-11", "as": "offset"},
-            )
+                # plain / flowFamily label: white-backed text box (routing active)
+                lstyle = (
+                    f"text;html=1;whiteSpace=wrap;rounded=0;strokeColor=none;"
+                    f"fillColor=#FFFFFF;fontColor={PALETTE['text']};fontSize=10;"
+                    f"align=center;verticalAlign=middle;"
+                )
+                _emit_slot_cell(root, _stable_id("p", e.id), e.label, lstyle,
+                                label_center, lw, lh)
 
     # 5. SAP essential presets — embed pre-composed organisms (User and
     # client, Cloud Connector, SAML/OIDC, 3rd party IdP and protocols, …)
@@ -1607,10 +2571,29 @@ def emit(
     for preset in diagram.presets:
         _embed_preset(root, preset, shape_index)
 
+    # 5b. NETWORK separator — the vertical bar in the center→right gutter,
+    # spanning the right stack (Task 7). The skeleton layout computed its
+    # geometry (or None when there's no right stack / it's opted out).
+    if layout != "greedy":
+        sep = layout_result["meta"].get("networkSeparator")
+        if sep:
+            _emit_network_separator(root, sep, contract)
+
     # 6. Legend molecule (bottom-right). Two paths:
     #    - User asked for 'sap' or 'sap-short' preset → embed SAP essential
     #    - Otherwise auto-generate based on actual styles used.
     _emit_legend(root, diagram, canvas_w, canvas_h, shape_index)
+
+    # 7. IR v2 metadata: the diagram-level hyperscaler/runtime badge strip
+    # (customer branding + watermark are emitted up front, in step 0/1).
+    _emit_diagram_badge_strip(
+        root, diagram, canvas_w, contract, brand_packs, icon_resolver, mol_warnings
+    )
+
+    # Flush molecule preflight warnings (missing brand assets → text fallback)
+    # to stderr, de-duplicated. Never a hard failure.
+    for w in dict.fromkeys(mol_warnings):
+        print(f"WARNING: {w}", file=sys.stderr)
 
     return _serialize(mxfile)
 
@@ -1900,7 +2883,7 @@ def main(argv: list[str] | None = None) -> int:
         default="auto",
         help=(
             "Layout backend. 'auto'/'zone' use the deterministic "
-            "zone-composition engine (default). 'greedy' forces the legacy "
+            "skeleton slot engine (default). 'greedy' forces the legacy "
             "3x3 grid (debug only)."
         ),
     )

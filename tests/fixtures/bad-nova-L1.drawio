@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-FileCopyrightText: 2026 Gabriele Capparelli
+  SPDX-License-Identifier: Apache-2.0
+
+  Hand-built NEGATIVE fixture for tests/test_gate.py — every defect below is
+  deliberate, and each one is designed to trip exactly one Task 12 FAIL-level
+  check in scripts/check-composition.py:
+
+    • PIERCING       — edge e-77777777 (n-11111111 -> n-44444444) is given an
+                        explicit waypoint that routes it straight through the
+                        non-endpoint box n-33333333.
+    • CAPTION_OUT    — icon node n-22222222 sits near the bottom of zone
+                        g-aaaaaaaa; its reserved 24px caption band (below the
+                        48x48 icon) spills 32px past the zone's bottom edge.
+                        (No sapdp:node_obstacles metadata cell here — this
+                        exercises check-composition.py's FIX-1 fallback path,
+                        which reconstructs the same 24px band.)
+    • PILL_COLLISION — pills p-55555555 ("Label A") and p-66666666 ("Label B")
+                        collide (any-overlap, no size threshold).
+    • TEXT_OVERLAP   — a SEPARATE pair, text labels leglbl-77777777 ("Title A")
+                        and leglbl-88888888 ("Title B"), overlap by ~76% of
+                        the smaller rect's area. Kept independent of the pill
+                        pair on purpose: check-composition.py's FIX-3(b)
+                        (review round) dedupes a pill/pill overlap down to
+                        PILL_COLLISION alone, so reusing the pill pair here
+                        would no longer trip TEXT_OVERLAP.
+
+  Ids follow generate-drawio.py's _stable_id("<prefix>", key) convention
+  (prefix-<8 lowercase hex chars>) so check-composition.py's node/zone/pill
+  id regexes recognise them exactly as they would a real emitted file.
+-->
+<mxfile host="test-fixture" version="24.7.8">
+  <diagram id="bad-page1" name="Bad-Page-1">
+    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="900" pageHeight="600" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Zone A / Zone B: top-level zone containers (id "g-########", parent "1") -->
+        <mxCell id="g-aaaaaaaa" value="Zone A" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#475E75;fillColor=#F5F6F7;arcSize=24;verticalAlign=top;align=left;fontColor=#1D2D3E;fontStyle=1;fontSize=14;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="0" y="50" width="300" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="g-bbbbbbbb" value="Zone B" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=24;verticalAlign=top;align=left;fontColor=#1D2D3E;fontStyle=1;fontSize=14;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="400" y="50" width="300" height="300" as="geometry" />
+        </mxCell>
+
+        <!-- n-11111111: icon node inside Zone A, well clear of its bottom edge (control — no CAPTION_OUT here). -->
+        <mxCell id="n-11111111" value="Node One" style="shape=image;html=1;verticalLabelPosition=bottom;verticalAlign=top;imageAspect=0;aspect=fixed;image=data:image/png,;" vertex="1" parent="g-aaaaaaaa">
+          <mxGeometry x="20" y="20" width="48" height="48" as="geometry" />
+        </mxCell>
+
+        <!-- n-22222222: icon node near Zone A's bottom edge — DEFECT: CAPTION_OUT.
+             Absolute icon rect (20, 310, 48, 48); caption band (20, 358, 48, 24)
+             bottoms out at y=382, 32px past Zone A's bottom edge (50+300=350). -->
+        <mxCell id="n-22222222" value="Node Two" style="shape=image;html=1;verticalLabelPosition=bottom;verticalAlign=top;imageAspect=0;aspect=fixed;image=data:image/png,;" vertex="1" parent="g-aaaaaaaa">
+          <mxGeometry x="20" y="260" width="48" height="48" as="geometry" />
+        </mxCell>
+
+        <!-- n-44444444: plain box inside Zone B (edge target). Absolute (420, 70, 100, 50). -->
+        <mxCell id="n-44444444" value="Backend Box" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;" vertex="1" parent="g-bbbbbbbb">
+          <mxGeometry x="20" y="20" width="100" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- n-33333333: standalone non-endpoint box directly in e-77777777's path (200-300, 60-140) — DEFECT target for PIERCING. -->
+        <mxCell id="n-33333333" value="In The Way" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#475E75;fillColor=#FFFFFF;" vertex="1" parent="1">
+          <mxGeometry x="200" y="60" width="100" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- e-77777777: n-11111111 (exit R, 0.5) -> n-44444444 (entry L, 0.5), routed via an
+             explicit waypoint (250, 94) that cuts straight through n-33333333 — DEFECT: PIERCING. -->
+        <mxCell id="e-77777777" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=blockThin;endFill=1;strokeColor=#475E75;strokeWidth=1.5;exitX=1.0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-11111111" target="n-44444444">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="250" y="94" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- p-55555555 / p-66666666: two pills overlapping by ~63% of the smaller
+             rect's area — DEFECT: PILL_COLLISION (any-overlap). Since FIX-3(b),
+             a pill/pill overlap is reported ONLY as PILL_COLLISION, not also
+             TEXT_OVERLAP (see the header comment). -->
+        <mxCell id="p-55555555" value="Label A" style="rounded=1;whiteSpace=wrap;html=1;arcSize=50;strokeColor=#188918;fillColor=#f5fae5;fontColor=#188918;fontStyle=1;strokeWidth=1.5;fontSize=10;align=center;verticalAlign=middle;" vertex="1" parent="1" connectable="0">
+          <mxGeometry x="500" y="400" width="80" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="p-66666666" value="Label B" style="rounded=1;whiteSpace=wrap;html=1;arcSize=50;strokeColor=#470bed;fillColor=#f1edff;fontColor=#470bed;fontStyle=1;strokeWidth=1.5;fontSize=10;align=center;verticalAlign=middle;" vertex="1" parent="1" connectable="0">
+          <mxGeometry x="510" y="405" width="80" height="18" as="geometry" />
+        </mxCell>
+
+        <!-- leglbl-77777777 / leglbl-88888888: two plain text labels (NOT
+             pills — no arcSize=50/rounded=1) overlapping by ~76% of the
+             smaller rect's area — DEFECT: TEXT_OVERLAP (substantial),
+             independent of the pill/pill PILL_COLLISION defect above. -->
+        <mxCell id="leglbl-77777777" value="Title A" style="text;html=1;fontSize=11;fontColor=#1D2D3E;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="650" y="150" width="80" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="leglbl-88888888" value="Title B" style="text;html=1;fontSize=11;fontColor=#1D2D3E;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="655" y="153" width="80" height="16" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -1,0 +1,378 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Gabriele Capparelli
+# SPDX-License-Identifier: Apache-2.0
+"""
+harvest-brand-assets.py — collect logo / badge data-URIs into a brand pack.
+
+Reads assets/brand-pack.manifest.json to learn WHICH keys to harvest and
+where they come from. The manifest — not this script — decides
+confidentiality: each entry's "public" flag routes it to --out-public or
+--out-local. Two source kinds:
+
+  source: official  — the entry's "official_ref" ("<file>:<title>") is
+                       looked up in an SAP btp-solution-diagrams shape
+                       library (--official-repo), an mxlibrary XML file
+                       whose body is a JSON array of {title, xml, w, h}.
+  source: exemplar   — the entry's "match" (value_regex + optional mime)
+                       is matched against every image-bearing cell found
+                       across the positional .drawio source files.
+
+Output: {key: {dataUri, source, from, license_note}} written as
+"index.json" under --out-public and/or --out-local. Harvesting is
+best-effort: an asset that can't be resolved prints a WARNING and is
+skipped rather than failing the run.
+
+Contract notes for consumers (style contract / molecule emitters):
+  - An empty harvest result for a pack writes nothing: a pre-existing
+    index.json in that output directory is left in place, not truncated.
+  - dataUri values are persisted in draw.io's embeddable comma form
+    (`data:image/png,<base64 payload>` — the standard `;base64` marker is
+    stripped so the URI survives inside draw.io's ';'-delimited style
+    strings). This is NOT a strict RFC 2397 data URI: embed it as-is in
+    style strings; re-insert ";base64" before the payload if handing it
+    to an RFC-strict decoder.
+
+Usage:
+    python3 harvest-brand-assets.py \\
+        --manifest assets/brand-pack.manifest.json \\
+        --out-public assets/brand-pack --out-local assets/brand-pack.local \\
+        --official-repo ~/tools/btp-solution-diagrams \\
+        exemplar1.drawio exemplar2.drawio ...
+
+Page-decompression and mxlibrary parsing live in the shared ``_drawio_io``
+module (also used by build-style-contract.py); everything else is local.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+from _drawio_io import decode_diagram_pages, parse_entry_cells, parse_mxlibrary
+
+OFFICIAL_LICENSE_NOTE = "SAP btp-solution-diagrams, Apache-2.0"
+EXEMPLAR_LICENSE_NOTE = "trademark — local use only, do not redistribute"
+LIB_SUBPATH = Path("assets/shape-libraries-and-editable-presets/draw.io")
+
+
+# ── draw.io page decompression ───────────────────────────────────────────
+def _load_pages(path: Path) -> list[ET.Element]:
+    """Page root elements only (names are unused by the harvester)."""
+    return [root for _name, root in decode_diagram_pages(path)]
+
+
+# ── style parsing ────────────────────────────────────────────────────────
+def _extract_image_data_uri(style: str) -> str | None:
+    """Pull the image=data:... value out of a cell's style string.
+
+    draw.io style strings are ';'-delimited key=value pairs, but a raster
+    image embedded the standard way (`data:image/png;base64,<payload>`)
+    contains a literal ';' before "base64" that is NOT a delimiter — naive
+    splitting truncates the payload right there. SAP's own official
+    libraries sidestep this by omitting the ";base64" marker entirely
+    (`data:image/svg+xml,<payload>` — see generate-drawio.py's _safe_img
+    for the same fix applied on the emit side). Normalize the former to
+    the latter before splitting so both forms parse intact, and so the
+    dataUri we persist is always safe to re-embed in a new style string.
+    """
+    if not style or "image=data:" not in style:
+        return None
+    normalized = style.replace(";base64,", ",")
+    for chunk in normalized.split(";"):
+        if "=" not in chunk:
+            continue
+        key, _, value = chunk.partition("=")
+        if key.strip() == "image" and value.startswith("data:"):
+            return value
+    return None
+
+
+def _data_uri_mime(data_uri: str) -> str:
+    m = re.match(r"^data:([^;,]*)", data_uri)
+    return m.group(1) if m else ""
+
+
+def _nearest_value(
+    cell: ET.Element,
+    cells_by_id: dict[str, ET.Element],
+    xml_parents: dict[ET.Element, ET.Element],
+) -> str:
+    """The cell's own value, else its wrapper's label, else its parent's value.
+
+    draw.io wraps cells that carry custom data in `<object label="…">` (or
+    `<UserObject>`): the user-visible label then lives on the WRAPPER element,
+    not on the mxCell — so the enclosing XML element's ``label`` counts as the
+    cell's own value for matching purposes. Only after that do we fall back to
+    the immediate parent cell's value.
+    """
+    value = (cell.get("value") or "").strip()
+    if value:
+        return value
+    wrapper = xml_parents.get(cell)
+    if wrapper is not None:
+        label = (wrapper.get("label") or "").strip()
+        if label:
+            return label
+    parent = cells_by_id.get(cell.get("parent") or "")
+    if parent is not None:
+        return (parent.get("value") or "").strip()
+    return ""
+
+
+# ── exemplar matching ────────────────────────────────────────────────────
+def _collect_exemplar_candidates(sources: list[Path]) -> list[tuple[str, str, str]]:
+    """Return (source_filename, candidate_value, data_uri) for every
+    image-bearing cell across all source .drawio files, in file-then-
+    document order (so 'largest payload wins' ties break deterministically
+    on first occurrence).
+    """
+    candidates: list[tuple[str, str, str]] = []
+    for src in sources:
+        try:
+            pages = _load_pages(src)
+        except Exception as exc:
+            print(f"WARNING: could not read {src}: {exc}", file=sys.stderr)
+            continue
+        for page in pages:
+            cells = list(page.iter("mxCell"))
+            cells_by_id = {c.get("id"): c for c in cells if c.get("id")}
+            # Element → enclosing element, so <object label="…">-wrapped
+            # cells can be matched via the wrapper's label.
+            xml_parents = {child: parent for parent in page.iter() for child in parent}
+            for cell in cells:
+                data_uri = _extract_image_data_uri(cell.get("style") or "")
+                if not data_uri:
+                    continue
+                value = _nearest_value(cell, cells_by_id, xml_parents)
+                candidates.append((src.name, value, data_uri))
+    return candidates
+
+
+def _best_exemplar_match(
+    candidates: list[tuple[str, str, str]], match_spec: dict
+) -> tuple[str, str] | None:
+    """Return (dataUri, fromFilename) for the largest-payload match, or None."""
+    value_regex = match_spec.get("value_regex")
+    if not value_regex:
+        return None
+    try:
+        value_pat = re.compile(value_regex)
+        mime_pat = re.compile(match_spec["mime"]) if match_spec.get("mime") else None
+    except re.error as exc:
+        # Per-asset robustness: a bad regex in ONE manifest entry must not
+        # abort the whole run — warn and let the caller skip this asset.
+        print(
+            f"WARNING: invalid regex in match spec {match_spec!r}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+
+    best: tuple[str, str] | None = None
+    best_size = -1
+    for source_name, value, data_uri in candidates:
+        if not value_pat.search(value):
+            continue
+        if mime_pat is not None and not mime_pat.fullmatch(_data_uri_mime(data_uri)):
+            continue
+        size = len(data_uri)
+        if size > best_size:
+            best_size = size
+            best = (data_uri, source_name)
+    return best
+
+
+# ── official-library resolution ──────────────────────────────────────────
+def _resolve_official(
+    asset: dict, official_repo: Path | None, lib_cache: dict[str, list[dict] | None]
+) -> tuple[str, str] | None:
+    """Return (dataUri, fromFilename) for an official_ref, or None (+ WARNING)."""
+    key = asset.get("key", "?")
+    ref = asset.get("official_ref", "")
+    if ":" not in ref:
+        print(f"WARNING: malformed official_ref {ref!r} for key {key!r}, skipping", file=sys.stderr)
+        return None
+    filename, _, title = ref.partition(":")
+
+    if official_repo is None:
+        print(
+            f"WARNING: no --official-repo given; skipping official asset "
+            f"{key!r} ({ref})",
+            file=sys.stderr,
+        )
+        return None
+
+    if filename not in lib_cache:
+        lib_cache[filename] = parse_mxlibrary(Path(official_repo) / LIB_SUBPATH / filename)
+    entries = lib_cache[filename]
+    if entries is None:
+        print(
+            f"WARNING: could not read official library {filename!r} for key {key!r}, skipping",
+            file=sys.stderr,
+        )
+        return None
+
+    matches = [e for e in entries if (e.get("title") or "") == title]
+    if not matches:
+        print(
+            f"WARNING: title {title!r} not found in {filename} for key {key!r}, skipping",
+            file=sys.stderr,
+        )
+        return None
+
+    best: str | None = None
+    best_size = -1
+    for entry in matches:
+        # entry["xml"] comes from parse_mxlibrary(), which reads it via
+        # ElementTree's .text — that already performs ONE round of XML
+        # entity-decoding as a normal part of parsing the outer <mxlibrary>
+        # wrapper. entry["xml"] is therefore already at exactly the escaping
+        # level a fresh XML parse expects; do NOT html.unescape() it again
+        # (that over-decodes any cell whose value="..." itself holds
+        # escaped rich text — e.g. the "(Text Only)" chips — turning their
+        # escaped `&lt;font ...&gt;` markup into literal unescaped `<`/`"`
+        # characters and breaking the parse). parse_entry_cells preserves
+        # exactly this single-decode behavior.
+        page_root = parse_entry_cells(entry.get("xml") or "")
+        if page_root is None:
+            continue
+        for cell in page_root.iter("mxCell"):
+            data_uri = _extract_image_data_uri(cell.get("style") or "")
+            if data_uri and len(data_uri) > best_size:
+                best_size = len(data_uri)
+                best = data_uri
+
+    if best is None:
+        print(
+            f"WARNING: no image=data: style found for official_ref {ref!r} (key {key!r}) "
+            "— title matched but the entry has no embedded image (e.g. a text-only chip); skipping",
+            file=sys.stderr,
+        )
+        return None
+    return best, filename
+
+
+# ── output ────────────────────────────────────────────────────────────────
+def _write_index(out_dir: Path, data: dict) -> None:
+    if not data:
+        return
+    out_dir.mkdir(parents=True, exist_ok=True)
+    index_path = out_dir / "index.json"
+    index_path.write_text(
+        json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def harvest(
+    manifest: dict,
+    sources: list[Path],
+    official_repo: Path | None,
+) -> tuple[dict, dict]:
+    """Return (public, local) index dicts for the given manifest + sources."""
+    assets = manifest.get("assets", [])
+    exemplar_candidates = _collect_exemplar_candidates(sources)
+    lib_cache: dict[str, list[dict] | None] = {}
+
+    public: dict[str, dict] = {}
+    local: dict[str, dict] = {}
+
+    for asset in assets:
+        if not isinstance(asset, dict):
+            print(f"WARNING: manifest entry is not an object, skipping: {asset!r}", file=sys.stderr)
+            continue
+        key = asset.get("key")
+        if not key:
+            print(f"WARNING: manifest entry missing 'key', skipping: {asset}", file=sys.stderr)
+            continue
+        source_kind = asset.get("source")
+        target = public if asset.get("public") else local
+
+        if source_kind == "official":
+            resolved = _resolve_official(asset, official_repo, lib_cache)
+            if resolved is None:
+                continue
+            data_uri, from_file = resolved
+            target[key] = {
+                "dataUri": data_uri,
+                "source": "official",
+                "from": from_file,
+                "license_note": OFFICIAL_LICENSE_NOTE,
+            }
+            print(f"OK: {key!r} <- {from_file} (official, {'public' if asset.get('public') else 'local'})")
+        elif source_kind == "exemplar":
+            match_spec = asset.get("match") or {}
+            best = _best_exemplar_match(exemplar_candidates, match_spec)
+            if best is None:
+                print(
+                    f"WARNING: no exemplar match found for {key!r} "
+                    f"(value_regex={match_spec.get('value_regex')!r}); skipping",
+                    file=sys.stderr,
+                )
+                continue
+            data_uri, from_file = best
+            target[key] = {
+                "dataUri": data_uri,
+                "source": "exemplar",
+                "from": from_file,
+                "license_note": EXEMPLAR_LICENSE_NOTE,
+            }
+            print(f"OK: {key!r} <- {from_file} (exemplar, {'public' if asset.get('public') else 'local'})")
+        else:
+            print(
+                f"WARNING: unknown source kind {source_kind!r} for key {key!r}, skipping",
+                file=sys.stderr,
+            )
+            continue
+
+    return public, local
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Harvest brand/logo assets into a public + local (confidential) brand pack."
+    )
+    parser.add_argument("--manifest", type=Path, required=True, help="Path to brand-pack.manifest.json.")
+    parser.add_argument("--out-public", type=Path, required=True, help="Output dir for public assets.")
+    parser.add_argument("--out-local", type=Path, required=True, help="Output dir for local/confidential assets.")
+    parser.add_argument(
+        "--official-repo",
+        type=Path,
+        default=None,
+        help="Path to a checkout of SAP/btp-solution-diagrams (for source=official assets).",
+    )
+    parser.add_argument(
+        "sources", nargs="*", type=Path, help="Exemplar .drawio files to scan for source=exemplar assets."
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"ERROR: could not read manifest {args.manifest}: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("assets"), list):
+        print(
+            f"ERROR: malformed manifest {args.manifest}: expected a JSON object "
+            'with an "assets" array at the top level',
+            file=sys.stderr,
+        )
+        return 2
+
+    public, local = harvest(manifest, args.sources, args.official_repo)
+
+    _write_index(args.out_public, public)
+    _write_index(args.out_local, local)
+
+    total_assets = len(manifest.get("assets", []))
+    print(
+        f"Harvested {len(public)} public + {len(local)} local asset(s) "
+        f"out of {total_assets} manifest entries."
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

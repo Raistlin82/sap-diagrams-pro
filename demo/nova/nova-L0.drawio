@@ -1,69 +1,94 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<mxfile host="sap-diagrams-pro" modified="2026-04-26T23:04:36+00:00" agent="sap-diagrams-pro/0.1.0" version="24.7.8">
+<mxfile host="sap-diagrams-pro" modified="2026-07-08T09:58:22+00:00" agent="sap-diagrams-pro/0.1.0" version="24.7.8">
   <diagram id="d-fe65070e" name="NOVA Invoice Suite — L0">
-    <mxGraphModel dx="1422" dy="754" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="478" pageHeight="508" math="0" shadow="0">
+    <mxGraphModel dx="1422" dy="754" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="834" pageHeight="472" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="title-fe65070e" value="NOVA Invoice Suite — L0 - SAP BTP Solution Diagram" style="text;html=1;align=left;verticalAlign=middle;fontColor=#0070F2;fontSize=20;fontStyle=1;fontFamily=72,Helvetica,Arial,sans-serif;" vertex="1" parent="1">
-          <mxGeometry x="32" y="12" width="600" height="30" as="geometry" />
+        <mxCell id="title-fe65070e" value="NOVA Invoice Suite — L0 - SAP BTP Solution Diagram" style="text;html=1;align=left;verticalAlign=middle;fontColor=#0070F2;fontSize=16;fontStyle=1;fontFamily=Helvetica,Arial,sans-serif;" vertex="1" parent="1">
+          <mxGeometry x="32" y="12" width="738" height="30" as="geometry" />
         </mxCell>
         <mxCell id="dlevel-fe65070e" value="Diagram Level: L0" style="text;html=1;align=left;verticalAlign=middle;fontColor=#1D2D3E;fontSize=11;fontFamily=Helvetica;" vertex="1" parent="1">
-          <mxGeometry x="32" y="480" width="180" height="20" as="geometry" />
+          <mxGeometry x="32" y="444" width="180" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="g-5b7dcd14" value="Finance Team" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#475E75;fillColor=#FFFFFF;arcSize=12;absoluteArcSize=1;strokeWidth=1.5;verticalAlign=top;align=left;fontColor=#1D2D3E;fontStyle=1;fontSize=13;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="68" y="68" width="154" height="106" as="geometry" />
+        <mxCell id="g-59d8f3ec" value="External Senders" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#475E75;fillColor=#F5F6F7;arcSize=24;absoluteArcSize=1;strokeWidth=1.5;verticalAlign=top;align=left;fontColor=#1D2D3E;fontStyle=1;fontSize=14;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="534" y="64" width="260" height="106" as="geometry" />
         </mxCell>
-        <mxCell id="g-59d8f3ec" value="External Senders" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#475E75;fillColor=#F5F6F7;arcSize=12;absoluteArcSize=1;strokeWidth=1.5;verticalAlign=top;align=left;fontColor=#1D2D3E;fontStyle=1;fontSize=13;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="256" y="68" width="154" height="106" as="geometry" />
+        <mxCell id="g-e5daba83" value="" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#EBF8FF;arcSize=32;absoluteArcSize=1;strokeWidth=1.5;verticalAlign=top;align=left;fontColor=#1D2D3E;fontStyle=1;fontSize=14;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="243" y="138" width="195" height="116" as="geometry" />
         </mxCell>
-        <mxCell id="g-e5daba83" value="NOVA Invoice Suite" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#EBF8FF;arcSize=12;absoluteArcSize=1;strokeWidth=1.5;verticalAlign=top;align=left;fontColor=#1D2D3E;fontStyle=1;fontSize=13;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="162" y="201" width="154" height="106" as="geometry" />
+        <mxCell id="btpbadge-a5360970" value="SAP BTP" style="rounded=1;whiteSpace=wrap;html=1;arcSize=40;absoluteArcSize=1;fillColor=#0070F2;strokeColor=none;fontColor=#FFFFFF;fontStyle=1;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="g-e5daba83" connectable="0">
+          <mxGeometry x="12" y="8" width="60" height="22" as="geometry" />
         </mxCell>
-        <mxCell id="g-cf02869b" value="SAP S/4HANA" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=12;absoluteArcSize=1;strokeWidth=1.5;verticalAlign=top;align=left;fontColor=#1D2D3E;fontStyle=1;fontSize=13;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="162" y="334" width="154" height="106" as="geometry" />
+        <mxCell id="g-cf02869b" value="SAP S/4HANA" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=24;absoluteArcSize=1;strokeWidth=1.5;verticalAlign=top;align=left;fontColor=#1D2D3E;fontStyle=1;fontSize=14;spacingLeft=12;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="534" y="222" width="260" height="106" as="geometry" />
         </mxCell>
-        <mxCell id="n-480cef4b" value="AP / Finance" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=24;absoluteArcSize=1;strokeWidth=1.5;fontColor=#1D2D3E;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="g-5b7dcd14">
-          <mxGeometry x="12" y="33" width="130" height="61" as="geometry" />
+        <mxCell id="n-480cef4b" value="AP / Finance" style="shape=image;verticalLabelPosition=bottom;verticalAlign=top;imageAspect=0;aspect=fixed;image=data:image/svg+xml,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGZpbGw9Im5vbmUiIHZpZXdCb3g9IjAgMCAyNCAyNCIgaGVpZ2h0PSIyNCIgd2lkdGg9IjI0Ij4mI3hhOzxnIGNsaXAtcGF0aD0idXJsKCNjbGlwMF85OTVfNTUpIj4mI3hhOzxwYXRoIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl85OTVfNTUpIiBkPSJNMCAxMS45NzYxQzAgMTAuMzIyMSAwLjMxODA5MSA4Ljc3OTMyIDAuOTU0Mjc0IDcuMzQ3OTFDMS41OTA0NiA1Ljg4NDY5IDIuNDQ5MyA0LjYxMjMzIDMuNTMwODIgMy41MzA4MkM0LjYxMjMzIDIuNDQ5MyA1Ljg4NDY5IDEuNTkwNDYgNy4zNDc5MSAwLjk1NDI3NEM4LjgxMTEzIDAuMzE4MDkxIDEwLjM2OTggMCAxMi4wMjM5IDBDMTMuNjc3OSAwIDE1LjIyMDcgMC4zMTgwOTEgMTYuNjUyMSAwLjk1NDI3NEMxOC4xMTUzIDEuNTkwNDYgMTkuMzg3NyAyLjQ0OTMgMjAuNDY5MiAzLjUzMDgyQzIxLjU1MDcgNC42MTIzMyAyMi40MDk1IDUuODg0NjkgMjMuMDQ1NyA3LjM0NzkxQzIzLjY4MTkgOC43NzkzMiAyNCAxMC4zMjIxIDI0IDExLjk3NjFDMjQgMTMuNjMwMiAyMy42ODE5IDE1LjE4ODkgMjMuMDQ1NyAxNi42NTIxQzIyLjQwOTUgMTguMTE1MyAyMS41NTA3IDE5LjM4NzcgMjAuNDY5MiAyMC40NjkyQzE5LjM4NzcgMjEuNTUwNyAxOC4xMTUzIDIyLjQwOTUgMTYuNjUyMSAyMy4wNDU3QzE1LjIyMDcgMjMuNjgxOSAxMy42Nzc5IDI0IDEyLjAyMzkgMjRDMTAuMzY5OCAyNCA4LjgxMTEzIDIzLjY4MTkgNy4zNDc5MSAyMy4wNDU3QzUuODg0NjkgMjIuNDA5NSA0LjYxMjMzIDIxLjU1MDcgMy41MzA4MiAyMC40NjkyQzIuNDQ5MyAxOS4zODc3IDEuNTkwNDYgMTguMTE1MyAwLjk1NDI3NCAxNi42NTIxQzAuMzE4MDkxIDE1LjE4ODkgMCAxMy42MzAyIDAgMTEuOTc2MVpNMTQuNDA5NSAxNS42MDI0QzE1LjQyNzQgMTUuNjAyNCAxNi4zNjU4IDE1Ljg0MSAxNy4yMjQ3IDE2LjMxODFDMTguMDgzNSAxNi43NjM0IDE4Ljc4MzMgMTcuMzgzNyAxOS4zMjQxIDE4LjE3ODlDMjAuMDU1NyAxNy4zNTE5IDIwLjYxMjMgMTYuNDEzNSAyMC45OTQgMTUuMzYzOEMyMS40MDc2IDE0LjMxNDEgMjEuNjE0MyAxMy4xODQ5IDIxLjYxNDMgMTEuOTc2MUMyMS42MTQzIDEwLjY0MDIgMjEuMzU5OCA5LjM5OTYgMjAuODUwOSA4LjI1NDQ3QzIwLjM0MTkgNy4wNzc1NCAxOS42NTgxIDYuMDU5NjQgMTguNzk5MiA1LjIwMDhDMTcuOTQwNCA0LjM0MTk1IDE2LjkyMjUgMy42NTgwNSAxNS43NDU1IDMuMTQ5MTFDMTQuNjAwNCAyLjY0MDE2IDEzLjM1OTggMi4zODU2OSAxMi4wMjM5IDIuMzg1NjlDMTAuNjg3OSAyLjM4NTY5IDkuNDMxNDEgMi42NDAxNiA4LjI1NDQ3IDMuMTQ5MTFDNy4xMDkzNCAzLjY1ODA1IDYuMDkxNDUgNC4zNDE5NSA1LjIwMDggNS4yMDA4QzQuMzQxOTUgNi4wNTk2NCAzLjY1ODA1IDcuMDc3NTQgMy4xNDkxMSA4LjI1NDQ3QzIuNjQwMTYgOS4zOTk2IDIuMzg1NjkgMTAuNjQwMiAyLjM4NTY5IDExLjk3NjFDMi4zODU2OSAxMy4xODQ5IDIuNTc2NTQgMTQuMzE0MSAyLjk1ODI1IDE1LjM2MzhDMy4zNzE3NyAxNi40MTM1IDMuOTQ0MzMgMTcuMzUxOSA0LjY3NTk0IDE4LjE3ODlDNS4yMTY3IDE3LjM4MzcgNS45MTY1IDE2Ljc2MzQgNi43NzUzNSAxNi4zMTgxQzcuNjM0MiAxNS44NDEgOC41NzI1NyAxNS42MDI0IDkuNTkwNDYgMTUuNjAyNEgxNC40MDk1Wk0xNi43OTUyIDkuNTkwNDZDMTYuNzk1MiAxMC4yNTg0IDE2LjY2OCAxMC44OTQ2IDE2LjQxMzUgMTEuNDk5QzE2LjE1OSAxMi4wNzE2IDE1LjgwOTEgMTIuNTgwNSAxNS4zNjM4IDEzLjAyNThDMTQuOTUwMyAxMy40Mzk0IDE0LjQ1NzMgMTMuNzczNCAxMy44ODQ3IDE0LjAyNzhDMTMuMzEyMSAxNC4yODIzIDEyLjY5MTggMTQuNDA5NSAxMi4wMjM5IDE0LjQwOTVDMTEuMzU1OSAxNC40MDk1IDEwLjcxOTcgMTQuMjgyMyAxMC4xMTUzIDE0LjAyNzhDOS41NDI3NCAxMy43NzM0IDkuMDMzOCAxMy40Mzk0IDguNTg4NDcgMTMuMDI1OEM4LjE3NDk1IDEyLjU4MDUgNy44NDA5NSAxMi4wNzE2IDcuNTg2NDggMTEuNDk5QzcuMzMyMDEgMTAuODk0NiA3LjIwNDc3IDEwLjI1ODQgNy4yMDQ3NyA5LjU5MDQ2QzcuMjA0NzcgOC45MjI0NyA3LjMzMjAxIDguMzAyMTkgNy41ODY0OCA3LjcyOTYyQzcuODQwOTUgNy4xNTcwNiA4LjE3NDk1IDYuNjQ4MTEgOC41ODg0NyA2LjIwMjc4QzkuMDMzOCA1Ljc1NzQ2IDkuNTQyNzQgNS40MDc1NSAxMC4xMTUzIDUuMTUzMDhDMTAuNzE5NyA0Ljg5ODYxIDExLjM1NTkgNC43NzEzNyAxMi4wMjM5IDQuNzcxMzdDMTIuNjkxOCA0Ljc3MTM3IDEzLjMxMjEgNC44OTg2MSAxMy44ODQ3IDUuMTUzMDhDMTQuNDU3MyA1LjQwNzU1IDE0Ljk1MDMgNS43NTc0NiAxNS4zNjM4IDYuMjAyNzhDMTUuODA5MSA2LjY0ODExIDE2LjE1OSA3LjE1NzA2IDE2LjQxMzUgNy43Mjk2MkMxNi42NjggOC4zMDIxOSAxNi43OTUyIDguOTIyNDcgMTYuNzk1MiA5LjU5MDQ2Wk0xNC40MDk1IDkuNTkwNDZDMTQuNDA5NSA4LjkyMjQ3IDE0LjE3MSA4LjM2NTgxIDEzLjY5MzggNy45MjA0OEMxMy4yMTY3IDcuNDQzMzQgMTIuNjYgNy4yMDQ3NyAxMi4wMjM5IDcuMjA0NzdDMTEuMzU1OSA3LjIwNDc3IDEwLjc4MzMgNy40NDMzNCAxMC4zMDYyIDcuOTIwNDhDOS44MjkwMyA4LjM2NTgxIDkuNTkwNDYgOC45MjI0NyA5LjU5MDQ2IDkuNTkwNDZDOS41OTA0NiAxMC4yNTg0IDkuODI5MDMgMTAuODMxIDEwLjMwNjIgMTEuMzA4MkMxMC43ODMzIDExLjc1MzUgMTEuMzU1OSAxMS45NzYxIDEyLjAyMzkgMTEuOTc2MUMxMi42NiAxMS45NzYxIDEzLjIxNjcgMTEuNzUzNSAxMy42OTM4IDExLjMwODJDMTQuMTcxIDEwLjgzMSAxNC40MDk1IDEwLjI1ODQgMTQuNDA5NSA5LjU5MDQ2Wk02LjQ4OTA3IDE5Ljg0ODlDNy4yNTI0OSAyMC4zODk3IDguMDk1NDMgMjAuODE5MSA5LjAxNzg5IDIxLjEzNzJDOS45NzIxNyAyMS40NTUzIDEwLjk3NDIgMjEuNjE0MyAxMi4wMjM5IDIxLjYxNDNDMTMuMDQxNyAyMS42MTQzIDE0LjAxMTkgMjEuNDU1MyAxNC45MzQ0IDIxLjEzNzJDMTUuODg4NyAyMC44MTkxIDE2Ljc0NzUgMjAuMzg5NyAxNy41MTA5IDE5Ljg0ODlDMTcuMTkyOCAxOS4yNzYzIDE2Ljc0NzUgMTguODMxIDE2LjE3NSAxOC41MTI5QzE1LjYzNDIgMTguMTYzIDE1LjA0NTcgMTcuOTg4MSAxNC40MDk1IDE3Ljk4ODFIOS41OTA0NkM4Ljk1NDI4IDE3Ljk4ODEgOC4zNDk5IDE4LjE2MyA3Ljc3NzM0IDE4LjUxMjlDNy4yMzY1OCAxOC44MzEgNi44MDcxNiAxOS4yNzYzIDYuNDg5MDcgMTkuODQ4OVoiLz4mI3hhOzwvZz4mI3hhOzxkZWZzPiYjeGE7PGxpbmVhckdyYWRpZW50IGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIiB5Mj0iMjQiIHgyPSIxMiIgeTE9IjAiIHgxPSIxMiIgaWQ9InBhaW50MF9saW5lYXJfOTk1XzU1Ij4mI3hhOzxzdG9wIHN0b3AtY29sb3I9IiM1QjczOEIiLz4mI3hhOzxzdG9wIHN0b3AtY29sb3I9IiMyMjM1NDgiIG9mZnNldD0iMSIvPiYjeGE7PC9saW5lYXJHcmFkaWVudD4mI3hhOzxjbGlwUGF0aCBpZD0iY2xpcDBfOTk1XzU1Ij4mI3hhOzxyZWN0IGZpbGw9IndoaXRlIiBoZWlnaHQ9IjI0IiB3aWR0aD0iMjQiLz4mI3hhOzwvY2xpcFBhdGg+JiN4YTs8L2RlZnM+JiN4YTs8L3N2Zz4=;fontStyle=0;fontSize=12;fontColor=#1D2D3E;" vertex="1" parent="1">
+          <mxGeometry x="69.5" y="169" width="48" height="48" as="geometry" />
         </mxCell>
-        <mxCell id="n-1f508ec9" value="Italian SDI + Suppliers" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=24;absoluteArcSize=1;strokeWidth=1.5;fontColor=#1D2D3E;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="g-59d8f3ec">
-          <mxGeometry x="12" y="33" width="130" height="61" as="geometry" />
+        <mxCell id="n-1f508ec9" value="Italian SDI + Suppliers" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;absoluteArcSize=1;strokeColor=#475E75;fillColor=#FFFFFF;strokeWidth=1.5;fontColor=#1D2D3E;fontSize=12;verticalAlign=middle;align=center;spacingLeft=6;spacingRight=6;" vertex="1" parent="g-59d8f3ec">
+          <mxGeometry x="16" y="32" width="228" height="60" as="geometry" />
         </mxCell>
         <mxCell id="n-94a0426e" value="Invoice Processing" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=24;absoluteArcSize=1;strokeWidth=1.5;fontColor=#1D2D3E;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="g-e5daba83">
-          <mxGeometry x="12" y="33" width="130" height="61" as="geometry" />
+          <mxGeometry x="18" y="44" width="159" height="54" as="geometry" />
         </mxCell>
-        <mxCell id="n-5cacba51" value="S/4HANA Cloud / On-Prem" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=24;absoluteArcSize=1;strokeWidth=1.5;fontColor=#1D2D3E;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="g-cf02869b">
-          <mxGeometry x="12" y="33" width="130" height="61" as="geometry" />
+        <mxCell id="n-5cacba51" value="S/4HANA Cloud / On-Prem" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;absoluteArcSize=1;strokeColor=#0070F2;fillColor=#FFFFFF;strokeWidth=1.5;fontColor=#1D2D3E;fontSize=12;verticalAlign=middle;align=center;spacingLeft=6;spacingRight=6;" vertex="1" parent="g-cf02869b">
+          <mxGeometry x="16" y="32" width="228" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="e-84896d3e" value="FatturaPA + PDF in" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;bendable=1;startArrow=none;dashed=1;dashPattern=8 4;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;labelBorderColor=none;verticalAlign=middle;align=center;exitX=0.5;exitY=1.0;exitDx=0;exitDy=0;entryX=0.5;entryY=0.0;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-1f508ec9" target="n-94a0426e">
+        <mxCell id="sapdp:channels" value="[{&quot;id&quot;:&quot;V0&quot;,&quot;axis&quot;:&quot;v&quot;,&quot;rect&quot;:[147.0,96,96.0,218]},{&quot;id&quot;:&quot;V1&quot;,&quot;axis&quot;:&quot;v&quot;,&quot;rect&quot;:[438.0,96,96.0,218]},{&quot;id&quot;:&quot;Htop&quot;,&quot;axis&quot;:&quot;h&quot;,&quot;rect&quot;:[69.5,62.0,708.5,24.0]},{&quot;id&quot;:&quot;Hbot&quot;,&quot;axis&quot;:&quot;h&quot;,&quot;rect&quot;:[69.5,324.0,708.5,24.0]}]" style="text;html=0;" vertex="1" parent="1" visible="0">
+          <mxGeometry x="0" y="0" width="1" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="sapdp:node_obstacles" value="{&quot;n-480cef4b&quot;:[69.5,169,48,72],&quot;n-1f508ec9&quot;:[550,96,228,60],&quot;n-94a0426e&quot;:[261,182,159,54],&quot;n-5cacba51&quot;:[550,254,228,60]}" style="text;html=0;" vertex="1" parent="1" visible="0">
+          <mxGeometry x="0" y="0" width="1" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-84896d3e" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;bendable=1;startArrow=none;dashed=1;dashPattern=8 4;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;labelBorderColor=none;verticalAlign=middle;align=center;exitX=0.0;exitY=0.5;exitDx=0;exitDy=0;entryX=1.0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-1f508ec9" target="n-94a0426e">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="286" y="174" />
-              <mxPoint x="286" y="179" />
-              <mxPoint x="286" y="184" />
+              <mxPoint x="500" y="126" />
+              <mxPoint x="500" y="209" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="e-dc188591" value="process / approve" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;bendable=1;startArrow=none;dashed=0;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;labelBorderColor=none;verticalAlign=middle;align=center;exitX=0.5;exitY=1.0;exitDx=0;exitDy=0;entryX=0.5;entryY=0.0;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-480cef4b" target="n-94a0426e">
+        <mxCell id="p-84896d3e" value="FatturaPA + PDF in" style="text;html=1;whiteSpace=wrap;rounded=0;strokeColor=none;fillColor=#FFFFFF;fontColor=#556B82;fontSize=10;align=center;verticalAlign=middle;" vertex="1" parent="1" connectable="0">
+          <mxGeometry x="436" y="182" width="127" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="e-dc188591" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;bendable=1;startArrow=none;dashed=0;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;labelBorderColor=none;verticalAlign=middle;align=center;exitX=1.0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-480cef4b" target="n-94a0426e">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="192" y="174" />
-              <mxPoint x="192" y="179" />
-              <mxPoint x="192" y="184" />
+              <mxPoint x="195" y="193" />
+              <mxPoint x="195" y="209" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="e-0e647f28" value="post supplier invoice" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;bendable=1;startArrow=none;dashed=0;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;labelBorderColor=none;verticalAlign=middle;align=center;exitX=0.5;exitY=1.0;exitDx=0;exitDy=0;entryX=0.5;entryY=0.0;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-94a0426e" target="n-5cacba51">
+        <mxCell id="p-dc188591" value="process / approve" style="text;html=1;whiteSpace=wrap;rounded=0;strokeColor=none;fillColor=#FFFFFF;fontColor=#556B82;fontSize=10;align=center;verticalAlign=middle;" vertex="1" parent="1" connectable="0">
+          <mxGeometry x="120" y="184" width="121" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="e-0e647f28" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=blockThin;endFill=1;endSize=4;startSize=4;strokeColor=#475E75;strokeWidth=1.5;bendable=1;startArrow=none;dashed=0;fontSize=10;fontColor=#556B82;labelBackgroundColor=#FFFFFF;labelBorderColor=none;verticalAlign=middle;align=center;exitX=1.0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n-94a0426e" target="n-5cacba51">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="239" y="307" />
-              <mxPoint x="239" y="312" />
-              <mxPoint x="239" y="317" />
+              <mxPoint x="512" y="209" />
+              <mxPoint x="512" y="284" />
             </Array>
           </mxGeometry>
+        </mxCell>
+        <mxCell id="p-0e647f28" value="post supplier invoice" style="text;html=1;whiteSpace=wrap;rounded=0;strokeColor=none;fillColor=#FFFFFF;fontColor=#556B82;fontSize=10;align=center;verticalAlign=middle;" vertex="1" parent="1" connectable="0">
+          <mxGeometry x="369" y="248" width="146" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="netsep-6b778a5f" value="" style="endArrow=none;html=1;strokeColor=#5B738B;bendable=1;rounded=1;endFill=0;endSize=3;strokeWidth=3;jumpStyle=gap;" edge="1" parent="1" connectable="0">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="486" y="64" as="sourcePoint" />
+            <mxPoint x="486" y="328" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="486" y="64" />
+              <mxPoint x="486" y="328" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="netsep-ad145888" value="NETWORK" style="text;html=1;align=left;verticalAlign=middle;resizable=0;autosize=1;strokeColor=none;fillColor=none;fontSize=12;fontColor=#1D2D3E;fontFamily=Helvetica;" vertex="1" parent="1" connectable="0">
+          <mxGeometry x="446" y="292" width="80" height="30" as="geometry" />
         </mxCell>
         <mxCell id="legend-fe65070e" value="Legend" style="rounded=1;whiteSpace=wrap;html=1;arcSize=6;absoluteArcSize=1;strokeColor=#475F75;fillColor=#FFFFFF;strokeWidth=1.5;fontColor=#0070F2;fontSize=12;fontStyle=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="226" y="388" width="220" height="80" as="geometry" />
+          <mxGeometry x="582" y="352" width="220" height="80" as="geometry" />
         </mxCell>
         <mxCell id="legline-36c337ce" value="" style="endArrow=none;strokeColor=#475E75;strokeWidth=1.5;dashed=0;" edge="1" parent="legend-fe65070e">
           <mxGeometry relative="1" as="geometry">

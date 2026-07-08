@@ -95,68 +95,174 @@ Using `AskUserQuestion`, ask only what is still ambiguous **after** Steps 2–3 
 
 Present the consolidated inventory (canonical names from Step 2) + best-practice findings (Step 3) + the interview answers, and offer three choices: **accept** · **apply best-practice suggestions** · **amend manually** (then re-run Step 3 on the edits). Wait for the answer. Only proceed once confirmed (or `auto` was given).
 
-### Step 6 — Build the JSON IR
+### Step 6 — Build the IR v2 (authoring grammar)
 
-Compose one JSON object per level. See [`examples/`](examples/) for worked patterns.
+Compose one JSON object per level. See [`examples/`](examples/) for worked v1 patterns and [`tests/fixtures/ir-v2-sample.json`](../../tests/fixtures/ir-v2-sample.json) for the full v2 archetype this step is grounded in. IR v2 is a **strict superset** of v1 — every v1 field still works; the fields below are additive.
 
-```json
-{
-  "metadata": {"title": "…", "level": "L0|L1|L2|L3", "author": "…", "iconSize": "S|M|L (optional)"},
-  "groups": [
-    {"id": "users",  "type": "user",       "position": "top-left"},
-    {"id": "btp",    "type": "btp-layer",  "position": "center", "label": "SAP BTP"},
-    {"id": "in",     "type": "btp-layer",  "parent": "btp", "label": "Inbound", "flow": "row"},
-    {"id": "s4",     "type": "sap-app",    "position": "right", "label": "Backends"}
-  ],
-  "nodes": [
-    {"id": "u1",  "label": "End User", "group": "users"},
-    {"id": "cap", "label": "CAP Backend", "service": "SAP BTP Cloud Foundry Runtime", "group": "btp-core", "interface": "sap", "step": 1},
-    {"id": "s4h", "label": "S/4HANA", "subtitle": "Private Cloud Edition", "group": "s4"}
-  ],
-  "edges": [
-    {"id": "e1", "source": "u1", "target": "cap", "style": "solid", "label": "Authenticate", "kind": "authenticate"}
-  ]
-}
-```
+**`metadata`**
 
-**Group `type` drives the molecule automatically** (no manual presets needed):
+| field | type | purpose |
+|---|---|---|
+| `title`, `level`, `author` | string | as v1 |
+| `iconSize` | `S`\|`M`\|`L` (optional) | default service-icon render size |
+| `branding.customerLogo` | string (optional) | ref into `assets/brand-pack(.local)/`; renders top-left, next to the title. Only set this from the customer's own asset pack — never embed a customer logo you don't have explicit rights to use (see the confidentiality rule for customer logos) |
+| `branding.partnerWatermark` | string (optional) | large, low-contrast background image ref |
+| `badges.hyperscalers` / `badges.runtimes` | `[string, ...]` (optional) | diagram-level badge strip (same shape as a group's `badges`) |
+| `networkSeparator` | bool (default `true`) | draws the vertical grey NETWORK bar between the BTP center and any RIGHT-zone tier; leave it on whenever a `cloud-tier`/`sap-app`/`non-sap`/`third-party`/`external` group sits outside the BTP frame, set `false` only when there is nothing on the right to separate from |
+| `layoutHints` | `[]` (top-level, sibling of `metadata`) | the 7-op patch vocabulary — see [`references/visual-rubric.md`](references/visual-rubric.md). **Leave this empty at authoring time.** It exists for Step 8's vision loop to fill in; hand-authoring a hint here almost always means the real fix belongs in `zone`/`flow`/`type` instead |
+
+**`groups[]` — `type` drives the molecule automatically** (no manual presets needed):
 
 | `type` | Zone | Rendered as |
 |---|---|---|
 | `user` | LEFT | **frameless** person/device icon + label (no box) |
 | `btp-layer` | CENTER | blue `#EBF8FF` container with a **"SAP BTP" logo chip**; nested lanes = white inner frames |
+| `subaccount` | CENTER (nested inside `btp-layer` via `parent`) | white BTP-bordered inner frame labelled "Subaccount: …"; **nestable** — set a `subaccount` group's `parent` to another `subaccount` id to model containment (e.g. `Extension Test` ⊃ `Extension Production`) |
+| `governance` | TOP (own band above the BTP frame) | wide BTP-blue strip spanning the canvas width, for cross-cutting governance/monitoring products (e.g. Cloud ALM) |
+| `cloud-tier` | RIGHT | a labelled tier box; set `kind: "public"\|"private"\|"any-premise"` — `public`/`private` render with the SAP-blue border (`tier-box-sap`), `any-premise` renders grey (`tier-box-nonsap`) unless the tier is itself SAP-managed |
+| `custom-app` | RIGHT (or wherever `zone` places it) | BTP-blue **product-style** card for a bespoke application built on BTP (distinct from a `sap-app`, which is a SAP-shipped product) |
 | `sap-app` | RIGHT | white backend **box** with icon-left + title (+`subtitle`), BTP-blue border |
 | `third-party` / `non-sap` / `external` | RIGHT | white backend **box**, grey border |
 
-**Layout is deterministic** (the zone engine `scripts/_zone_layout.py`): the `position` field (`top-left`…`bottom-right`) maps to a column (LEFT/CENTER/RIGHT) + band (top/middle/bottom); containers auto-size to their contents. Use `zone` to override the column and `flow` (`row`|`col`|`grid`) to override intra-group packing. **There is no graphviz dependency.**
+Every group also accepts `badges: {hyperscalers: [...], runtimes: [...]}` (rendered as small logo badges on the group, typically on `subaccount`/`cloud-tier`), `parent` (nesting), `position` (`top-left`…`bottom-right`, mapped to column+band), `zone` (`left`\|`center`\|`right`, overrides the column), and `flow` (`row`\|`col`\|`grid`, intra-group packing).
 
-Node options: `service` (canonical name → icon), `genericIcon` (user/mobile/desktop/database/…), `subtitle`, `interface` (`sap`|`generic`), `step` (1–99) + `stepKind`, `boxStyle` (fallback when no icon). Edge `kind`: `trust`/`authenticate`/`authorize`/`generic_protocol`/`annotation` render canonical pills; `style`: solid/dashed/dotted/thick. Use kebab-case IDs.
+**Layout is deterministic** (the skeleton slot engine `scripts/_skeleton_layout.py`, no graphviz dependency): `position` maps to a column (LEFT/CENTER/RIGHT) + band (top/middle/bottom); containers auto-size to their contents.
 
-### Step 7 — Generate
+**`nodes[]`**
 
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate-drawio.py" /tmp/diagram-<level>.json --out "<output_dir>/<title>-<level>.drawio"
+| field | type | purpose |
+|---|---|---|
+| `service` | string | canonical Discovery-Center name → icon |
+| `genericIcon` | string | `user`/`mobile`/`desktop`/`database`/… when there's no service icon |
+| `type` | `product`\|`chip`\|`db` (optional) | `product` — a leaf molecule with a `capabilities` grid instead of child nodes (e.g. "SAP Build Process Automation" with Workflow/Decision/Visibility/RPA chips); `chip` — a small white BTP-bordered label chip (e.g. a PCE/runtime marker inside a `cloud-tier`); `db` — the cylinder datastore molecule |
+| `capabilities` | `[{label, icon?}, ...]` (only on `type: "product"`) | rendered as an icon+label grid inside the product box; `icon` is optional (bare-label capabilities render text-only) |
+| `subtitle` | string | one-line caption under the title (backend-box / product-box molecules) |
+| `interface` | `sap`\|`generic` | "Interface" pill at the top of the node |
+| `step` / `stepKind` | int (1–99) / color name | numbered step circle |
+| `boxStyle` | string | fallback box variant when no icon resolves |
+
+**`edges[]`**
+
+| field | type | purpose |
+|---|---|---|
+| `style` | `solid`\|`dashed`\|`dotted`\|`thick` (v1) | line style |
+| `kind` | `trust`\|`authenticate`\|`authorize`\|`generic_protocol`\|`annotation`\|`positive`\|`critical`\|`negative`\|`default` (v1) | canonical SAP pill/color when the edge doesn't need a `flowFamily` |
+| `flowFamily` | `identity`\|`provisioning`\|`master-data`\|`transport`\|`firewall`\|`default` (v2) | selects one of the six `edge-*` style-contract molecules (colour + dash family) — use this over `kind` whenever the edge represents one of these semantic flows; `firewall` renders `strokeWidth=3` |
+| `pill` | string (v2) | free-text protocol/annotation label rendered as a pill on the edge (e.g. `"SAML2/OIDC"`, `"SCIM"`, `"CTMS"`) — independent of `kind`/`pillColor` |
+
+Use kebab-case IDs throughout.
+
+**Identity placement.** The identity cluster (IAS / XSUAA / Authorization) is never folded into a generic ops/third-party box. If it's parented to the BTP frame (`parent: "<btp-group-id>"`), it nests inside as its own labelled BTP-blue inner frame near the bottom. If it isn't parented (a standalone top-level group), give it its own `btp-layer`-typed group positioned just below the main BTP frame — never place it on the RIGHT with the backends.
+
+**Worked example (archetype A)** — governance strip + nested subaccounts + a `product` node with capabilities + `cloud-tier`s (public/private/any-premise) + `flowFamily` edges + branding (adapted from `tests/fixtures/ir-v2-sample.json`; trimmed here for readability):
+
+```json
+{
+  "metadata": {
+    "title": "Archetype A", "level": "L1", "author": "…",
+    "branding": {"customerLogo": "acme", "partnerWatermark": "lutech"},
+    "badges": {"hyperscalers": ["azure"], "runtimes": ["cloud-foundry"]}
+  },
+  "layoutHints": [],
+  "groups": [
+    {"id": "governance", "type": "governance", "label": "Governance", "position": "top"},
+    {"id": "btp", "type": "btp-layer", "label": "SAP BTP", "position": "center"},
+    {"id": "subaccount-test", "type": "subaccount", "label": "Test", "parent": "btp"},
+    {"id": "subaccount-production", "type": "subaccount", "label": "Production", "parent": "subaccount-test"},
+    {"id": "cloud-tier-right", "type": "cloud-tier", "label": "Private Cloud", "position": "right", "kind": "private"},
+    {"id": "personas", "type": "user", "label": "Personas", "position": "left"},
+    {"id": "identity", "type": "btp-layer", "label": "Identity", "position": "bottom"}
+  ],
+  "nodes": [
+    {"id": "cloud-alm", "label": "Cloud ALM", "group": "governance", "type": "product", "service": "Cloud ALM",
+     "capabilities": [{"label": "Monitor", "icon": "monitor"}, {"label": "Analyze"}, {"label": "Automate", "icon": "automate"}, {"label": "Alert"}]},
+    {"id": "bpa", "label": "Build Process Automation", "group": "subaccount-production", "type": "product", "service": "Build Process Automation",
+     "capabilities": [{"label": "Workflow", "icon": "workflow"}, {"label": "Decision"}, {"label": "Visibility", "icon": "visibility"}, {"label": "RPA"}]},
+    {"id": "pce", "label": "Private Cloud Edition (PCE)", "group": "cloud-tier-right", "type": "chip"},
+    {"id": "persona-admin", "label": "IT Admin", "group": "personas", "genericIcon": "user"},
+    {"id": "ias", "label": "Identity Authentication", "group": "identity", "service": "Identity Authentication"}
+  ],
+  "edges": [
+    {"id": "e1", "source": "persona-admin", "target": "ias", "style": "solid", "label": "Login", "flowFamily": "identity", "pill": "SAML2/OIDC"},
+    {"id": "e2", "source": "cloud-alm", "target": "bpa", "style": "dashed", "label": "Process insights", "flowFamily": "master-data"},
+    {"id": "e3", "source": "bpa", "target": "pce", "style": "solid", "label": "Deploy config", "flowFamily": "transport", "pill": "CTMS"}
+  ]
+}
 ```
 
-Default `<output_dir>` is `./diagrams/` (override via `.claude/sap-diagrams-pro.local.md`).
+See [`references/atomic-design.md`](references/atomic-design.md) and [`references/component-groups.md`](references/component-groups.md) for how each of these maps to a molecule/organism in the style contract.
 
-### Step 8 — Verify (XML + composition + visual)
+### Step 7 — Validate the IR
+
+Before generating anything, run the IR grammar gate:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate-drawio.py"   "<out>.drawio"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/check-composition.py" "<out>.drawio"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render-preview.py"    "<out>.drawio" --out "<out>.png"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate-ir.py" /tmp/diagram-<level>.json
 ```
 
-- `validate-drawio.py` — XML structure, Horizon palette, line styles, orphan edges.
-- `check-composition.py` — zone overlaps (FAIL), title band, columns, legend presence.
-- `render-preview.py` — PNG preview (best-effort; skipped gracefully if draw.io isn't installed).
+- **Exit 0** (`OK`) — proceed to Step 8.
+- **Exit 2** — one or more `ERROR <where>: <what>.` lines (with `Allowed: <...>` when there's a fixed vocabulary). Read the actionable error, fix the IR (wrong enum value, dangling `parent` reference, malformed `capabilities`/`badges`/`branding` shape, cyclic group parenting…), and re-validate. Do not call `generate-drawio.py` until this exits 0.
 
-If a CRITICAL (validator) or FAIL (composition) is reported, fix the IR and regenerate before announcing completion.
+### Step 8 — Generate + gate + visual-rubric loop
+
+1. **Generate**
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate-drawio.py" /tmp/diagram-<level>.json --out "<output_dir>/<title>-<level>.drawio"
+   ```
+
+   Default `<output_dir>` is `./diagrams/` (override via `.claude/sap-diagrams-pro.local.md`).
+
+2. **Gate — mechanical checks, must be green before any visual pass**
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate-drawio.py"   "<out>.drawio" --strict
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/check-composition.py" "<out>.drawio"
+   ```
+
+   - `validate-drawio.py --strict` — XML structure, Horizon palette, line styles, orphan edges; exits 1 if any CRITICAL is found.
+   - `check-composition.py` — the **geometric** gate (zone overlaps, piercings, crossing budget once computed, legend presence); exits 2 on any FAIL.
+
+   On any CRITICAL/FAIL: fix the IR and regenerate. **Max 2 mechanical retries** before escalating to the user with the exact error.
+
+3. **Render**
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render-preview.py" "<out>.drawio" --engine auto --out "<out>.png"
+   ```
+
+   `--engine auto` (default) picks the draw.io desktop CLI when present, else `_pure_render.py` (Pillow-based) — see the degrade path below if neither is available.
+
+4. **Look — read the PNG and evaluate every check in [`references/visual-rubric.md`](references/visual-rubric.md)** (26 binary checks across Composition/Routing/Typography/Semantics). Emit findings JSON, one object per failing check:
+
+   ```json
+   [{"rule": "route-no-pierce", "location": "edge 'e3' cuts through the BPA box", "patch": {"op": "channel_prefer", "edge": "e3", "value": "V2"}}]
+   ```
+
+   `patch` is one of the 7 ops (`references/visual-rubric.md`'s table) or `null` for a manual/content finding (recolor, icon swap, legend content…) — surface `null`-patch findings to the user in the final report; never invent an 8th op.
+
+5. **Patch + regenerate + re-render**
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/apply-rubric-patches.py" /tmp/diagram-<level>.json --findings /tmp/findings-<n>.json
+   # then repeat steps 1–4 on the same IR
+   ```
+
+6. **Repeat the look → patch → regenerate loop at most 3 vision iterations.** Deliver only when `check-composition.py` reports 0 FAIL **and** every auto-checkable rubric item passes (surface remaining manual/content items to the user as a punch list — a `null` patch still counts against "green" but is not a blocker on its own). Include a **scorecard** in the final report:
+
+   ```
+   Gate: 0 FAIL / 0 WARN (check-composition) · 0 CRITICAL (validate-drawio)
+   Rubric: 24/26 pass (2 manual findings outstanding: sem-icons-match, comp-legend-present)
+   Crossings: 3 · Piercings: 0 · Vision iterations used: 2/3
+   ```
+
+   The user may explicitly override and ask to deliver despite a residual WARN/manual finding — honour it, but log the override and the residual list in the report; never silently drop it.
+
+7. **Degrade path (no render engine available).** If `render-preview.py --engine auto` cannot produce a PNG (no draw.io launcher **and** Pillow missing, so `--engine pure` also fails) skip the vision loop entirely — run the geometric gate only (steps 1–2) and say so explicitly in the report as a **WARNING** ("visual rubric skipped: no render engine available — install draw.io desktop or `pip install pillow`"). Never dead-end: deliver the `.drawio` with the gate result and the warning.
 
 ### Step 9 — Report
 
-Per file: path, level, element counts, validator + composition summary, and the PNG path if rendered. For multi-level, note cross-level consistency. Suggest opening in draw.io desktop / [drawio.com](https://drawio.com) / VS Code draw.io extension, and (when relevant) SAP Architecture Center submission.
+Per file: path, level, element counts, the gate scorecard (validator + composition + rubric, per Step 8.6), and the PNG path if rendered. Call out any degrade-path WARNING (Step 8.7) and any user-approved override explicitly. For multi-level, note cross-level consistency. Suggest opening in draw.io desktop / [drawio.com](https://drawio.com) / VS Code draw.io extension, and (when relevant) SAP Architecture Center submission.
 
 ## Configuration
 
@@ -168,10 +274,11 @@ Per file: path, level, element counts, validator + composition summary, and the 
 - [`references/sap-skills-integration.md`](references/sap-skills-integration.md) — which SAP skills + MCP to consult, per concern.
 - [`references/component-groups.md`](references/component-groups.md) — organisms + the BTP-service vs SaaS-product rule.
 - [`references/atomic-design.md`](references/atomic-design.md), [`references/horizon-palette.md`](references/horizon-palette.md), [`references/line-styles-spacing.md`](references/line-styles-spacing.md), [`references/levels-l0-l1-l2.md`](references/levels-l0-l1-l2.md), [`references/shape-libraries-index.md`](references/shape-libraries-index.md).
+- [`references/visual-rubric.md`](references/visual-rubric.md) — the 26 binary checks + 7-op patch vocabulary driving Step 8's vision loop.
 
 ## Quality bar
 
-A "good" diagram: opens cleanly in draw.io; 0 validator CRITICAL and 0 composition FAIL; uses canonical Discovery-Center names; right level (L0 ≤ 10 / L1 10–30 / L2 ≥ 30 elements); every edge labelled; consistent across levels. If two criteria are missed, regenerate before delivering.
+A "good" diagram: opens cleanly in draw.io; `validate-ir.py` exits 0; 0 validator CRITICAL and 0 composition FAIL; every auto-checkable [`visual-rubric.md`](references/visual-rubric.md) item passes (remaining manual findings disclosed); uses canonical Discovery-Center names; right level (L0 ≤ 10 / L1 10–30 / L2 ≥ 30 elements); every edge labelled; consistent across levels. If two criteria are missed, regenerate before delivering.
 
 ## L3 extension — non-standard
 

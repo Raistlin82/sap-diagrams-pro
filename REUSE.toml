@@ -18,3 +18,46 @@ path = [
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Gabriele Capparelli"
 SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "assets/brand-pack/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "SAP SE or an SAP affiliate company"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+# Pre-rasterized PNGs of the SAP service/generic icon glyphs (+ the public
+# brand-pack chip) — same posture as assets/brand-pack/. brand-pack.local's
+# derived PNGs live in the gitignored assets/icon-atlas.local/ instead and
+# are intentionally not annotated here (never committed).
+path = "assets/icon-atlas/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "SAP SE or an SAP affiliate company"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+# Style values derive from SAP's btp-solution-diagrams shape libraries.
+path = [
+    "assets/style-contract.json",
+    "assets/style-contract.schema.json",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "SAP SE or an SAP affiliate company"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+# Arimo (static TTF builds), bundled so scripts/_pure_render.py renders text
+# identically on every machine instead of depending on whatever TrueType
+# fonts (if any) happen to be installed system-wide -- see that module's
+# docstring. Fetched from the upstream project's own repo
+# (https://github.com/googlefonts/Arimo, fonts/ttf/*.ttf), which is also
+# what Google Fonts' ofl/arimo distribution builds from. Google originally
+# released the Arimo/Tinos/Cousine "Croscore" metric-compatible family
+# under Apache-2.0; the current, canonical Arimo distribution (per that
+# repo's own OFL.txt and Google Fonts' METADATA.pb) is licensed SIL Open
+# Font License 1.1, not Apache-2.0 -- annotated accurately here regardless
+# of the font's older licensing history.
+path = "assets/fonts/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2020 The Arimo Project Authors (https://github.com/googlefonts/arimo)"
+SPDX-License-Identifier = "OFL-1.1"

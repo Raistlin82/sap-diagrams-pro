@@ -1,0 +1,372 @@
+{
+  "meta": {
+    "corpus": [
+      "20-02-99-02-sap-btp-service-icons-all-size-M.xml",
+      "SAP_BTP_Architecture_20240909_Lutech_SSAM.drawio",
+      "SAP_Task_Center_L1.drawio",
+      "SNAM_Landscape_S4HANA.drawio",
+      "annotations_and_interfaces.xml",
+      "area_shapes.xml",
+      "brandart_arch_v01.drawio",
+      "connectors.xml",
+      "essentials.xml",
+      "numbers.xml",
+      "sap_brand_names.xml",
+      "text_elements.xml"
+    ],
+    "generatedAt": "2026-07-05",
+    "notes": "Colors normalized to SAP Horizon; image payloads are @{…} placeholders resolved from the brand pack at emit time (no base64 in this file).",
+    "palette": [
+      "#0070F2",
+      "#07838F",
+      "#188918",
+      "#1D2D3E",
+      "#470BED",
+      "#475E75",
+      "#556B82",
+      "#5B738B",
+      "#5D36FF",
+      "#C35500",
+      "#CC00DC",
+      "#D20A0A",
+      "#DAFDF5",
+      "#EBF8FF",
+      "#F1ECFF",
+      "#F5F6F7",
+      "#F5FAE5",
+      "#FFEAF4",
+      "#FFF0FA",
+      "#FFF8D6",
+      "#FFFFFF"
+    ],
+    "placeholders": [
+      "hyperscaler",
+      "persona",
+      "runtime",
+      "service",
+      "watermark"
+    ],
+    "scriptVersion": "1.0.0"
+  },
+  "molecules": {
+    "backend-box": {
+      "from": "essentials.xml:On-Premise",
+      "geometry": {
+        "h": 70,
+        "iconH": 30,
+        "iconW": 28.24,
+        "padX": 14,
+        "textX": 52,
+        "w": 202
+      },
+      "notes": "essentials.xml 'On-Premise' rounded box (202x70 group; inner rect 197x70). Icon inset padX=14 (28.24x30); text starts at x=52.",
+      "source": "official",
+      "style": "rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;strokeWidth=1.5;arcSize=14;fillColor=#FFFFFF;perimeterSpacing=0;"
+    },
+    "badge-hyperscaler": {
+      "from": "BRANDART:ywlMBdhw0FJrmfMDHqjQ-158 (hyperscaler logo)",
+      "geometry": {
+        "h": 55,
+        "w": 82.5
+      },
+      "notes": "BRANDART hyperscaler logo badge (Azure preferred). SSAM embeds hyperscaler logos as unlabeled base64 images (not selectable); Brandart carries an identifiable logo image. image→@{hyperscaler}. AWS logo also present (55x37)",
+      "source": "exemplar",
+      "style": "shape=image;verticalLabelPosition=bottom;labelBackgroundColor=default;verticalAlign=top;aspect=fixed;imageAspect=0;image=@{hyperscaler};"
+    },
+    "badge-runtime": {
+      "from": "20-02-99-02-sap-btp-service-icons-all-size-M.xml:runtime-badge",
+      "geometry": {
+        "h": 32,
+        "w": 32
+      },
+      "notes": "A CF-specific cell exists in the all-size-M library ('10017-sap-btp_cloud-foundry-runtime_sd' — entries are titled only by tech-id, not friendly name); its style skeleton is byte-identical to the generic service-icon skeleton, which we reuse with @{runtime}. The concrete CF/Kyma logo is supplied at emit time (brand pack cf-badge).",
+      "source": "official",
+      "style": "shape=image;verticalLabelPosition=bottom;verticalAlign=top;imageAspect=0;aspect=fixed;image=@{runtime};fontStyle=0;fontSize=12;fontColor=#1D2D3E"
+    },
+    "btp-area": {
+      "from": "essentials.xml:BTP base layer",
+      "geometry": {
+        "h": 250,
+        "logoH": 18.55,
+        "logoW": 67.25,
+        "logoX": 18.55,
+        "logoY": 18.55,
+        "w": 288
+      },
+      "notes": "essentials.xml 'BTP base layer' outer blue area (arcSize=32). The SAP-logo chip is a separate child image cell at (18.55,18.55) 67.25x18.55 (see brand pack @{sap-logo-chip}).",
+      "source": "official",
+      "style": "rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#EBF8FF;arcSize=32;absoluteArcSize=1;imageWidth=64;imageHeight=64;strokeWidth=1.5;"
+    },
+    "capability-chip": {
+      "from": "SSAM:dVOzu-b0-3d0ZhwuQH19-261 (capability panel w/ 'Decision')",
+      "geometry": {
+        "gapX": 87.36,
+        "gapY": 53.28,
+        "h": 135,
+        "iconH": 32,
+        "iconW": 32,
+        "labelDy": 23.2,
+        "padTop": 18.2,
+        "padX": 42.5,
+        "w": 315
+      },
+      "notes": "SSAM white rounded capability chip: the SBPA product box's child panel enclosing the 'Decision' label. SSAM draws capabilities as ONE white chip with an icon grid (no per-capability rects). Icon grid measured from enclosed image cells (rows/cols clustered at 8px tolerance): padX/padTop = top-left icon offset, gapX/gapY = column/row pitch, labelDy = label top relative to its icon. Exemplar icon columns are uneven (pitches 87.36, 97.28); gapX records the first (canonical) pitch.",
+      "source": "exemplar",
+      "style": "rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=24;absoluteArcSize=1;imageWidth=64;imageHeight=64;strokeWidth=1.5;"
+    },
+    "chip": {
+      "from": "SNAM:LdbYgzVHhqlvVjTfUb5K-65 (PAS)",
+      "geometry": {
+        "h": 28.18,
+        "w": 130
+      },
+      "notes": "SNAM client chip 'PAS' (small white chip, SAP blue border).",
+      "source": "exemplar",
+      "style": "rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#FFFFFF;arcSize=16;absoluteArcSize=1;strokeWidth=1.5;part=1;align=center;"
+    },
+    "custom-app-box": {
+      "from": "BRANDART:ywlMBdhw0FJrmfMDHqjQ-128 (Procurement Application)",
+      "geometry": {
+        "h": 185.93,
+        "padX": 80.08,
+        "w": 343
+      },
+      "notes": "BRANDART container of 'Procurement Application' (custom app card); fill #ECF8FF→#EBF8FF, SAP blue border.",
+      "source": "exemplar",
+      "style": "rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;strokeWidth=1.5;arcSize=16;fillColor=#EBF8FF;perimeterSpacing=0;absoluteArcSize=1;"
+    },
+    "db": {
+      "from": "SNAM (fallback cylinder; DBs are chips, e.g. 'LdbYgzVHhqlvVjTfUb5K-67' 'SAP HANA DB')",
+      "geometry": {
+        "h": 80,
+        "w": 60
+      },
+      "notes": "Canonical draw.io cylinder fallback (sanctioned by the mapping): SNAM has no cylinder/datastore shape, it renders databases as blue label chips. Colors adopt SNAM's DB palette (SAP blue border, white fill); geometry is a standard datastore default.",
+      "source": "exemplar",
+      "style": "shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;strokeColor=#0070F2;fillColor=#FFFFFF;strokeWidth=1.5;"
+    },
+    "edge-default": {
+      "from": "connectors.xml:direct one-directional",
+      "geometry": {
+        "strokeWidth": 1.5
+      },
+      "notes": "connectors.xml 'direct one-directional' (#475e75→#475E75 blockThin).",
+      "source": "official",
+      "style": "endArrow=blockThin;html=1;strokeColor=#475E75;bendable=1;rounded=0;endFill=1;endSize=4;strokeWidth=1.5;startSize=4;startArrow=none;startFill=0;"
+    },
+    "edge-firewall": {
+      "from": "connectors.xml:default firewall",
+      "geometry": {
+        "strokeWidth": 3
+      },
+      "notes": "connectors.xml 'default firewall' (thick grey #475E75, strokeWidth=3).",
+      "source": "official",
+      "style": "endArrow=none;html=1;strokeColor=#475E75;bendable=1;rounded=0;endFill=0;endSize=3;strokeWidth=3;"
+    },
+    "edge-identity": {
+      "from": "SSAM:dVOzu-b0-3d0ZhwuQH19-369 (identity)",
+      "geometry": {
+        "strokeWidth": 1.5
+      },
+      "notes": "SSAM identity edge (green #188918); routing anchors + fontColor default→#1D2D3E normalized. Semantic family: identity/authentication flows.",
+      "source": "exemplar",
+      "style": "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;fontSize=18;strokeColor=#188918;fontFamily=Helvetica;fontColor=#1D2D3E;targetPerimeterSpacing=15;endSize=4;startSize=4;endArrow=blockThin;endFill=1;strokeWidth=1.5;startArrow=blockThin;startFill=1;"
+    },
+    "edge-master-data": {
+      "from": "SSAM:dVOzu-b0-3d0ZhwuQH19-466 (master-data)",
+      "geometry": {
+        "strokeWidth": 1.5
+      },
+      "notes": "SSAM master-data edge (magenta). Some SSAM cells use #CB00DC; normalized to the Horizon #CC00DC. Semantic family: master-data replication flows.",
+      "source": "exemplar",
+      "style": "endArrow=none;html=1;strokeColor=#CC00DC;bendable=1;rounded=0;endFill=0;endSize=4;strokeWidth=1.5;startSize=4;startArrow=blockThin;startFill=1;edgeStyle=orthogonalEdgeStyle;"
+    },
+    "edge-provisioning": {
+      "from": "SSAM:dVOzu-b0-3d0ZhwuQH19-366 (provisioning/SCIM)",
+      "geometry": {
+        "strokeWidth": 1.5
+      },
+      "notes": "SSAM provisioning edge (purple #470BED, SCIM). Semantic family: user/identity provisioning flows.",
+      "source": "exemplar",
+      "style": "endArrow=none;html=1;strokeColor=#470BED;bendable=1;rounded=0;endFill=0;endSize=3;strokeWidth=1.5;startArrow=blockThin;startFill=1;"
+    },
+    "edge-transport": {
+      "from": "SSAM:dVOzu-b0-3d0ZhwuQH19-498 (transport, dashed)",
+      "geometry": {
+        "strokeWidth": 1.5
+      },
+      "notes": "SSAM dashed transport edge (grey #475E75, dashed=1). Semantic family: transport / change-movement flows.",
+      "source": "exemplar",
+      "style": "endArrow=blockThin;html=1;strokeColor=#475E75;bendable=1;rounded=0;endFill=1;endSize=4;strokeWidth=1.5;startSize=4;startArrow=none;startFill=0;edgeStyle=orthogonalEdgeStyle;dashed=1;"
+    },
+    "governance-strip": {
+      "from": "SSAM:dVOzu-b0-3d0ZhwuQH19-377 (Subaccount: Governance)",
+      "geometry": {
+        "h": 236,
+        "padTop": 35,
+        "padX": 64,
+        "w": 946
+      },
+      "notes": "SSAM outer BTP box (fill #EBF8FF) enclosing 'Subaccount: Governance'.",
+      "source": "exemplar",
+      "style": "rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;fillColor=#EBF8FF;arcSize=16;absoluteArcSize=1;imageWidth=64;imageHeight=64;strokeWidth=1.5;"
+    },
+    "legend": {
+      "from": "essentials.xml:Legend",
+      "geometry": {
+        "h": 124.75,
+        "w": 340
+      },
+      "notes": "essentials.xml 'Legend' container panel (fill #F5F6F7, no border).",
+      "source": "official",
+      "style": "rounded=0;whiteSpace=wrap;html=1;strokeColor=none;strokeWidth=1.5;arcSize=16;fillColor=#F5F6F7;perimeterSpacing=0;imageHeight=24;absoluteArcSize=1;connectable=0;container=0;"
+    },
+    "network-separator": {
+      "from": "GOLD:luLoTX2QmnEtCnTCh1jC-44 NETWORK bar (+label luLoTX2QmnEtCnTCh1jC-34)",
+      "geometry": {
+        "h": 447,
+        "strokeWidth": 3
+      },
+      "notes": "SAP_Task_Center_L1 NETWORK zone separator: the vertical grey bar (#5B738B, strokeWidth=3, jumpStyle=gap). Its caption is the separate molecule 'network-separator-label'. Line height (h) is the exemplar span; layout drives the real length.",
+      "source": "official",
+      "style": "endArrow=none;html=1;strokeColor=#5B738B;bendable=1;rounded=1;endFill=0;endSize=3;strokeWidth=3;jumpStyle=gap;"
+    },
+    "network-separator-label": {
+      "from": "GOLD:luLoTX2QmnEtCnTCh1jC-34 NETWORK label",
+      "geometry": {
+        "h": 30,
+        "w": 80
+      },
+      "notes": "SAP_Task_Center_L1 NETWORK zone caption: the text cell placed beside the network-separator bar (see that molecule for the line style).",
+      "source": "official",
+      "style": "text;html=1;align=left;verticalAlign=middle;resizable=0;autosize=1;strokeColor=none;fillColor=none;fontSize=12;fontColor=#1D2D3E;fontFamily=Helvetica;"
+    },
+    "persona": {
+      "from": "essentials.xml:User and client",
+      "geometry": {
+        "groupH": 174.11,
+        "groupW": 152,
+        "h": 28,
+        "w": 28
+      },
+      "notes": "essentials.xml 'User and client' is a composite (client device + user avatar + labels, group 152x174.11); persona captures the user-figure image cell. image→@{persona} placeholder (brand pack / icon atlas).",
+      "source": "official",
+      "style": "shape=image;verticalLabelPosition=bottom;verticalAlign=top;imageAspect=0;aspect=fixed;image=@{persona};strokeWidth=1.5;"
+    },
+    "pill-interface": {
+      "from": "annotations_and_interfaces.xml:Interface SAP",
+      "geometry": {
+        "h": 16,
+        "w": 57
+      },
+      "notes": "annotations_and_interfaces.xml 'Interface SAP' pill (arcSize=50); strokeColor #0070f3→#0070F2, fillColor default→#FFFFFF.",
+      "source": "official",
+      "style": "rounded=1;whiteSpace=wrap;html=1;arcSize=50;strokeColor=#0070F2;fillColor=#FFFFFF;strokeWidth=1.5;"
+    },
+    "pill-protocol": {
+      "from": "SSAM:dVOzu-b0-3d0ZhwuQH19-370 (OIDC)",
+      "geometry": {
+        "h": 16,
+        "w": 35.43
+      },
+      "notes": "SSAM green protocol pill 'OIDC' (arcSize=50); fillColor #f5fae5→#F5FAE5, fontColor #266f3a→#188918. Cross-checked vs official 'Authenticate' pill (annotations_and_interfaces.xml): same arcSize-50 green pill pattern.",
+      "source": "exemplar",
+      "style": "rounded=1;whiteSpace=wrap;html=1;arcSize=50;strokeColor=#188918;fillColor=#F5FAE5;fontColor=#188918;strokeWidth=1.5;"
+    },
+    "product-box": {
+      "from": "SSAM:dVOzu-b0-3d0ZhwuQH19-260 (SAP Build Process Automation)",
+      "geometry": {
+        "h": 199.85,
+        "padX": 60.8,
+        "titleRow": 48.08,
+        "w": 343
+      },
+      "notes": "SSAM container of 'SAP Build Process Automation'; fill #ECF8FF→#EBF8FF. padX = title icon+gap inset before the title text. titleRow = inner white content panel top offset (48.08).",
+      "source": "exemplar",
+      "style": "rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;strokeWidth=1.5;arcSize=16;fillColor=#EBF8FF;perimeterSpacing=0;absoluteArcSize=1;"
+    },
+    "sap-btp-chip": {
+      "from": "sap_brand_names.xml:SAP BTP (Text Only)",
+      "geometry": {
+        "h": 30,
+        "w": 90
+      },
+      "notes": "sap_brand_names.xml 'SAP BTP (Text Only)' text-only chip (no image); fontColor default→#1D2D3E. Extra key owned by this contract per the manifest.",
+      "source": "official",
+      "style": "text;html=1;align=center;verticalAlign=middle;resizable=0;autosize=1;strokeColor=none;fillColor=none;fontSize=16;fontFamily=Helvetica;fontColor=#1D2D3E;"
+    },
+    "service-icon": {
+      "from": "20-02-99-02-sap-btp-service-icons-all-size-M.xml:service-icon",
+      "geometry": {
+        "h": 32,
+        "w": 32
+      },
+      "notes": "First service icon cell of the official all-services (size M) library; square 32x32. image→@{service}. Per-level render size (L1=48, L2=32) is owned by _skeleton_layout, not this reference geometry.",
+      "source": "official",
+      "style": "shape=image;verticalLabelPosition=bottom;verticalAlign=top;imageAspect=0;aspect=fixed;image=@{service};fontStyle=0;fontSize=12;fontColor=#1D2D3E"
+    },
+    "step-circle": {
+      "from": "numbers.xml:default number",
+      "geometry": {
+        "h": 30,
+        "w": 30
+      },
+      "notes": "numbers.xml 'default number' ellipse (30x30); fillColor #5b738b→#5B738B, fontColor default→#1D2D3E. gradientColor endpoint #223548 is the authentic SAP number gradient (not in the flat Horizon set; not palette-guarded).",
+      "source": "official",
+      "style": "ellipse;whiteSpace=wrap;html=1;aspect=fixed;rotation=0;gradientColor=#223548;strokeColor=none;gradientDirection=east;fillColor=#5B738B;rounded=0;pointerEvents=0;fontFamily=Helvetica;fontSize=12;fontColor=#1D2D3E;spacingTop=4;spacingBottom=4;spacingLeft=4;spacingRight=4;"
+    },
+    "subaccount-frame": {
+      "from": "SSAM:dVOzu-b0-3d0ZhwuQH19-257 (Subaccount: Extension)",
+      "geometry": {
+        "h": 567,
+        "padTop": 6,
+        "padX": 11.57,
+        "w": 1001
+      },
+      "notes": "SSAM tightest white rounded frame (blue border) enclosing the 'Subaccount: Extension …' label; padX/padTop measured from the label offset.",
+      "source": "exemplar",
+      "style": "rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;strokeWidth=1.5;arcSize=16;fillColor=#FFFFFF;perimeterSpacing=0;absoluteArcSize=1;"
+    },
+    "tier-box-nonsap": {
+      "from": "SSAM:dVOzu-b0-3d0ZhwuQH19-483 (Any-Premise, stroke recolored to non-SAP grey)",
+      "geometry": {
+        "h": 370,
+        "w": 200.75
+      },
+      "notes": "SSAM box of 'Any-Premise'. The exemplar drew a blue (#0070F2) border; recolored to the official SAP non-SAP grey #475E75 (essentials '3rd party layer') so non-SAP tiers read distinctly from SAP tiers. Fill kept #FFFFFF.",
+      "source": "exemplar",
+      "style": "rounded=1;whiteSpace=wrap;html=1;strokeColor=#475E75;strokeWidth=1.5;arcSize=16;fillColor=#FFFFFF;perimeterSpacing=0;absoluteArcSize=1;"
+    },
+    "tier-box-sap": {
+      "from": "SSAM:dVOzu-b0-3d0ZhwuQH19-457 (Public Cloud)",
+      "geometry": {
+        "h": 92.85,
+        "w": 201
+      },
+      "notes": "SSAM tier box of 'Public Cloud' (SAP blue border, white fill).",
+      "source": "exemplar",
+      "style": "rounded=1;whiteSpace=wrap;html=1;strokeColor=#0070F2;strokeWidth=1.5;arcSize=16;fillColor=#FFFFFF;perimeterSpacing=0;absoluteArcSize=1;"
+    },
+    "title-block": {
+      "from": "essentials.xml:Diagram title",
+      "geometry": {
+        "h": 30,
+        "w": 120
+      },
+      "notes": "essentials.xml 'Diagram title' text cell; fontColor #1d2d3e→#1D2D3E.",
+      "source": "official",
+      "style": "text;html=1;align=left;verticalAlign=middle;resizable=0;autosize=1;strokeColor=none;fillColor=none;fontSize=12;fontColor=#1D2D3E;fontFamily=Helvetica;"
+    },
+    "watermark": {
+      "from": "BRANDART:ywlMBdhw0FJrmfMDHqjQ-189 (Lutech watermark)",
+      "geometry": {
+        "h": 143.94,
+        "opacity": 15,
+        "w": 842.64
+      },
+      "notes": "BRANDART Lutech watermark: largest semi-transparent (opacity=15) image cell. Opacity preserved; image→@{watermark} (brand pack, local-only).",
+      "source": "exemplar",
+      "style": "shape=image;verticalLabelPosition=bottom;labelBackgroundColor=default;verticalAlign=top;aspect=fixed;imageAspect=0;image=@{watermark};opacity=15;"
+    }
+  }
+}

@@ -55,8 +55,25 @@ connectors: `https://mcp-sap-docs.marianzeis.de/mcp` — **community-operated, n
 SAP**; only generic SAP product names are sent to it. Without it, the skill still
 works (best-effort names) but classification/naming is less reliable.
 
+## What's bundled
+
+The full perfect-diagrams engine runs self-contained in the sandbox:
+- **Entry points**: `generate-drawio.py` (IR v2 → `.drawio`), `validate-ir.py`,
+  `validate-drawio.py`, `check-composition.py` (geometric gate),
+  `apply-rubric-patches.py` (visual-rubric loop), `render-preview.py` (PNG).
+- **Private modules**: `_skeleton_layout.py`, `_channel_router.py`, `_molecules.py`,
+  `_geom_checks.py`, `_pure_render.py`, `_drawio_io.py`.
+- **Assets**: `style-contract.json`, `shape-index.json`, `canonical-pills.json`,
+  `brand-pack/` (public chips only), `icon-atlas/`, bundled Arimo fonts, and the
+  `references/visual-rubric.md` doc. The gitignored `brand-pack.local/`
+  (trademarks / customer logos) is **excluded**.
+
+Because the pure-Python renderer (`_pure_render.py` + bundled fonts + icon atlas)
+is bundled, the skill now also produces a **PNG preview** in the sandbox — no
+draw.io app required.
+
 ## Limits vs the Claude Code plugin
-- **No PNG preview** (no local draw.io app in the sandbox) → outputs the `.drawio`.
 - **No local MCP / SAP-domain skills** → grounding is via the remote connector +
   Claude's built-in knowledge, not the `secondsky/sap-skills` best-practice pass.
-- `preflight.py` / `render-preview.py` are Claude-Code-only and are **not** bundled.
+- `preflight.py` (the dependency/MCP preflight) is Claude-Code-only and is
+  **not** bundled.

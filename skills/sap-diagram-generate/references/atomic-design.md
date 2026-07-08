@@ -33,6 +33,18 @@ Combinations of atoms that have a small but recognisable meaning.
 - An **icon + label** combo (e.g. the BPA icon with "SAP Build Process Automation" caption).
 - A **swim-lane header** (a rectangle with no fill and a Horizon-colored bottom border).
 
+**IR v2 molecules** (`assets/style-contract.json`; emitted from the `type`/`kind` fields documented in `SKILL.md` Step 6):
+
+- **`product-box`** — a BTP-blue container (fill `#EBF8FF`→`#ECF8FF`) with a title row and an inner white **`capability-chip`** panel: an icon+label grid (icon optional per capability) rather than separate boxes per capability. Authored via a node with `"type": "product"` + `capabilities: [{label, icon?}, ...]`.
+- **`subaccount-frame`** — a tight white rounded frame, BTP-blue border, labelled "Subaccount: …". Authored via a group with `"type": "subaccount"`; **nestable** — a `subaccount` group's `parent` may be another `subaccount` id (e.g. Extension Test ⊃ Extension Production), rendering frame-inside-frame.
+- **`governance-strip`** — a wide BTP-blue band spanning the canvas, sitting above the BTP frame's top edge. Authored via a group with `"type": "governance"`.
+- **`tier-box-sap`** / **`tier-box-nonsap`** — a labelled RIGHT-zone tier box; SAP-blue border for `kind: "public"` / `"private"`, non-SAP grey `#475E75` for `kind: "any-premise"`. Authored via a group with `"type": "cloud-tier"` + `kind`.
+- **`custom-app-box`** — a BTP-blue product-style card for a bespoke application built on BTP (distinct from `sap-app`, a SAP-shipped product). Authored via a group with `"type": "custom-app"`.
+- **`network-separator`** / **`network-separator-label`** — the vertical grey `#5B738B` (`strokeWidth=3`) bar + "NETWORK" caption between the BTP center and a RIGHT-zone tier. Driven by `metadata.networkSeparator` (default `true` whenever a RIGHT-zone tier group exists).
+- **`chip`** / **`db`** — a small white BTP-bordered label chip, and the cylinder datastore shape. Authored via a node with `"type": "chip"` or `"type": "db"`.
+- **`badge-hyperscaler`** / **`badge-runtime`** — small logo badges (Azure/AWS, Cloud Foundry/Kyma) on a group's or the diagram's `badges.hyperscalers`/`badges.runtimes`.
+- **`watermark`** — a large, semi-transparent (`opacity=15`) background image behind the diagram content. Authored via `metadata.branding.partnerWatermark`; a customer logo (`metadata.branding.customerLogo`) renders top-left instead, next to the title, at full contrast. Only use a customer's own logo/watermark asset with their explicit consent — never a competitor's or an unrelated customer's.
+
 **Rule**: each molecule should be replaceable in isolation. If you change the BPA icon-label molecule, it should not affect the surrounding flow.
 
 ## Organisms
@@ -79,8 +91,19 @@ The `groups[].type` field selects the right organism style:
 - `user` → white fill, non-SAP border, rounded
 - `third-party` → light grey fill, non-SAP border, rounded
 - `btp-layer` → BTP fill `#EBF8FF`, BTP border `#0070F2`, rounded
+- `subaccount` → white fill, BTP border, nestable inner frame ("Subaccount: …")
+- `governance` → BTP fill/border, wide top-band strip
+- `cloud-tier` → tier box; border/fill follow `kind` (`public`/`private` = BTP-blue, `any-premise` = non-SAP grey)
+- `custom-app` → BTP fill `#EBF8FF`, BTP border (bespoke apps built on BTP)
 - `sap-app` → white fill, BTP border (BTP-affiliated SAP cloud apps)
 - `non-sap` → light grey fill, non-SAP border
+
+### Identity placement
+
+The identity cluster (IAS / XSUAA / Authorization) is never merged into a generic ops/third-party box. Two valid placements only:
+
+1. **Parented to the BTP frame** (`"parent": "<btp-group-id>"`) — nests inside as its own labelled BTP-blue inner frame, typically near the bottom of the frame.
+2. **Standalone** (no `parent`) — its own `btp-layer`-typed group positioned just below the main BTP frame (`"position": "bottom"`), never on the RIGHT beside the backend/tier boxes.
 
 ## Common mistakes
 
