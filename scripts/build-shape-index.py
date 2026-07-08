@@ -60,6 +60,12 @@ DEFAULT_OVERRIDES_CSV = (
 DEFAULT_LEGACY_INDEX = (
     Path(__file__).resolve().parent.parent / "assets" / "shape-index.json"
 )
+# Curated generic cloud icons (mingrammer/diagrams, MIT) — see assets/GENERIC-ICONS-NOTICE.md.
+# Non-SAP components (databases, brokers, K8s, hyperscaler compute/storage, on-prem)
+# resolve to real vendor glyphs instead of neutral boxes.
+DEFAULT_GENERIC_ICONS = (
+    Path(__file__).resolve().parent.parent / "assets" / "generic-icons.json"
+)
 
 # Standalone library files (top-level of draw.io/) → category bucket they
 # populate. These were missing from the original parser which only walked
@@ -97,6 +103,7 @@ SET_LABELS = {
     "data-analytics": "Data & Analytics",
     "ai": "AI",
     "btp-saas": "BTP SaaS",
+    "generic-cloud": "Generic Cloud (non-SAP)",
     "generic": "Generic Icons",
 }
 
@@ -500,6 +507,33 @@ def _harvest_svg_services(
     return services
 
 
+def _load_generic_cloud_icons(path: Path = DEFAULT_GENERIC_ICONS) -> list[dict]:
+    """Curated generic cloud icons (mingrammer/diagrams, MIT) as service rows in
+    the ``generic-cloud`` set, so the resolver matches non-SAP components (redis,
+    kafka, kubernetes, aws-lambda, …) by alias and the atlas rasterizes them.
+    Each manifest icon carries a full ``data:image/png;base64,…`` URI, wrapped in
+    the same ``shape=image`` style as the SAP icons. Absent manifest → no rows."""
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    out: list[dict] = []
+    for icon in data.get("icons", []):
+        key = icon["key"]
+        aliases = {a for a in icon.get("aliases", []) if a and a != icon["name"]}
+        aliases.add(key)
+        out.append(
+            {
+                "name": icon["name"],
+                "techId": key,
+                "aliases": sorted(aliases),
+                "set": "generic-cloud",
+                "size": "M",
+                "drawioStyle": f"{_STYLE_PREFIX}{icon['pngDataUri']}{_STYLE_SUFFIX}",
+            }
+        )
+    return out
+
+
 def _parse_generic_icons(libs_dir: Path) -> list[dict]:
     """Parse the 20-03-generic-icons libraries (User, Mobile, Desktop,
     Cloud Connector, On-Premise, Third Party, Adapter, Admin, AI, ...).
@@ -641,13 +675,17 @@ def build_index(
     # ── Service icons: harvested from the authoritative svg/ library ─────
     services = _harvest_svg_services(svg_dir, overrides, legacy_index_path)
 
+    # ── Generic cloud icons (mingrammer/diagrams, MIT) — appended as the
+    # ``generic-cloud`` set so non-SAP components resolve to real vendor glyphs.
+    services.extend(_load_generic_cloud_icons())
+
     # Set buckets: one entry per set-id actually used, with its service count.
     counts: dict[str, int] = {}
     for svc in services:
         counts[svc["set"]] = counts.get(svc["set"], 0) + 1
     set_order = [
         "foundational", "integration-suite", "app-dev-automation",
-        "data-analytics", "ai", "btp-saas",
+        "data-analytics", "ai", "btp-saas", "generic-cloud",
     ]
     sets: list[dict] = [
         {
