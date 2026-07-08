@@ -115,8 +115,13 @@ CORRIDOR_MARGIN = 22.0   # px a horizontal corridor sits clear of all node conte
 SLOT_PAD = 6.0           # extra px between pill/label slots (pitch = pill_h + this)
 SEP_CLEARANCE = 14.0     # px a lane keeps clear of the NETWORK separator bar
 CROSS_MAX_SWEEPS = 3     # Task 9A: max greedy bubble sweeps in reduce_crossings
+AVOID_CLEARANCE = 8.0    # Task 9B: px an obstacle-avoiding detour keeps clear of a node box
+AVOID_TURN_PENALTY = 30.0  # Task 9B: A* per-bend cost so detours prefer few, clean corners
 
 _COLS = ("left", "center", "right")
+_SIDE_DIR = {"R": (1.0, 0.0), "L": (-1.0, 0.0), "B": (0.0, 1.0), "T": (0.0, -1.0)}
+_STEP_DIRS = ((1, 0), (-1, 0), (0, 1), (0, -1))
+_STEP_IDX = {d: i for i, d in enumerate(_STEP_DIRS)}
 
 
 # ── Data model ───────────────────────────────────────────────────────────────
@@ -147,6 +152,10 @@ class RouteResult:
     label_pos: dict[str, tuple[float, float]]
     channels: list[Channel]
     crossings: int
+    # Count of (edge segment, non-endpoint node rect) intersecting pairs on the
+    # FINAL (post-obstacle-avoidance) paths — Task 9B's metric, driven to ~0.
+    # See count_piercings; 0 on both shipped fixtures today.
+    piercings: int = 0
     # Edge ids whose pill/label _place_in_slots scan was exhausted (fell back
     # to a possibly-overlapping base position instead of a verified
     # collision-free slot). Empty on both shipped fixtures today; lets Task
@@ -668,6 +677,219 @@ def _count_crossings(paths: dict[str, list[tuple[float, float]]]) -> int:
     return total
 
 
+# ── Obstacle-aware routing (Task 9B) ─────────────────────────────────────────
+def _seg_pierces(a, b, node_geo, skip) -> int:
+    """Number of node rects (except the endpoint ids in ``skip``) that segment
+    a→b intersects, via the inclusive ``seg_intersects_rect`` kernel."""
+    n = 0
+    for nid, r in node_geo.items():
+        if nid in skip:
+            continue
+        if seg_intersects_rect(a, b, r):
+            n += 1
+    return n
+
+
+def count_piercings(paths: dict[str, list[tuple[float, float]]],
+                    node_geo: dict[str, Any],
+                    endpoints: dict[str, tuple[str, str]]) -> int:
+    """Total (edge segment, non-endpoint node rect) intersecting pairs across
+    ``paths`` — the metric Task 9B drives toward 0. ``paths`` is
+    ``{eid: [pt…]}`` (full path incl. exit/entry ports), ``node_geo`` is
+    ``{nid: Rect}`` and ``endpoints`` maps each eid to its ``(src_id, dst_id)``
+    (whose rects are skipped: an edge legitimately touches its own endpoints).
+    Inclusive on purpose — a segment that only grazes a box boundary still
+    counts (see ``_geom_checks`` point 2), so this never under-reports a box
+    the user would see the line touch."""
+    total = 0
+    for eid, path in paths.items():
+        skip = endpoints.get(eid, ())
+        for a, b in _segments(path):
+            total += _seg_pierces(a, b, node_geo, skip)
+    return total
+
+
+def _simplify_path(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Drop consecutive duplicates AND redundant MONOTONE-collinear interior
+    points (a straight run of grid vertices collapses to its two ends). Keeps
+    the first and last point. Geometry is unchanged: a point is removed only
+    when it lies strictly BETWEEN its neighbours on the shared axis — an
+    overshoot / U-turn on the same line (a→b→c where b is past c) is a real
+    bend and is KEPT, so a path that runs out along a line and doubles back is
+    never silently straightened into one that cuts the corner."""
+    pts = _dedupe(pts)
+    if len(pts) <= 2:
+        return pts
+    out = [pts[0]]
+    for i in range(1, len(pts) - 1):
+        ax, ay = out[-1]
+        bx, by = pts[i]
+        cx, cy = pts[i + 1]
+        redundant = (
+            (abs(ax - bx) < 0.5 and abs(bx - cx) < 0.5 and (ay - by) * (by - cy) > 0)
+            or (abs(ay - by) < 0.5 and abs(by - cy) < 0.5 and (ax - bx) * (bx - cx) > 0)
+        )
+        if not redundant:
+            out.append(pts[i])
+    out.append(pts[-1])
+    return out
+
+
+def _route_around(exit_pt, entry_pt, exit_side, entry_side, obstacles, net_sep):
+    """Deterministic orthogonal A* over the Hanan grid of obstacle-box edges,
+    each offset ``AVOID_CLEARANCE`` outward.
+
+    Rather than route port→port (which would let a path sneak THROUGH the
+    endpoint boxes to reach a face from the wrong side), it routes between
+    **outward anchors**: each port stepped ``AVOID_CLEARANCE`` out along its
+    side's outward normal, into free space. The two short port stubs
+    (``exit_pt``→``exit_anchor`` and ``entry_anchor``→``entry_pt``) fix the
+    exit/entry SIDES geometrically, so the ports the caller already assigned
+    (and emitted as exitX/entryX) stay valid and the final approach always
+    meets the face from outside — no in-search direction constraint, and no
+    arriving through the box.
+
+    A vertical grid segment is blocked when it runs within ``AVOID_CLEARANCE``
+    (horizontally) of any obstacle whose y-range it overlaps, a horizontal one
+    symmetrically; both use strict bounds so a lane exactly ``AVOID_CLEARANCE``
+    off a box is allowed. The NETWORK separator (Task 7) is honoured exactly as
+    ``_allocate_lanes`` does: no vertical segment runs within ``SEP_CLEARANCE``
+    of it inside its y-span.
+
+    Ties are broken by the A* priority tuple ``(f, g, ix, iy, dir)`` — pure
+    coordinates/direction indices, no insertion counter — so the same inputs
+    yield byte-identical paths. Returns the interior bend points (ports
+    excluded, collinear vertices collapsed) or ``None`` when no clear
+    orthogonal path exists on the grid (the caller then keeps the naive path).
+    """
+    import heapq
+    cl = AVOID_CLEARANCE
+    ed = _SIDE_DIR[exit_side]
+    nd = _SIDE_DIR[entry_side]
+    exit_anchor = (exit_pt[0] + ed[0] * cl, exit_pt[1] + ed[1] * cl)
+    entry_anchor = (entry_pt[0] + nd[0] * cl, entry_pt[1] + nd[1] * cl)
+
+    xs = {exit_anchor[0], entry_anchor[0]}
+    ys = {exit_anchor[1], entry_anchor[1]}
+    for r in obstacles:
+        xs.add(r.x - cl)
+        xs.add(r.right + cl)
+        ys.add(r.y - cl)
+        ys.add(r.bottom + cl)
+    xs = sorted(xs)
+    ys = sorted(ys)
+    xi = {v: i for i, v in enumerate(xs)}
+    yi = {v: i for i, v in enumerate(ys)}
+    sx, sy = xi[exit_anchor[0]], yi[exit_anchor[1]]
+    gx, gy = xi[entry_anchor[0]], yi[entry_anchor[1]]
+    sep_x = float(net_sep["x"]) if net_sep else None
+    sep_y0 = float(net_sep["y0"]) if net_sep else 0.0
+    sep_y1 = float(net_sep["y1"]) if net_sep else 0.0
+
+    def vblocked(X, ylo, yhi):
+        for r in obstacles:
+            if (r.x - cl) < X < (r.right + cl) and ylo < r.bottom and r.y < yhi:
+                return True
+        if sep_x is not None and abs(X - sep_x) < SEP_CLEARANCE and ylo < sep_y1 and sep_y0 < yhi:
+            return True
+        return False
+
+    def hblocked(Y, xlo, xhi):
+        for r in obstacles:
+            if (r.y - cl) < Y < (r.bottom + cl) and xlo < r.right and r.x < xhi:
+                return True
+        return False
+
+    def heur(ix, iy):
+        return abs(xs[ix] - xs[gx]) + abs(ys[iy] - ys[gy])
+
+    # state = (ix, iy, dir); dir = index of the move that ARRIVED, -1 at start.
+    # No first/last-move direction constraint — the port stubs handle the sides.
+    pq = [(heur(sx, sy), 0.0, sx, sy, -1)]
+    gscore = {(sx, sy, -1): 0.0}
+    parent: dict = {}
+    goal = None
+    while pq:
+        f, g, ix, iy, di = heapq.heappop(pq)
+        state = (ix, iy, di)
+        if g > gscore.get(state, 1e18):
+            continue
+        if (ix, iy) == (gx, gy):
+            goal = state
+            break
+        for dx, dy in _STEP_DIRS:
+            nx, ny = ix + dx, iy + dy
+            if not (0 <= nx < len(xs) and 0 <= ny < len(ys)):
+                continue
+            x0, y0 = xs[ix], ys[iy]
+            x1, y1 = xs[nx], ys[ny]
+            if dx:
+                if hblocked(y0, min(x0, x1), max(x0, x1)):
+                    continue
+            else:
+                if vblocked(x0, min(y0, y1), max(y0, y1)):
+                    continue
+            ndi = _STEP_IDX[(dx, dy)]
+            step = abs(x1 - x0) + abs(y1 - y0)
+            turn = AVOID_TURN_PENALTY if (di != -1 and ndi != di) else 0.0
+            ng = g + step + turn
+            nstate = (nx, ny, ndi)
+            if ng < gscore.get(nstate, 1e18) - 1e-9:
+                gscore[nstate] = ng
+                parent[nstate] = state
+                heapq.heappush(pq, (ng + heur(nx, ny), ng, nx, ny, ndi))
+    if goal is None:
+        return None
+    seq = []
+    st = goal
+    while st is not None:
+        seq.append((xs[st[0]], ys[st[1]]))
+        st = parent.get(st)
+    seq.reverse()
+    # exit_pt -> [exit_anchor .. entry_anchor] -> entry_pt, minus redundant vertices
+    return _simplify_path([exit_pt] + seq + [entry_pt])[1:-1]
+
+
+def _avoid_obstacles(plans, ports, waypoints, layout):
+    """Reroute every edge whose naive path pierces a non-endpoint node box so
+    it travels AROUND the box(es) instead of through them (Task 9B — the user's
+    original 'edges piercing box borders' complaint). Clean edges (0 piercings)
+    are left byte-identical, so Task 8's collision-free lane invariants for the
+    gutter/corridor bundles are untouched. A reroute is adopted only when
+    ``_route_around`` returns a non-empty interior path that STRICTLY lowers
+    that edge's piercing count — never a regression, and the ≥1-waypoint
+    guarantee is preserved. Ports are held fixed, so port distribution and the
+    emitted exit/entry anchors stay valid. Deterministic (edges processed in
+    IR/plan order; ``_route_around`` itself is deterministic)."""
+    node_geo = {nid: _rect(t) for nid, t in layout.get("nodes", {}).items()}
+    net_sep = (layout.get("meta") or {}).get("networkSeparator")
+    out: dict[str, list[tuple[float, float]]] = {}
+    for p in plans:
+        wps = waypoints[p.eid]
+        exit_pt, entry_pt = ports[p.eid]
+        skip = (p.src_id, p.dst_id)
+        path = [exit_pt] + wps + [entry_pt]
+        before = sum(_seg_pierces(a, b, node_geo, skip) for a, b in _segments(path))
+        if before == 0:
+            out[p.eid] = wps
+            continue
+        # ALL node boxes are obstacles — including this edge's own src/dst, so
+        # the detour can't shortcut THROUGH an endpoint box to reach its face
+        # from the wrong side. The outward port anchors (see _route_around) sit
+        # on the endpoint boxes' clearance boundary, so the ports stay
+        # reachable even though the boxes themselves are blocked.
+        obstacles = list(node_geo.values())
+        interior = _route_around(exit_pt, entry_pt, p.exit_side, p.entry_side,
+                                 obstacles, net_sep)
+        if not interior:
+            out[p.eid] = wps
+            continue
+        new_path = [exit_pt] + interior + [entry_pt]
+        after = sum(_seg_pierces(a, b, node_geo, skip) for a, b in _segments(new_path))
+        out[p.eid] = interior if after < before else wps
+    return out
+
+
 # ── Crossing reduction (Task 9A) ─────────────────────────────────────────────
 def _perm_hook(perm: dict):
     """Build a ``lane_order`` / ``port_order`` callable from a
@@ -968,20 +1190,25 @@ def build_waypoints(plans: list[_Plan],
                     ) -> tuple[dict[str, list[tuple[float, float]]],
                                dict[str, tuple[float, float]],
                                dict[str, tuple[float, float]],
-                               int, list[str]]:
-    """STEP 3 — absolute ports, interior waypoints, pill/label slots and the
-    crossing count, given ``plans`` (from ``plan()``) and the
+                               int, int, list[str]]:
+    """STEP 3 — absolute ports, interior waypoints (with the Task 9B
+    obstacle-avoidance reroute folded in), pill/label slots and the crossing +
+    piercing counts, given ``plans`` (from ``plan()``) and the
     ``(port_fracs, lane_offsets)`` ``assign_ports_lanes()`` computed.
 
-    Returns ``(waypoints, pill_pos, label_pos, crossings, slot_fallbacks)``.
-    ``layout`` supplies node geometry for the pill/label obstacle set — pass
-    the SAME ``layout`` used for ``plan()``/``assign_ports_lanes()``.
+    Returns ``(waypoints, pill_pos, label_pos, crossings, piercings,
+    slot_fallbacks)``. ``layout`` supplies node geometry for both the
+    obstacle-avoidance obstacle set and the pill/label obstacle set — pass the
+    SAME ``layout`` used for ``plan()``/``assign_ports_lanes()``.
 
-    This is the step Task 9 re-runs after reordering lanes/ports: same
-    ``plans``, a different ``(port_fracs, lane_offsets)`` from
-    ``assign_ports_lanes(plans, layout, lane_order=..., port_order=...)`` in,
-    different (still deterministic) waypoints out — the routing decisions
-    already made by steps 1-2 are mechanically realised here, no re-planning.
+    The naive channel waypoints are built first, then ``_avoid_obstacles``
+    reroutes any edge that would pierce a non-endpoint node box AROUND it
+    (Task 9B); crossings, piercings and pill/label slots are all computed on
+    the FINAL post-avoidance paths. This is the step Task 9's crossing search
+    re-runs after reordering lanes/ports: same ``plans``, a different
+    ``(port_fracs, lane_offsets)`` in, different (still deterministic)
+    waypoints out — the routing decisions of steps 1-2 are mechanically
+    realised here, no re-planning.
     """
     node_geo = {nid: _rect(t) for nid, t in layout.get("nodes", {}).items()}
 
@@ -995,15 +1222,20 @@ def build_waypoints(plans: list[_Plan],
         waypoints[p.eid] = _build_waypoints(p, exit_pt, entry_pt,
                                             lane_offsets.get(p.eid, 0.0))
 
-    # ── full paths (exit + waypoints + entry) for crossing count ────────────
+    # ── obstacle-aware reroute (9B): route piercing edges AROUND node boxes ──
+    waypoints = _avoid_obstacles(plans, ports, waypoints, layout)
+
+    # ── full paths (exit + waypoints + entry) for the crossing/piercing counts
     paths = {p.eid: [ports[p.eid][0]] + waypoints[p.eid] + [ports[p.eid][1]]
              for p in plans}
     crossings = _count_crossings(paths)
+    piercings = count_piercings(paths, node_geo,
+                                {p.eid: (p.src_id, p.dst_id) for p in plans})
 
     # ── pill & label slots (8e) ─────────────────────────────────────────────
     pill_pos, label_pos, slot_fallbacks = _place_pills_and_labels(plans, paths, node_geo)
 
-    return waypoints, pill_pos, label_pos, crossings, slot_fallbacks
+    return waypoints, pill_pos, label_pos, crossings, piercings, slot_fallbacks
 
 
 def route(diagram, layout: dict) -> RouteResult:
@@ -1014,16 +1246,16 @@ def route(diagram, layout: dict) -> RouteResult:
     ``route()`` is the composition of the pipeline steps above:
     ``plan`` → ``reduce_crossings`` (Task 9A — picks the lane/port ordering
     that minimises crossings) → ``assign_ports_lanes`` (with those winners) →
-    ``build_waypoints``, plus the absolute-ports arithmetic
-    ``RouteResult.ports`` needs. A caller that wants to intervene between steps
-    (e.g. Task 12/13) calls the same functions directly against the SAME
-    ``plans`` — the seam is intact.
+    ``build_waypoints`` (which now also folds in the Task 9B obstacle-avoidance
+    reroute), plus the absolute-ports arithmetic ``RouteResult.ports`` needs.
+    A caller that wants to intervene between steps (e.g. Task 12/13) calls the
+    same functions directly against the SAME ``plans`` — the seam is intact.
     """
     plans = plan(diagram, layout)
     lane_order, port_order = reduce_crossings(plans, layout)
     port_fracs, lane_offsets = assign_ports_lanes(
         plans, layout, lane_order=lane_order, port_order=port_order)
-    waypoints, pill_pos, label_pos, crossings, slot_fallbacks = build_waypoints(
+    waypoints, pill_pos, label_pos, crossings, piercings, slot_fallbacks = build_waypoints(
         plans, port_fracs, lane_offsets, layout)
 
     ports: dict[str, tuple[tuple, tuple]] = {}
@@ -1039,5 +1271,6 @@ def route(diagram, layout: dict) -> RouteResult:
         label_pos=label_pos,
         channels=plans.channels,
         crossings=crossings,
+        piercings=piercings,
         slot_fallbacks=slot_fallbacks,
     )

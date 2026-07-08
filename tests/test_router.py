@@ -630,7 +630,7 @@ def test_seam_route_equals_reduce_assign_build_composition(gen, sl):
         lane_order, port_order = router.reduce_crossings(plans, layout)
         port_fracs, lane_offsets = router.assign_ports_lanes(
             plans, layout, lane_order=lane_order, port_order=port_order)
-        waypoints, pill_pos, label_pos, crossings, slot_fallbacks = (
+        waypoints, pill_pos, label_pos, crossings, piercings, slot_fallbacks = (
             router.build_waypoints(plans, port_fracs, lane_offsets, layout)
         )
 
@@ -639,6 +639,7 @@ def test_seam_route_equals_reduce_assign_build_composition(gen, sl):
         assert pill_pos == expected.pill_pos
         assert label_pos == expected.label_pos
         assert crossings == expected.crossings
+        assert piercings == expected.piercings
         assert slot_fallbacks == expected.slot_fallbacks == []
 
 
@@ -658,8 +659,8 @@ def test_seam_default_composition_is_deterministic_and_reducible(gen, sl):
         lane_order, port_order = router.reduce_crossings(plans, layout)
         pf, lo = router.assign_ports_lanes(
             plans, layout, lane_order=lane_order, port_order=port_order)
-        _wp, _pp, _lp, crossings, _fb = router.build_waypoints(plans, pf, lo, layout)
-        _wp0, _pp0, _lp0, crossings_def, _fb0 = router.build_waypoints(
+        _wp, _pp, _lp, crossings, _pierce, _fb = router.build_waypoints(plans, pf, lo, layout)
+        _wp0, _pp0, _lp0, crossings_def, _pierce0, _fb0 = router.build_waypoints(
             plans, pf_def, lo_def, layout)
         assert crossings <= crossings_def
 
@@ -891,3 +892,110 @@ def test_9a_reduce_crossings_declines_reorder_that_would_break_a_slot(gen, sl):
     _d, _l, res = _fixture_route(gen, sl, NOVA)
     assert res.slot_fallbacks == []
 
+
+
+# ── Task 9B: obstacle-aware routing (edges avoid node boxes) ─────────────────
+def _piercings_of(res, layout, diagram):
+    """RouteResult-independent recount of edge-vs-non-endpoint-node piercings,
+    straight from the _geom_checks kernel -- the ground truth res.piercings
+    must match."""
+    node_geo = {nid: Rect(*t) for nid, t in layout["nodes"].items()}
+    endpoints = {e.id: (e.source, e.target) for e in diagram.edges}
+    paths = {eid: _full_path(res, eid) for eid in res.waypoints}
+    return router.count_piercings(paths, node_geo, endpoints)
+
+
+@pytest.mark.parametrize("path", [V2, NOVA], ids=["ir-v2", "nova"])
+def test_9b_route_has_zero_piercings_on_real_fixtures(gen, sl, path):
+    """No edge segment crosses a non-endpoint node box on either shipped
+    fixture -- the user's original 'edges piercing box borders' complaint,
+    driven to 0. nova-L1's naive routing pierces boxes many times (see
+    test_9b_naive_baseline_pierces_boxes); the obstacle-aware reroute collapses
+    that to 0."""
+    diagram, layout, res = _fixture_route(gen, sl, path)
+    assert res.piercings == 0
+    assert _piercings_of(res, layout, diagram) == 0      # res.piercings is honest
+
+
+def test_9b_naive_baseline_pierces_boxes_that_route_eliminates(gen, sl):
+    """Documents the BEFORE: nova-L1's naive (pre-avoidance) channel routing
+    drives many edge segments straight through intermediate node boxes; the
+    shipped route() drives that to 0. Pins the improvement is real, not a
+    fixture that never pierced."""
+    diagram, layout, res = _fixture_route(gen, sl, NOVA)
+    node_geo = {nid: Rect(*t) for nid, t in layout["nodes"].items()}
+    endpoints = {e.id: (e.source, e.target) for e in diagram.edges}
+    plans = router.plan(diagram, layout)
+    pf, lo = router.assign_ports_lanes(plans, layout)
+    naive_paths = {}
+    for p in plans:
+        efr, nfr = pf[p.eid]
+        ex = router._abs_port(p.src, efr)
+        en = router._abs_port(p.dst, nfr)
+        naive_paths[p.eid] = [ex] + router._build_waypoints(p, ex, en, lo.get(p.eid, 0.0)) + [en]
+    naive_pierce = router.count_piercings(naive_paths, node_geo, endpoints)
+    assert naive_pierce >= 20, f"expected a piercing-heavy baseline, got {naive_pierce}"
+    assert res.piercings == 0
+
+
+def test_9b_edge_routes_around_intermediate_node():
+    """An edge whose target sits directly behind another node must reach it
+    WITHOUT crossing the intermediate box: the detour goes around it."""
+    layout = {
+        "nodes": {
+            "S": (20, 300, 60, 40),      # left col,   cy=320
+            "B": (350, 300, 90, 40),     # center col, DIRECTLY between S and T
+            "T": (560, 300, 60, 40),     # center col, behind B on the same row
+        },
+        "groups": {}, "canvas": (900, 700),
+        "meta": {"columns": {"left": (0, 100), "center": (300, 700), "right": (760, 800)},
+                 "networkSeparator": None},
+    }
+    dia = _diagram([_edge("e1", "S", "T")])
+    res = router.route(dia, layout)
+    B = Rect(*layout["nodes"]["B"])
+    for a, b in _segments(_full_path(res, "e1")):
+        assert not gc.seg_intersects_rect(a, b, B), (
+            f"edge segment {a}->{b} cuts through the intermediate node B"
+        )
+    assert res.piercings == 0
+
+
+def test_9b_route_around_respects_network_separator(gen, sl):
+    """A rerouted (obstacle-avoided) edge must still honour the Task 7 NETWORK
+    separator: no vertical segment hugs the bar within its y-range (same
+    invariant test_8c pins for the naive lanes, re-checked on the FINAL
+    post-avoidance geometry)."""
+    diagram, layout, res = _fixture_route(gen, sl, NOVA)
+    sep = layout["meta"]["networkSeparator"]
+    sx, y0, y1 = sep["x"], sep["y0"], sep["y1"]
+    for eid, wps in res.waypoints.items():
+        for (ax, ay), (bx, by) in _segments(_full_path(res, eid)):
+            if abs(ax - bx) < 0.5 and abs(ax - sx) < 6.0:
+                lo, hi = sorted((ay, by))
+                if hi >= y0 and lo <= y1:
+                    pytest.fail(f"edge {eid} vertical segment hugs the separator at x={ax}")
+
+
+def test_9b_piercings_deterministic(gen, sl):
+    """route().piercings (and the paths behind it) are byte-identical across
+    runs -- the obstacle-avoidance A* is deterministic."""
+    for path in (V2, NOVA):
+        _d1, _l1, r1 = _fixture_route(gen, sl, path)
+        _d2, _l2, r2 = _fixture_route(gen, sl, path)
+        assert r1.piercings == r2.piercings
+        assert r1.waypoints == r2.waypoints
+
+
+def test_9b_count_piercings_kernel_matches_seg_intersects_rect():
+    """count_piercings counts exactly the (segment, non-endpoint node rect)
+    pairs seg_intersects_rect flags, skipping the edge's own endpoints."""
+    node_geo = {"A": Rect(0, 0, 40, 40), "B": Rect(100, 0, 40, 40),
+                "M": Rect(50, 0, 20, 40)}                     # M sits between A and B
+    # one edge A->B whose straight segment crosses M (a non-endpoint)
+    paths = {"e": [(40, 20), (100, 20)]}
+    endpoints = {"e": ("A", "B")}
+    assert router.count_piercings(paths, node_geo, endpoints) == 1
+    # a segment clear of M (and only touching its own endpoint A) never counts
+    paths2 = {"e": [(40, 20), (48, 20)]}                      # stays strictly left of M
+    assert router.count_piercings(paths2, node_geo, endpoints) == 0
