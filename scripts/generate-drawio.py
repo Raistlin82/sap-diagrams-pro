@@ -463,19 +463,29 @@ class ShapeIndex:
             entry = self._generic.get((base, "sap"))
         return entry
 
-    def resolve(self, query: str | None) -> dict[str, Any] | None:
-        """Lookup priority: exact name → exact alias (case-insensitive) →
-        exact techId → safe word-level match. Returns None on miss.
+    # Trailing decorations that name decorations often add on top of the
+    # catalog's canonical service name (checked longest-first so e.g.
+    # "Standard Edition" is stripped whole rather than leaving "Edition").
+    _TRAILING_DECORATIONS = (
+        " Standard Edition",
+        " Advanced Edition",
+        " Services",
+        " Service",
+    )
+
+    def _exact_or_subset(self, query: str) -> dict[str, Any] | None:
+        """Original resolve() algorithm for a single query string: exact
+        name → exact alias (case-insensitive) → exact techId → safe
+        word-level subset match. Returns None on miss.
 
         The fuzzy step requires EVERY query word to appear as a word in the
         canonical name (e.g. "HANA Cloud" → "SAP HANA Cloud"), then picks the
-        candidate with the fewest extra words — deterministic and immune to the
-        dangerous substring matches the old code allowed (e.g. "AI" matching
-        anything containing those letters, or a short query swallowing a wrong
-        service). Wrong-icon picks were a root cause of bad "block types".
+        candidate with the fewest extra words — deterministic and immune to
+        the dangerous substring matches the old code allowed (e.g. "AI"
+        matching anything containing those letters, or a short query
+        swallowing a wrong service). Wrong-icon picks were a root cause of
+        bad "block types".
         """
-        if not query:
-            return None
         if query in self._by_name:
             return self._by_name[query]
         if query.lower() in self._by_alias:
@@ -496,6 +506,112 @@ class ShapeIndex:
                 if extra < best_extra:
                     best, best_extra = svc, extra
         return best
+
+    @classmethod
+    def _normalized_variants(cls, query: str) -> list[str]:
+        """Generate conservative, deterministic re-spellings of ``query``
+        that a catalog entry is likely to use, to recover from common name
+        decorations (leading "SAP ", trailing "Service(s)"/edition suffix,
+        or a "Family - Member" naming scheme). The original query is always
+        first so callers can skip it when it was already tried verbatim.
+        """
+        q = query.strip()
+        variants = [q]
+
+        def _add(v: str) -> None:
+            v = v.strip()
+            if v and v not in variants:
+                variants.append(v)
+
+        # "X Services - Y" / "X - Y" → try the tail "Y" (and its SAP-stripped
+        # form), since compound "family - member" names in IR payloads are
+        # frequently catalogued under just the member name.
+        if " - " in q:
+            tail = q.split(" - ")[-1]
+            _add(tail)
+            if tail.lower().startswith("sap "):
+                _add(tail[4:])
+
+        # Strip a leading "SAP " (catalog entries often omit the brand
+        # prefix, e.g. "Business Application Studio").
+        stems = [q]
+        if q.lower().startswith("sap "):
+            stems.append(q[4:])
+        for stem in stems:
+            _add(stem)
+
+        # Strip trailing decorations (edition/service suffixes) from every
+        # stem seen so far, longest suffix first so "Standard Edition" is
+        # removed as a unit.
+        for stem in list(stems):
+            for suffix in cls._TRAILING_DECORATIONS:
+                if stem.endswith(suffix):
+                    _add(stem[: -len(suffix)])
+
+        return variants
+
+    def _fuzzy_tokenset(self, query: str) -> dict[str, Any] | None:
+        """Last-resort tier: token-set match tolerant of short-form
+        abbreviations (e.g. "Application" vs "App"). Requires every query
+        token to be covered — either an exact token match, or a
+        prefix-relationship between two tokens each at least 3 chars long
+        (so short tokens like "ai" can only match exactly, keeping this
+        immune to the "AI matches everything" failure mode). Multi-token
+        queries only: a single-word query never reaches this tier.
+        """
+        best, best_score = None, None
+        for variant in self._normalized_variants(query):
+            q_tokens = set(re.findall(r"[a-z0-9]+", variant.lower()))
+            if len(q_tokens) < 2:
+                continue
+            for name, svc in sorted(self._by_name.items()):
+                n_tokens = set(re.findall(r"[a-z0-9]+", name.lower()))
+                matched: set[str] = set()
+                covered = True
+                for qt in q_tokens:
+                    if qt in n_tokens:
+                        matched.add(qt)
+                        continue
+                    hit = None
+                    for nt in n_tokens - matched:
+                        if len(qt) >= 3 and len(nt) >= 3 and (
+                            qt.startswith(nt) or nt.startswith(qt)
+                        ):
+                            hit = nt
+                            break
+                    if hit is None:
+                        covered = False
+                        break
+                    matched.add(hit)
+                if not covered:
+                    continue
+                score = (len(n_tokens - matched), len(n_tokens))
+                if best_score is None or score < best_score:
+                    best, best_score = svc, score
+        return best
+
+    def resolve(self, query: str | None) -> dict[str, Any] | None:
+        """Lookup priority: exact name → exact alias (case-insensitive) →
+        exact techId → safe word-level subset match — all tried first
+        against ``query`` verbatim (so every name that already resolved
+        keeps resolving to the exact same icon), then retried against
+        conservative normalized re-spellings (stripped "SAP " prefix,
+        stripped edition/service suffix, "Family - Member" tail) to recover
+        names with common decorations that don't affect the underlying
+        service. A final abbreviation-tolerant token-set tier (e.g.
+        "Application" ~ "App") is tried only if nothing else matched.
+        Returns None on miss.
+        """
+        if not query:
+            return None
+        hit = self._exact_or_subset(query)
+        if hit is not None:
+            return hit
+        for variant in self._normalized_variants(query)[1:]:
+            hit = self._exact_or_subset(variant)
+            if hit is not None:
+                return hit
+        return self._fuzzy_tokenset(query)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2050,7 +2166,7 @@ def emit(
                 gx, gy, _, _ = group_geo[n.group]
                 off_x, off_y = float(nx - gx), float(ny - gy)
             if n.type == "product":
-                cells = _M.product_box(n, contract, icon_resolver)
+                cells = _M.product_box(n, contract, icon_resolver, brand_packs)
             elif n.type == "db":
                 cells = [_M.db_cell(n, contract)]
             else:  # chip

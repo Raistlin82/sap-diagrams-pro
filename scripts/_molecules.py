@@ -76,11 +76,18 @@ def load_brand_packs() -> dict:
 
     The public pack (committed) is loaded first; the ``.local`` pack (gitignored,
     often absent in CI / on Desktop) is layered on top so a private high-fidelity
-    asset can override a public placeholder. Missing / malformed files are
-    ignored — resolution then simply falls back to the text-badge path.
+    asset can override a public placeholder. The (also gitignored, also often
+    absent) ``brand-pack.local/capability-icons.json`` — Gabriele's harvested
+    ``cap-<slug>`` capability-chip icons — is merged in last. Missing / malformed
+    files are ignored — resolution then simply falls back to the text-badge /
+    text-chip path, no error.
     """
     packs: dict[str, Any] = {}
-    for rel in ("brand-pack/index.json", "brand-pack.local/index.json"):
+    for rel in (
+        "brand-pack/index.json",
+        "brand-pack.local/index.json",
+        "brand-pack.local/capability-icons.json",
+    ):
         p = ASSETS / rel
         if not p.exists():
             continue
@@ -420,14 +427,50 @@ def _capability_grid_geometry(contract: dict) -> tuple[float, float, float]:
     return cell_w, cell_h, gap
 
 
+_CAPABILITY_LABEL_SUFFIX_STRIP = (" scenario",)
+
+
+def _capability_icon_key(label: str | None) -> str | None:
+    """Derive a ``cap-<slug>`` brand-pack key from a capability chip label.
+
+    Slug = the label lowercased, spaces → "-", punctuation stripped. A known
+    label decoration is stripped first: "Visibility Scenario" → "visibility"
+    → ``cap-visibility`` (Gabriele's harvested icon is keyed on the bare
+    capability name, not the "Scenario" variant BPA sometimes uses). Returns
+    ``None`` for an empty/missing label; the caller treats a key that isn't in
+    the loaded brand pack as "no icon" too (correct for e.g. Cloud ALM's
+    "Implementation"/"Operations"/"Transformation" capabilities, which are
+    text-only in Gabriele's originals — there is no ``cap-implementation``
+    icon to find).
+    """
+    if not label:
+        return None
+    l = label.strip().lower()
+    for suffix in _CAPABILITY_LABEL_SUFFIX_STRIP:
+        if l.endswith(suffix):
+            l = l[: -len(suffix)].strip()
+            break
+    l = re.sub(r"[^\w\s-]", "", l)
+    slug = re.sub(r"\s+", "-", l).strip("-")
+    return f"cap-{slug}" if slug else None
+
+
 def product_box(
     node: Any,
     contract: dict,
     icon_resolver: Callable[[str], str | None] | None = None,
+    brand_packs: dict | None = None,
 ) -> list[dict]:
     """Product node → white-panelled BTP-blue box + title row + a grid of
     capability chips. Every chip sits inside the box with ``product-box.padX``
-    margins on all four sides; the box grows to fit the grid + title."""
+    margins on all four sides; the box grows to fit the grid + title.
+
+    A capability with no explicit ``icon`` is auto-resolved from
+    ``brand_packs`` via ``_capability_icon_key`` (a harvested ``cap-<slug>``
+    entry, e.g. ``cap-decision``); when the pack has no matching entry (absent
+    pack, or a capability with no harvested icon like Cloud ALM's
+    "Implementation") the chip stays text-only — never an error. An explicit
+    ``icon`` on the capability always wins over auto-resolution."""
     box_style = _style(contract, "product-box")
     g = _geo(contract, "product-box")
     pad_x = _f(g, "padX", 60.8)
@@ -485,6 +528,10 @@ def product_box(
         style = chip_style
         icon = cap.get("icon") if isinstance(cap, dict) else None
         uri = icon_resolver(icon) if (icon and icon_resolver) else None
+        if not uri and not icon and isinstance(cap, dict):
+            auto_key = _capability_icon_key(cap.get("label"))
+            if auto_key:
+                uri = _resolve_asset(auto_key, brand_packs)
         if uri:
             style = (
                 chip_style
