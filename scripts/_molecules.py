@@ -455,6 +455,27 @@ def _capability_icon_key(label: str | None) -> str | None:
     return f"cap-{slug}" if slug else None
 
 
+def _resolve_capability_icon(
+    cap: Any,
+    icon_resolver: Callable[[str], str | None] | None,
+    brand_packs: dict | None,
+) -> str | None:
+    """The same "explicit icon wins, else auto-resolve from the label" lookup
+    ``product_box`` applies per capability — pulled out so it can be run in a
+    pre-pass (to decide the grid's row height, see ``product_box``) with the
+    identical result the main per-chip loop will get, instead of two logic
+    paths that could silently drift apart."""
+    if not isinstance(cap, dict):
+        return None
+    icon = cap.get("icon")
+    uri = icon_resolver(icon) if (icon and icon_resolver) else None
+    if not uri and not icon:
+        auto_key = _capability_icon_key(cap.get("label"))
+        if auto_key:
+            uri = _resolve_asset(auto_key, brand_packs)
+    return uri
+
+
 def product_box(
     node: Any,
     contract: dict,
@@ -480,6 +501,29 @@ def product_box(
     cap_w, cap_h, cap_gap = _capability_grid_geometry(contract)
 
     caps = list(getattr(node, "capabilities", None) or [])
+    # Resolve every capability's icon (if any) UP FRONT, once — both to decide
+    # the grid's row height below (an icon-bearing row needs to be taller
+    # than a text-only one; the row height is one shared number for the whole
+    # grid, fixed before the per-chip loop lays out x/y, so it can't be
+    # decided chip-by-chip) and to avoid the per-chip loop re-running the same
+    # resolver/auto-key lookup a second time.
+    cap_uris = [_resolve_capability_icon(cap, icon_resolver, brand_packs) for cap in caps]
+    chip_geo = _geo(contract, "capability-chip")
+    icon_w = _f(chip_geo, "iconW", 32.0)
+    icon_h = _f(chip_geo, "iconH", 32.0)
+    if any(cap_uris):
+        # An icon-bearing chip stacks its icon ABOVE the label (see the style
+        # comment below) instead of centering text alone, so it needs the
+        # icon's own height plus room for one line of label text beneath it —
+        # the text-only cap_h (sized for a single centered text line, no
+        # icon) is too short and the label collides with the icon's bottom
+        # edge. "Room for one label line" mirrors _pure_render.py's own
+        # label-band-height convention for an icon caption
+        # (``label_band_rect``: ``max(16.0, fontSize * 1.8)``, fontSize
+        # defaulting to mxgraph's own 12 since the contract style sets none),
+        # plus this chip's own spacingBottom=4 text inset.
+        label_zone_h = max(16.0, 12.0 * 1.8) + 4.0
+        cap_h = icon_h + label_zone_h
     n = len(caps)
     cols = 1 if n <= 1 else 2
     rows = math.ceil(n / cols) if n else 0
@@ -526,17 +570,34 @@ def product_box(
         cx = grid_x + col * (cap_w + cap_gap)
         cy = top + row * (cap_h + cap_gap)
         style = chip_style
-        icon = cap.get("icon") if isinstance(cap, dict) else None
-        uri = icon_resolver(icon) if (icon and icon_resolver) else None
-        if not uri and not icon and isinstance(cap, dict):
-            auto_key = _capability_icon_key(cap.get("label"))
-            if auto_key:
-                uri = _resolve_asset(auto_key, brand_packs)
+        uri = cap_uris[i]
         if uri:
+            # The contract's base capability-chip style bakes in
+            # imageWidth=64;imageHeight=64 (measured off the SSAM panel as a
+            # WHOLE-panel number — see _capability_grid_geometry's
+            # docstring), which is nearly 1.5x this per-capability chip's own
+            # height and, at that size, the icon swallows the chip and sits
+            # on top of the label instead of above it. The actual per-ICON
+            # footprint the contract measured (``iconW``/``iconH``, 32x32 —
+            # Gabriele's exemplar glyph size) is what belongs here;
+            # overriding imageWidth/imageHeight AFTER the verbatim chip_style
+            # prefix (styles are parsed key=value, last write wins) shrinks
+            # just the icon-bearing case to the real icon size without
+            # touching the shared base style string (still a required
+            # verbatim prefix — see test_molecules.py) or any text-only chip
+            # (which never gets an `image=` key at all).
+            #
+            # Icon top-centered (imageVerticalAlign=top) at its real 32x32
+            # footprint, label bottom-centered (verticalAlign=bottom) below
+            # it -- both inside the SAME bordered chip rect (now tall enough,
+            # see cap_h above), stacked instead of overlapping (was: 64x64
+            # icon nearly filling the whole chip, drawn UNDER a bottom-pinned
+            # label with no room for both).
             style = (
                 chip_style
                 + "shape=label;imageAlign=center;imageVerticalAlign=top;"
-                + f"verticalAlign=bottom;spacingBottom=4;image={uri};"
+                + "verticalAlign=bottom;spacingBottom=4;"
+                + f"imageWidth={icon_w:g};imageHeight={icon_h:g};image={uri};"
             )
         cells.append(
             {

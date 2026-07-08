@@ -112,6 +112,49 @@ def test_product_box_chip_embeds_resolved_icon(M, contract):
     assert chip["value"] == "Monitor"
 
 
+def test_product_box_icon_chip_stacks_icon_above_label_no_overlap(M, contract):
+    """Regression for the icon/label-overlap defect: an icon-bearing capability
+    chip must position its icon top-centered and its label BELOW it (stacked,
+    not both centered on top of each other), and must NOT keep the contract's
+    base 64x64 imageWidth/imageHeight (measured off the whole SSAM panel, not
+    a per-icon footprint) -- that oversized icon is what swallowed the chip
+    and sat on top of the label. A sibling text-only chip (no icon resolved)
+    must be completely unaffected -- still the bare contract style, centered
+    text, no image/vertical-label markers at all."""
+    node = NS(id="p", label="P", service="X", type="product",
+              capabilities=[{"label": "Decision", "icon": "decision"},
+                            {"label": "Implementation"}])
+    uri = "data:image/svg+xml,PHN2Zz48L3N2Zz4="
+    cells = M.product_box(node, contract, icon_resolver=lambda n: uri if n == "decision" else None)
+    chips = {c["value"]: c for c in cells if c["id"].startswith("chip")}
+    icon_chip, text_chip = chips["Decision"], chips["Implementation"]
+
+    chip_geo = contract["molecules"]["capability-chip"]["geometry"]
+    icon_w, icon_h = chip_geo["iconW"], chip_geo["iconH"]
+
+    # Icon-bearing chip: stacks icon-top (imageVerticalAlign=top) above a
+    # bottom-anchored label (verticalAlign=bottom), sized to the real
+    # per-icon footprint -- not the base style's whole-panel 64x64.
+    assert "imageVerticalAlign=top" in icon_chip["style"]
+    assert "verticalAlign=bottom" in icon_chip["style"]
+    assert f"imageWidth={icon_w:g}" in icon_chip["style"]
+    assert f"imageHeight={icon_h:g}" in icon_chip["style"]
+    # The base contract style's own imageWidth=64/imageHeight=64 (a whole-panel
+    # measurement -- see _capability_grid_geometry's docstring) is still
+    # present verbatim (it's part of the required contract-style prefix,
+    # asserted below), but the real per-icon override MUST come after it in
+    # the ``;``-delimited style string so the last-write-wins mxgraph/pure-
+    # renderer style parser actually uses 32x32, not 64x64, for the icon box.
+    assert icon_chip["style"].index(f"imageWidth={icon_w:g}") > icon_chip["style"].index("imageWidth=64")
+    assert icon_chip["style"].index(f"imageHeight={icon_h:g}") > icon_chip["style"].index("imageHeight=64")
+
+    # Text-only sibling: no image, no vertical-label-position styling at all --
+    # a pure regression guard that the icon-chip fix doesn't leak onto it.
+    assert "image=" not in text_chip["style"]
+    assert "imageVerticalAlign" not in text_chip["style"]
+    assert text_chip["style"] == _style(contract, "capability-chip")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 1 — badge() fallback: empty brand packs → bordered text chip "AWS".
 # ─────────────────────────────────────────────────────────────────────────────
