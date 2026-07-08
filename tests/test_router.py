@@ -1152,3 +1152,77 @@ def test_9c_obstacle_cap_truncates_above_the_cap():
     # nearest-first: n0 (x=0) must beat the farthest node (x=(cap+19)*10)
     assert node_geo["n0"] in result
     assert node_geo[f"n{cap + 19}"] not in result
+
+
+# ── Task 14: zone-title header bands as label-placement obstacles ───────────
+def test_14_zone_header_rects_derives_top_level_group_bands():
+    """One ``ZONE_HEADER_H``-tall, full-width obstacle per TOP-LEVEL group --
+    keyed by ``layout["meta"]["slot_of"]`` (populated by
+    ``_skeleton_layout.compute_layout`` for exactly the parent-less groups).
+    A nested group (present in "groups" but not in "slot_of") is excluded; a
+    "slot_of" id missing from "groups" is silently skipped, not a KeyError."""
+    layout = {
+        "groups": {
+            "top1": (10.0, 20.0, 200.0, 150.0),
+            "top2": (300.0, 20.0, 100.0, 80.0),
+            "nested": (20.0, 60.0, 50.0, 40.0),   # not in slot_of -> excluded
+        },
+        "meta": {"slot_of": {"top1": "left", "top2": "right", "dangling": "top"}},
+    }
+    rects = router._zone_header_rects(layout)
+    seen = {(r.x, r.y, r.w, r.h) for r in rects}
+    assert seen == {
+        (10.0, 20.0, 200.0, router.ZONE_HEADER_H),
+        (300.0, 20.0, 100.0, router.ZONE_HEADER_H),
+    }
+    assert len(rects) == 2   # "dangling" (in slot_of, missing from groups) skipped
+
+
+def test_14_zone_header_rects_empty_without_meta():
+    """Hand-built layouts that predate Task 14 (no "meta"/"slot_of", e.g.
+    every ``_synthetic()``-style fixture in this file) get zero header
+    obstacles -- today's routing decisions on those layouts are unaffected."""
+    assert router._zone_header_rects({"groups": {"g": (0, 0, 10, 10)}}) == []
+    assert router._zone_header_rects({}) == []
+
+
+@pytest.mark.parametrize("path", [V2, NOVA], ids=["ir-v2", "nova"])
+def test_14_pills_and_labels_do_not_overlap_zone_header_band(gen, sl, path):
+    """No pill/label rect overlaps a top-level zone's title-header band --
+    the label-placement counterpart of
+    ``test_8e_pills_and_labels_are_collision_free``. Closes the gap Task 12's
+    gate flagged as a WARN-only TEXT_OVERLAP (the router didn't use to treat
+    a zone's title as an obstacle at all): on the shipped nova-L1, the
+    "audit events" edge label landed on top of the "Identity + Ops" zone
+    title (``p-690f2732×g-c62973cc#header``, 76% overlap)."""
+    diagram, layout, res = _fixture_route(gen, sl, path)
+    header_rects = router._zone_header_rects(layout)
+    assert header_rects, f"{path.name} fixture must have >=1 top-level group"
+
+    for eid, c in res.pill_pos.items():
+        e = next(x for x in diagram.edges if x.id == eid)
+        r = _rect_at(c, router.pill_dims(e.pill))
+        for hr in header_rects:
+            assert not gc.rects_overlap(r, hr), f"pill {eid} overlaps a zone header band"
+    for eid, c in res.label_pos.items():
+        e = next(x for x in diagram.edges if x.id == eid)
+        r = _rect_at(c, router.label_dims(e.label))
+        for hr in header_rects:
+            assert not gc.rects_overlap(r, hr), f"label {eid} overlaps a zone header band"
+
+
+def test_14_nova_audit_events_label_off_identity_ops_header(gen, sl):
+    """Targeted regression for the exact reported defect: nova-L1's e22
+    ("audit events", cap -> audit) label must not overlap the "Identity +
+    Ops" zone's title-header band."""
+    diagram, layout, res = _fixture_route(gen, sl, NOVA)
+    ops_gid = next(g.id for g in diagram.groups if g.label == "Identity + Ops")
+    x, y, w, _h = layout["groups"][ops_gid]
+    header = Rect(float(x), float(y), float(w), router.ZONE_HEADER_H)
+
+    e22 = next(e for e in diagram.edges if e.id == "e22")
+    assert e22.label == "audit events"
+    label_rect = _rect_at(res.label_pos["e22"], router.label_dims(e22.label))
+    assert not gc.rects_overlap(label_rect, header), (
+        "'audit events' label still overlaps the 'Identity + Ops' zone header"
+    )

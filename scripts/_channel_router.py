@@ -118,6 +118,19 @@ SEP_CLEARANCE = 14.0     # px a lane keeps clear of the NETWORK separator bar
 CROSS_MAX_SWEEPS = 3     # Task 9A: max greedy bubble sweeps in reduce_crossings
 AVOID_CLEARANCE = 8.0    # Task 9B: px an obstacle-avoiding detour keeps clear of a node box
 AVOID_TURN_PENALTY = 30.0  # Task 9B: A* per-bend cost so detours prefer few, clean corners
+# Task 14: height of a top-level group's title-header band, treated as a
+# pill/label-placement obstacle (the label-slotting counterpart of Task 9's
+# caption fix). Every top-level frame the emitter draws (v1 group box OR
+# molecule frame) puts its title text in this top strip — see
+# generate-drawio.py's ``_group_style`` (verticalAlign=top;fontSize=14;
+# spacingTop=6) and ``_molecules._frame_title_cell`` (``TITLE_H=24``).
+# Deliberately an independent constant, not imported, from
+# check-composition.py's identical-value ``ZONE_HEADER_H`` (the gate's own
+# synthetic approximation of the same text) — the router and the gate are
+# decoupled modules by design; the two are kept equal by convention/review,
+# not by a shared import, so the router's obstacle matches what the gate
+# measures.
+ZONE_HEADER_H = 30.0
 
 _COLS = ("left", "center", "right")
 _SIDE_DIR = {"R": (1.0, 0.0), "L": (-1.0, 0.0), "B": (0.0, 1.0), "T": (0.0, -1.0)}
@@ -211,10 +224,11 @@ def _rect(t: tuple[float, float, float, float]):
 
 def _obstacle_geo(layout: dict) -> dict[str, Any]:
     """Node rects used for OBSTACLE purposes — piercing avoidance
-    (``_avoid_obstacles`` / ``count_piercings``) and the pill/label slot
-    obstacle set (``_place_pills_and_labels``). ``layout["node_obstacles"]``
-    when the caller supplies it (the emitter does — FIX-1: icon nodes get a
-    rect extended DOWNWARD over their caption band, so the router treats
+    (``_avoid_obstacles`` / ``count_piercings``) and (together with
+    ``_zone_header_rects``, Task 14) the pill/label slot obstacle set
+    (``_place_pills_and_labels``). ``layout["node_obstacles"]`` when the
+    caller supplies it (the emitter does — FIX-1: icon nodes get a rect
+    extended DOWNWARD over their caption band, so the router treats
     icon+caption as one box for these purposes), else the same rects
     ``plan()`` uses for ports (``layout["nodes"]``) — the pre-FIX-1 behaviour,
     which every test that hand-builds a bare ``{"nodes": …}`` layout still
@@ -223,6 +237,37 @@ def _obstacle_geo(layout: dict) -> dict[str, Any]:
     draw.io renders the connection (see ``plan()``)."""
     src = layout.get("node_obstacles") or layout.get("nodes", {})
     return {nid: _rect(t) for nid, t in src.items()}
+
+
+def _zone_header_rects(layout: dict) -> list:
+    """Task 14 — one ``ZONE_HEADER_H``-tall obstacle rect per TOP-LEVEL group,
+    spanning the full width of its frame at its top edge: where the group's
+    title text renders (see ``ZONE_HEADER_H``'s docstring). Fed into
+    ``_place_pills_and_labels``'s obstacle set (label placement only — NOT
+    ``_avoid_obstacles``/``count_piercings``, which stay scoped to node
+    geometry, matching Task 9B) so an edge label can no longer land on a
+    zone's title, the way it did on the shipped nova-L1 (the "audit events"
+    label over the "Identity + Ops" zone title — Task 12's TEXT_OVERLAP WARN).
+
+    Top-level groups are ``layout["meta"]["slot_of"]``'s keys — populated by
+    ``_skeleton_layout.compute_layout`` for exactly the groups with no
+    parent (see its docstring: "slot_of is the reverse of slots, every
+    top-level group's own slot") — so this needs no ``diagram`` access; a
+    group id present in ``slot_of`` but missing from ``layout["groups"]``
+    (shouldn't happen, but cheap to guard) is skipped. Returns ``[]`` when
+    the layout carries no ``meta``/``groups`` (every hand-built test layout
+    that omits them — the overwhelming majority — keeps today's behaviour
+    unchanged, byte-for-byte)."""
+    groups = layout.get("groups") or {}
+    slot_of = (layout.get("meta") or {}).get("slot_of") or {}
+    out: list = []
+    for gid in slot_of:
+        geo = groups.get(gid)
+        if geo is None:
+            continue
+        x, y, w, _h = geo
+        out.append(Rect(float(x), float(y), float(w), ZONE_HEADER_H))
+    return out
 
 
 def _side_frac(r, side: str, frac: float) -> tuple[float, float]:
@@ -639,7 +684,7 @@ def _place_in_slots(seg, dims, obstacles, foreign_segs):
     return base, Rect(base[0] - w / 2, base[1] - h / 2, w, h), False
 
 
-def _place_pills_and_labels(plans, paths, node_geo):
+def _place_pills_and_labels(plans, paths, node_geo, header_rects=()):
     """Drop each edge's protocol pill and label into a collision-free slot on
     its longest segment. Processed in IR order; every placed rect becomes an
     obstacle for later ones, so results are overlap-free by construction and
@@ -647,11 +692,19 @@ def _place_pills_and_labels(plans, paths, node_geo):
     (captured once, in ``plan()``, from the source diagram's edges) — this
     function needs no ``diagram``/``edge_by_id`` of its own.
 
+    ``header_rects`` (Task 14, default ``()``) — extra obstacles ADDED to the
+    node obstacle set for this placement pass only: zone/group title-header
+    bands (see ``_zone_header_rects``). Kept as a separate parameter rather
+    than folded into ``node_geo`` because header bands are a label-placement
+    concern only — they must NOT feed ``_avoid_obstacles``/``count_piercings``
+    (an edge is allowed to physically cross under a zone's title strip; it
+    just can't park its pill/label text there).
+
     Returns ``(pill_pos, label_pos, slot_fallbacks)`` — ``slot_fallbacks`` is
     the list of edge ids (order of first fallback: pill before label) whose
     ``_place_in_slots`` scan was exhausted (see there); empty when every slot
     was placed collision-free."""
-    node_rects = list(node_geo.values())
+    node_rects = list(node_geo.values()) + list(header_rects)
     placed: list = []                                 # pill + label rects so far
     all_segs = {p.eid: _segments(paths[p.eid]) for p in plans}
     pill_pos: dict[str, tuple[float, float]] = {}
@@ -1050,7 +1103,8 @@ def _route_cost(plans, layout, lane_order, port_order) -> tuple[int, int]:
                         + _build_waypoints(p, exit_pt, entry_pt, lane_offsets.get(p.eid, 0.0))
                         + [entry_pt])
     crossings = _count_crossings(paths)
-    _pill, _label, slot_fallbacks = _place_pills_and_labels(plans, paths, node_geo)
+    _pill, _label, slot_fallbacks = _place_pills_and_labels(
+        plans, paths, node_geo, _zone_header_rects(layout))
     return (len(slot_fallbacks), crossings)
 
 
@@ -1332,8 +1386,9 @@ def build_waypoints(plans: list[_Plan],
     piercings = count_piercings(paths, node_geo,
                                 {p.eid: (p.src_id, p.dst_id) for p in plans})
 
-    # ── pill & label slots (8e) ─────────────────────────────────────────────
-    pill_pos, label_pos, slot_fallbacks = _place_pills_and_labels(plans, paths, node_geo)
+    # ── pill & label slots (8e; Task 14 adds zone-header bands as obstacles) ──
+    pill_pos, label_pos, slot_fallbacks = _place_pills_and_labels(
+        plans, paths, node_geo, _zone_header_rects(layout))
 
     return waypoints, pill_pos, label_pos, crossings, piercings, slot_fallbacks
 
