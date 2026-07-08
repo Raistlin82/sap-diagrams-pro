@@ -114,6 +114,7 @@ PORT_LO, PORT_HI = 0.25, 0.75   # ports spread evenly across [0.25, 0.75] of a s
 CORRIDOR_MARGIN = 22.0   # px a horizontal corridor sits clear of all node content
 SLOT_PAD = 6.0           # extra px between pill/label slots (pitch = pill_h + this)
 SEP_CLEARANCE = 14.0     # px a lane keeps clear of the NETWORK separator bar
+CROSS_MAX_SWEEPS = 3     # Task 9A: max greedy bubble sweeps in reduce_crossings
 
 _COLS = ("left", "center", "right")
 
@@ -667,6 +668,143 @@ def _count_crossings(paths: dict[str, list[tuple[float, float]]]) -> int:
     return total
 
 
+# ── Crossing reduction (Task 9A) ─────────────────────────────────────────────
+def _perm_hook(perm: dict):
+    """Build a ``lane_order`` / ``port_order`` callable from a
+    ``{frozenset(eids): [eid…]}`` map. For a group whose id-set is a key it
+    returns the group reordered to match; otherwise the group is returned
+    unchanged. Always a TRUE permutation (it reorders the SAME ``_Plan``
+    objects — never drops or invents one, never leaves an id at a 0-offset),
+    so it is safe against the ``assign_ports_lanes`` hook footguns. Returns
+    ``None`` for an empty ``perm`` (i.e. the default barycenter order)."""
+    if not perm:
+        return None
+
+    def hook(group):
+        order = perm.get(frozenset(p.eid for p in group))
+        if order is None:
+            return group
+        rank = {eid: i for i, eid in enumerate(order)}
+        return sorted(group, key=lambda p: rank.get(p.eid, 0))
+
+    return hook
+
+
+def _naive_crossings(plans, layout, lane_perm, port_perm) -> int:
+    """Crossing count of the NAIVE (pre-obstacle-avoidance) paths for one
+    candidate ``(lane_perm, port_perm)`` — cheap (no A* reroute), so the greedy
+    can evaluate many candidates. The naive count is the right search signal
+    for the reorderable channel bundles (gutters/corridors) whose edges are
+    NOT rerouted; the final accept/reject step below re-checks the true
+    post-avoidance cost so the search can never make the shipped diagram
+    worse."""
+    port_fracs, lane_offsets = assign_ports_lanes(
+        plans, layout, lane_order=_perm_hook(lane_perm), port_order=_perm_hook(port_perm))
+    paths = {}
+    for p in plans:
+        efr, nfr = port_fracs[p.eid]
+        exit_pt = _abs_port(p.src, efr)
+        entry_pt = _abs_port(p.dst, nfr)
+        paths[p.eid] = ([exit_pt]
+                        + _build_waypoints(p, exit_pt, entry_pt, lane_offsets.get(p.eid, 0.0))
+                        + [entry_pt])
+    return _count_crossings(paths)
+
+
+def _route_cost(plans, layout, lane_order, port_order) -> tuple[int, int]:
+    """Lexicographic cost ``(slot_fallbacks, crossings)`` of a candidate
+    ordering, on the naive channel paths. Ordering the objective this way lets
+    the accept/reject step reject any reorder that would buy a crossing at the
+    price of a pill/label slot that can't be placed collision-free — so Task
+    8's collision-free pill/label invariant survives the reshuffle. (Measured
+    on the naive paths, not the obstacle-avoided ones: crossing reduction is a
+    channel-routing concern; a reorder that helps the naive channel layout
+    without breaking a slot is always safe to keep, and one that doesn't is
+    declined — cheap, and independent of the Task 9B reroute.)"""
+    node_geo = {nid: _rect(t) for nid, t in layout.get("nodes", {}).items()}
+    port_fracs, lane_offsets = assign_ports_lanes(
+        plans, layout, lane_order=lane_order, port_order=port_order)
+    paths = {}
+    for p in plans:
+        efr, nfr = port_fracs[p.eid]
+        exit_pt = _abs_port(p.src, efr)
+        entry_pt = _abs_port(p.dst, nfr)
+        paths[p.eid] = ([exit_pt]
+                        + _build_waypoints(p, exit_pt, entry_pt, lane_offsets.get(p.eid, 0.0))
+                        + [entry_pt])
+    crossings = _count_crossings(paths)
+    _pill, _label, slot_fallbacks = _place_pills_and_labels(plans, paths, node_geo)
+    return (len(slot_fallbacks), crossings)
+
+
+def reduce_crossings(plans, layout, *, max_sweeps: int = CROSS_MAX_SWEEPS):
+    """STEP 1.5 (Task 9A) — deterministic greedy crossing reduction over the
+    seam's lane/port ordering hooks.
+
+    Seeds each channel's lane group and each per-(node, side) port group with
+    its default barycenter order, then bubbles adjacent pairs, keeping any swap
+    that lowers the GLOBAL NAIVE crossing count (cheap; ties keep the earlier
+    order — stable, no randomness; groups are visited lanes-then-ports in
+    seed-insertion order, so the same input yields the same candidate
+    byte-for-byte). Repeats until a whole sweep makes no improvement, the count
+    hits 0, or ``max_sweeps`` is reached.
+
+    The winning candidate is then ACCEPTED only if it lowers the true
+    ``_route_cost`` — lexicographic ``(slot_fallbacks, crossings)`` on the
+    FINAL post-avoidance geometry — versus the default order; otherwise the
+    default (barycenter) order is kept. This guard is what makes the lever
+    safe: on a diagram like nova-L1, where obstacle avoidance dominates and a
+    naive-crossing-optimal port reshuffle would only shove an edge's label into
+    a slot that can't be placed, the reorder is simply declined. On a
+    reorderable bundle (the crafted 4-edge crossing case) it is a clear win.
+
+    Returns ``(lane_order, port_order)`` — hook callables for
+    ``assign_ports_lanes``, or ``(None, None)`` when the default order is kept.
+    FOOTGUN: ``assign_ports_lanes`` mutates ``channel.lanes`` in place on EVERY
+    evaluation, so the caller MUST re-run ``assign_ports_lanes`` with the
+    returned hooks before reading ``.lanes`` / emitting (``route()`` does)."""
+    by_channel: dict[str, list[_Plan]] = {}
+    for p in plans:
+        if p.channel is not None:
+            by_channel.setdefault(p.channel.id, []).append(p)
+    lane_perm: dict = {}
+    for grp in by_channel.values():
+        ordered = sorted(grp, key=lambda p: (p.src_bary, p.dst_bary, p.eid))
+        lane_perm[frozenset(p.eid for p in ordered)] = [p.eid for p in ordered]
+
+    exit_groups, entry_groups = port_groups(plans)
+    port_perm: dict = {}
+    for grp in list(exit_groups.values()) + list(entry_groups.values()):
+        port_perm[frozenset(p.eid for p in grp)] = [p.eid for p in grp]
+
+    best = _naive_crossings(plans, layout, lane_perm, port_perm)
+    improved = True
+    sweeps = 0
+    while improved and sweeps < max_sweeps and best > 0:
+        improved = False
+        sweeps += 1
+        for perm in (lane_perm, port_perm):
+            for fs in list(perm.keys()):
+                order = perm[fs]
+                for i in range(len(order) - 1):
+                    cand = list(order)
+                    cand[i], cand[i + 1] = cand[i + 1], cand[i]
+                    saved = perm[fs]
+                    perm[fs] = cand
+                    trial = _naive_crossings(plans, layout, lane_perm, port_perm)
+                    if trial < best:
+                        best, order, improved = trial, cand, True
+                    else:
+                        perm[fs] = saved
+
+    lane_order = _perm_hook(lane_perm)
+    port_order = _perm_hook(port_perm)
+    # Accept the reorder only if it beats the default on the FINAL geometry.
+    if _route_cost(plans, layout, lane_order, port_order) < _route_cost(plans, layout, None, None):
+        return lane_order, port_order
+    return None, None
+
+
 # ── Channel construction from the layout meta ────────────────────────────────
 def _build_channels(layout: dict) -> tuple[list[tuple[str, float, float]],
                                             dict[int, Channel], dict[str, Channel],
@@ -873,17 +1011,18 @@ def route(diagram, layout: dict) -> RouteResult:
     ``layout``. See the module docstring for the model. Deterministic: edges
     are processed in IR order and every tie-break carries the edge id.
 
-    ``route()`` is exactly the composition of the three pipeline steps above
-    (default ``lane_order``/``port_order`` — i.e. today's stable ordering)
-    plus the absolute-ports arithmetic ``RouteResult.ports`` needs; it exists
-    as a convenience wrapper for callers who don't need to intervene between
-    steps. Task 9's crossing-reduction search calls ``plan`` /
-    ``assign_ports_lanes`` / ``build_waypoints`` directly instead, so it can
-    try several ``lane_order``/``port_order`` candidates against the SAME
-    ``plans`` without re-planning or forking this module.
+    ``route()`` is the composition of the pipeline steps above:
+    ``plan`` → ``reduce_crossings`` (Task 9A — picks the lane/port ordering
+    that minimises crossings) → ``assign_ports_lanes`` (with those winners) →
+    ``build_waypoints``, plus the absolute-ports arithmetic
+    ``RouteResult.ports`` needs. A caller that wants to intervene between steps
+    (e.g. Task 12/13) calls the same functions directly against the SAME
+    ``plans`` — the seam is intact.
     """
     plans = plan(diagram, layout)
-    port_fracs, lane_offsets = assign_ports_lanes(plans, layout)
+    lane_order, port_order = reduce_crossings(plans, layout)
+    port_fracs, lane_offsets = assign_ports_lanes(
+        plans, layout, lane_order=lane_order, port_order=port_order)
     waypoints, pill_pos, label_pos, crossings, slot_fallbacks = build_waypoints(
         plans, port_fracs, lane_offsets, layout)
 

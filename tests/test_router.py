@@ -617,16 +617,19 @@ def test_8e_deterministic_slots(gen, sl):
 # byte-identical to route()'s own output (the refactor must not change
 # today's diagrams), and (2) a caller-supplied lane_order/port_order (the
 # lever Task 9 needs) deterministically changes the result.
-def test_seam_default_composition_equals_route_output(gen, sl):
-    """plan() -> assign_ports_lanes() -> build_waypoints(), composed with the
-    default (None) lane_order/port_order, reproduces route()'s output
-    exactly on both real fixtures -- route() IS this composition now, not a
-    parallel implementation that could drift from it."""
+def test_seam_route_equals_reduce_assign_build_composition(gen, sl):
+    """route() IS the composition plan() -> reduce_crossings() ->
+    assign_ports_lanes(with those winners) -> build_waypoints(), not a parallel
+    implementation that could drift from it. Reproducing it by hand on both
+    real fixtures must yield route()'s exact output -- the seam Task 9 (and
+    Task 12/13) drive stays load-bearing."""
     for path in (V2, NOVA):
         diagram, layout, expected = _fixture_route(gen, sl, path)
 
         plans = router.plan(diagram, layout)
-        port_fracs, lane_offsets = router.assign_ports_lanes(plans, layout)
+        lane_order, port_order = router.reduce_crossings(plans, layout)
+        port_fracs, lane_offsets = router.assign_ports_lanes(
+            plans, layout, lane_order=lane_order, port_order=port_order)
         waypoints, pill_pos, label_pos, crossings, slot_fallbacks = (
             router.build_waypoints(plans, port_fracs, lane_offsets, layout)
         )
@@ -637,6 +640,28 @@ def test_seam_default_composition_equals_route_output(gen, sl):
         assert label_pos == expected.label_pos
         assert crossings == expected.crossings
         assert slot_fallbacks == expected.slot_fallbacks == []
+
+
+def test_seam_default_composition_is_deterministic_and_reducible(gen, sl):
+    """The default (None lane_order/port_order) composition is still callable
+    and deterministic, and reduce_crossings never INCREASES the crossing count
+    versus that default -- the crossing-reduction lever only ever helps."""
+    for path in (V2, NOVA):
+        diagram, layout, _expected = _fixture_route(gen, sl, path)
+        plans = router.plan(diagram, layout)
+
+        pf_def, lo_def = router.assign_ports_lanes(plans, layout)
+        wp_def, *_rest = router.build_waypoints(plans, pf_def, lo_def, layout)
+        wp_def2, *_rest2 = router.build_waypoints(plans, pf_def, lo_def, layout)
+        assert wp_def == wp_def2                       # deterministic default path
+
+        lane_order, port_order = router.reduce_crossings(plans, layout)
+        pf, lo = router.assign_ports_lanes(
+            plans, layout, lane_order=lane_order, port_order=port_order)
+        _wp, _pp, _lp, crossings, _fb = router.build_waypoints(plans, pf, lo, layout)
+        _wp0, _pp0, _lp0, crossings_def, _fb0 = router.build_waypoints(
+            plans, pf_def, lo_def, layout)
+        assert crossings <= crossings_def
 
 
 def test_seam_plan_exposes_channels_for_route_result(gen, sl):
@@ -792,3 +817,77 @@ def test_channel_router_module_reuses_already_loaded_module(gen):
         assert gen._channel_router_module() is canonical
     finally:
         gen._CHANNEL_ROUTER_MOD = saved       # don't leak state into other tests
+
+
+# ── Task 9A: greedy crossing reduction via lane/port reorder ─────────────────
+def _reducible_x_layout():
+    """A crafted 4-edge 'X': four edges L{i}->C{i} sharing the single
+    left<->center gutter, whose DEFAULT (barycenter, by src.y) lane order
+    leaves 6 segment/segment crossings but a reordering exists that leaves 1.
+    (src/dst y's found by search — see the task's 'crafted X case'.)"""
+    ys_src = [420, 80, 120, 320]
+    ys_dst = [500, 480, 80, 460]
+    nodes = {}
+    edges = []
+    for i in range(4):
+        nodes[f"L{i}"] = (20, ys_src[i], 60, 40)
+        nodes[f"C{i}"] = (350, ys_dst[i], 60, 40)
+        edges.append(_edge(f"e{i}", f"L{i}", f"C{i}"))
+    layout = {
+        "nodes": nodes, "groups": {}, "canvas": (900, 700),
+        "meta": {"columns": {"left": (0, 100), "center": (300, 500), "right": (700, 800)},
+                 "networkSeparator": None},
+    }
+    return layout, _diagram(edges)
+
+
+def _default_crossings(diagram, layout):
+    """Crossings of the DEFAULT (no reorder) channel routing — the baseline the
+    greedy improves on."""
+    plans = router.plan(diagram, layout)
+    pf, lo = router.assign_ports_lanes(plans, layout)
+    paths = {}
+    for p in plans:
+        efr, nfr = pf[p.eid]
+        ex = router._abs_port(p.src, efr)
+        en = router._abs_port(p.dst, nfr)
+        paths[p.eid] = [ex] + router._build_waypoints(p, ex, en, lo.get(p.eid, 0.0)) + [en]
+    return router._count_crossings(paths)
+
+
+def test_9a_greedy_reduces_crafted_x_crossings_to_at_most_one():
+    """The crafted 4-edge X starts with 6 crossings in the default order;
+    route() (which runs reduce_crossings) brings it down to <= 1 -- the
+    deterministic greedy reorder pass genuinely minimises crossings, not just
+    'runs'."""
+    layout, diagram = _reducible_x_layout()
+    assert _default_crossings(diagram, layout) == 6      # documents the baseline
+    res = router.route(diagram, layout)
+    assert res.crossings <= 1, f"greedy left {res.crossings} crossings (want <= 1)"
+
+
+def test_9a_reduce_crossings_is_deterministic_and_a_true_permutation():
+    """reduce_crossings returns hooks that (a) reduce the crafted-X crossings
+    identically on a repeat call and (b) are TRUE permutations -- feeding them
+    to assign_ports_lanes never drops or invents an edge (all 4 lane offsets
+    present)."""
+    layout, diagram = _reducible_x_layout()
+    plans = router.plan(diagram, layout)
+    lane1, port1 = router.reduce_crossings(plans, layout)
+    lane2, port2 = router.reduce_crossings(plans, layout)
+    # deterministic: apply each and compare the resulting lane offsets
+    pf1, lo1 = router.assign_ports_lanes(plans, layout, lane_order=lane1, port_order=port1)
+    pf2, lo2 = router.assign_ports_lanes(plans, layout, lane_order=lane2, port_order=port2)
+    assert lo1 == lo2 and pf1 == pf2
+    assert set(lo1) == {f"e{i}" for i in range(4)}       # every edge kept a lane
+
+
+def test_9a_reduce_crossings_declines_reorder_that_would_break_a_slot(gen, sl):
+    """On nova-L1 a naive-crossing-optimal PORT reshuffle would shove an edge's
+    label into a slot that can't be placed collision-free; reduce_crossings's
+    final (slot_fallbacks, crossings) accept/reject guard declines it, so
+    route() keeps every pill/label collision-free (no slot fallback) -- Task
+    8's invariant is not sacrificed for a crossing."""
+    _d, _l, res = _fixture_route(gen, sl, NOVA)
+    assert res.slot_fallbacks == []
+
