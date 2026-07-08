@@ -116,24 +116,22 @@ Rules:
 
 ### Step 5 — Generate with full context
 
-Only when steps 1-4 are complete:
+Only when steps 1-4 are complete, hand off to `SKILL.md`'s Steps 6-8 for each requested level:
 
-1. Build the JSON intermediate per the agreed inventory and level(s).
+1. Build the IR v2 per the agreed inventory and level(s) — the full authoring grammar (group `subaccount`/`governance`/`cloud-tier`/`custom-app` types, `product`/`chip`/`db` nodes, `flowFamily`/`pill` edges, `metadata.branding`/`badges`) is in `SKILL.md` Step 6.
 2. Resolve every named SAP service via `sap-icons-resolve` (do not skip — fall back to plain box only when truly missing from the index).
-3. Run `scripts/generate-drawio.py` for each level.
-4. Run `scripts/validate-drawio.py` on each output.
+3. Validate the IR (`scripts/validate-ir.py`) — must exit 0 before generating (`SKILL.md` Step 7).
+4. Generate, gate (`validate-drawio.py --strict` + `check-composition.py`), render, and run the visual-rubric look → patch → regenerate loop, max 3 vision iterations (`SKILL.md` Step 8). This is where the diagram actually gets built and verified — this document only covers getting to a confirmed inventory.
 
 ### Step 6 — Report and offer next steps
 
-Present:
+Present, per level, the scorecard `SKILL.md` Step 8.6 produces (gate FAIL/WARN counts, rubric pass count, crossings, piercings, vision iterations used) plus any degrade-path WARNING:
 
 ```
 ✅ Generated 2 diagrams:
-   • diagrams/nova-invoice-suite-L0.drawio  (8 elements, 0 critical / 0 warnings)
-   • diagrams/nova-invoice-suite-L1.drawio  (24 elements, 0 critical / 1 info)
-
-   Validator notes:
-     • L1 INFO: cell n-... and n-... overlap by 4px (cosmetic)
+   • diagrams/nova-invoice-suite-L0.drawio  (8 elements — gate: 0 fail/0 warn; rubric: 26/26 pass)
+   • diagrams/nova-invoice-suite-L1.drawio  (24 elements — gate: 0 fail/0 warn; rubric: 24/26 pass,
+     2 manual findings: sem-icons-match, comp-legend-present; 2/3 vision iterations used)
 
 Next steps:
   • Open in draw.io desktop or [drawio.com](https://drawio.com)

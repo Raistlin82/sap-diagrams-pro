@@ -108,23 +108,53 @@ For L2 diagrams, decompose the BTP Layer into sub-groups by capability:
 **Position by convention**: right side (bottom-right or full right column for L2).
 **Typical contents**: observability (Cloud Logging, Cloud ALM), security (XSUAA, IAS), networking (Cloud Connector, VPN).
 
+### 7. Subaccount (IR v2, nestable)
+
+**Purpose**: model a real BTP account hierarchy inside the BTP Layer instead of a flat pile of service boxes.
+
+**Style**: white fill, BTP border `#0070F2`, tight rounded frame labelled "Subaccount: …".
+**Position by convention**: nested inside the `btp-layer` group (`"parent": "<btp-group-id>"`).
+**Nesting**: a `subaccount` group's `parent` may be another `subaccount` id — e.g. `Extension Test` ⊃ `Extension Production` renders frame-inside-frame. Use this whenever the solution spans more than one subaccount/stage rather than flattening everything into one BTP box.
+
+### 8. Governance (IR v2)
+
+**Purpose**: cross-cutting governance/monitoring products (e.g. Cloud ALM) that sit above — not inside — the BTP Layer.
+
+**Style**: BTP fill/border, wide strip spanning the canvas width.
+**Position by convention**: its own top band, above the BTP frame's top edge. Never beside or below it — that misplacement has no `set_zone` fix (see `comp-governance-top` in [`visual-rubric.md`](visual-rubric.md)); the IR `type`/`position` must be correct up front.
+
+### 9. Cloud tiers (IR v2)
+
+**Purpose**: represent the public cloud / private cloud / any-premise deployment tiers a backend runs in, as distinct labelled boxes rather than one undifferentiated "Backends" group.
+
+**Style**: tier box; `kind: "public"` and `kind: "private"` render with the SAP-blue border (SAP-managed), `kind: "any-premise"` renders non-SAP grey `#475E75` unless the tier itself is SAP-affiliated.
+**Position by convention**: RIGHT zone, right of the NETWORK separator.
+**Typical contents**: a `chip`-typed node naming the concrete offering (e.g. "Private Cloud Edition (PCE)").
+
+### 10. Custom app (IR v2)
+
+**Purpose**: a bespoke application built *on* BTP — distinct from `sap-app` (a SAP-shipped standalone product).
+
+**Style**: BTP fill `#EBF8FF`, BTP border — the same product-card treatment as a `product`-typed node, but at group scope for a whole custom application.
+**Position by convention**: wherever the architecture places it (commonly RIGHT, alongside the tiers it's deployed into).
+
 ## Composition rules
 
 ### Containment
 
-A node can be a member of **exactly one** group. Nested groups (organism inside organism) are discouraged at L0 and L1 — they create visual ambiguity. At L2, the BTP Layer may have sub-groups; in that case the parent BTP Layer is rendered as a thin outer frame and the sub-groups carry the fill.
+A node can be a member of **exactly one** group. Freeform "organism inside organism" nesting is still discouraged — but IR v2's `subaccount` group type is the one sanctioned exception: it is *designed* to nest (`parent` → another `subaccount` id), and using it at L1 to model a real Test ⊃ Production hierarchy is preferred over flattening everything into one BTP box. At L2, the BTP Layer may also have capability sub-groups; the parent BTP Layer then renders as a thin outer frame and the sub-groups carry the fill.
 
 ### Spacing
 
-The "rule of thumb" from the guideline: spacing between organisms must be **at least the height of the SAP logo** (≈ 32px). The plugin's deterministic zone-composition engine (`scripts/_zone_layout.py`) lays organisms out along the horizontal axis — consumers LEFT → BTP CENTER → systems RIGHT — and auto-sizes each container to its content, enforcing even inter-zone padding by default.
+The "rule of thumb" from the guideline: spacing between organisms must be **at least the height of the SAP logo** (≈ 32px). The plugin's deterministic skeleton slot engine (`scripts/_skeleton_layout.py`) lays organisms out along the horizontal axis — consumers LEFT → BTP CENTER → systems RIGHT — and auto-sizes each container to its content, enforcing even inter-zone padding by default.
 
 ### Group-internal arrangement
 
-Inside a group, nodes flow in rows (left-to-right, then top-to-bottom). The zone engine (`scripts/_zone_layout.py`) packs them with even gaps and grows the container to fit.
+Inside a group, nodes flow in rows (left-to-right, then top-to-bottom). The skeleton layout engine (`scripts/_skeleton_layout.py`) packs them with even gaps and grows the container to fit. An `order_override` layout hint (see [`visual-rubric.md`](visual-rubric.md)) can force a specific sibling order when the default rank sort crowds a corner.
 
 ### Overlap
 
-Groups must not overlap (the validator emits a `BOX_OVERLAP` info issue if they do). The plugin's zone-composition engine prevents this by design: each organism is placed in its own auto-sized zone along the horizontal axis (consumers LEFT → BTP CENTER → systems RIGHT), and nodes are attached to their group via real draw.io parenting. Orphan nodes (no group) fall back to the center zone.
+Groups must not overlap (the validator emits a `BOX_OVERLAP` info issue if they do). The plugin's skeleton layout engine prevents this by design: each organism is placed in its own auto-sized zone along the horizontal axis (consumers LEFT → BTP CENTER → systems RIGHT), and nodes are attached to their group via real draw.io parenting. Orphan nodes (no group) fall back to the center zone.
 
 ## When in doubt
 
