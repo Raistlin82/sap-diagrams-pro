@@ -1,0 +1,54 @@
+{
+  "_comment": "SPDX-FileCopyrightText: 2026 Gabriele Capparelli — SPDX-License-Identifier: Apache-2.0 — Task 16 gold-fidelity replica of assets/editable-diagram-examples/SAP_Task_Center_L1.drawio (btp-solution-diagrams repo). Inventory + structure hand-transcribed from that .drawio's XML: personas (End User, Application Clients) -> SAP BTP Subaccount inner-frame row (Build Work Zone -> Task Center -> Destination service -> Connectivity Service) -> NETWORK separator -> right-hand tiers (SAP On-Premise Solutions incl. Cloud Connector, 3rd Party Applications, SAP Cloud Solutions), plus a bottom Identity group (SAP Cloud Identity Service) fed by an external 3rd-party identity provider. Two adaptations vs the gold that our engine's grammar doesn't support 1:1 (documented in the Task 16 report): (1) the Subaccount's 'Multi-Cloud' caption is folded into the group label since Group has no subtitle field; (2) Application Clients' 'Mobile or Desktop' caption is authored as node.subtitle but is a no-op for frameless persona icons (subtitle only renders on backend-box molecules).",
+  "metadata": {
+    "title": "SAP Task Center - SAP BTP Solution Diagram",
+    "level": "L1",
+    "author": "sap-diagrams-pro (Task 16 gold-fidelity replica)"
+  },
+  "layoutHints": [],
+  "presets": [],
+  "groups": [
+    {"id": "personas", "type": "user", "label": "Personas", "position": "left"},
+
+    {"id": "btp", "type": "btp-layer", "label": "SAP BTP", "position": "center"},
+    {"id": "subaccount", "type": "subaccount", "label": "Subaccount (Multi-Cloud)", "parent": "btp", "flow": "row"},
+
+    {"id": "identity", "type": "btp-layer", "label": "Identity", "parent": "btp"},
+    {"id": "ext-idp", "type": "third-party", "label": "External Identity Provider", "position": "bottom-left"},
+
+    {"id": "onprem", "type": "sap-app", "label": "SAP On-Premise Solutions", "position": "top-right"},
+    {"id": "thirdparty", "type": "third-party", "label": "3rd Party Applications", "position": "right"},
+    {"id": "cloudsol", "type": "sap-app", "label": "SAP Cloud Solutions", "position": "bottom-right"}
+  ],
+  "nodes": [
+    {"id": "end-user", "label": "End User", "genericIcon": "user", "group": "personas"},
+    {"id": "app-clients", "label": "Application Clients", "genericIcon": "app-clients", "subtitle": "Mobile or Desktop", "group": "personas"},
+
+    {"id": "bwz", "label": "SAP Build Work Zone", "service": "SAP Build Work Zone", "group": "subaccount"},
+    {"id": "tc", "label": "SAP Task Center", "service": "SAP Task Center", "group": "subaccount"},
+    {"id": "destination", "label": "Destination service", "service": "SAP Destination service", "group": "subaccount"},
+    {"id": "connectivity", "label": "Connectivity Service", "service": "SAP Connectivity Service", "group": "subaccount"},
+
+    {"id": "ias", "label": "SAP Cloud Identity Service", "service": "SAP Cloud Identity Service", "group": "identity"},
+    {"id": "ext-idp-node", "label": "3rd Party Identity Provider", "genericIcon": "third-party", "group": "ext-idp"},
+
+    {"id": "s4hana", "label": "SAP S/4HANA", "service": "SAP S/4HANA", "group": "onprem"},
+    {"id": "cloud-connector", "label": "Cloud Connector", "service": "Cloud Connector", "group": "onprem"},
+
+    {"id": "thirdparty-app", "label": "3rd Party Application", "genericIcon": "third-party", "group": "thirdparty"},
+    {"id": "cloud-solution", "label": "SAP Cloud Solution", "boxStyle": "btp-outline", "group": "cloudsol"}
+  ],
+  "edges": [
+    {"id": "e1", "source": "end-user", "target": "app-clients", "style": "solid"},
+    {"id": "e2", "source": "app-clients", "target": "bwz", "style": "solid"},
+    {"id": "e3", "source": "bwz", "target": "tc", "style": "solid"},
+    {"id": "e4", "source": "tc", "target": "destination", "style": "solid"},
+    {"id": "e5", "source": "destination", "target": "connectivity", "style": "solid"},
+    {"id": "e6", "source": "connectivity", "target": "cloud-connector", "style": "solid", "pill": "Task Data"},
+    {"id": "e7", "source": "destination", "target": "thirdparty-app", "style": "dashed", "pill": "Task Data"},
+    {"id": "e8", "source": "destination", "target": "cloud-solution", "style": "dashed", "pill": "Task Data"},
+    {"id": "e9", "source": "connectivity", "target": "cloud-solution", "style": "dashed", "pill": "REST/Token"},
+    {"id": "e10", "source": "app-clients", "target": "ias", "style": "solid", "flowFamily": "identity", "pill": "SAML2/OIDC"},
+    {"id": "e11", "source": "ext-idp-node", "target": "ias", "style": "dashed"}
+  ]
+}
