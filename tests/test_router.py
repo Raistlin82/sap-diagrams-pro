@@ -468,6 +468,30 @@ def _node_abs_from_drawio(root, cells, diagram):
     return out
 
 
+def _node_obstacles_from_drawio(root, cells, diagram, sl):
+    """Reconstruct {node_id: (x,y,w,h)} for OBSTACLE purposes — mirrors the
+    emitter's ``node_obstacle_geom`` (FIX-1): identical to the drawn geometry
+    EXCEPT icon nodes (identified the same way draw.io itself would render
+    the caption — a ``verticalLabelPosition=bottom`` style, which every icon
+    shape in the catalog carries) get their rect extended DOWNWARD by
+    ``LABEL_H`` to cover the caption band. Derived purely from the emitted
+    XML + the skeleton layout's public constant, independent of the
+    emitter's internal footprint bookkeeping — so this test verifies FIX-1
+    by observation, not by re-running the emitter's own logic."""
+    out = _node_abs_from_drawio(root, cells, diagram)
+    label_h = getattr(sl, "LABEL_H", 24)
+    for n in diagram.nodes:
+        cid = _stable("n", n.id)
+        cell = cells.get(cid)
+        if cell is None or n.id not in out:
+            continue
+        style = cell.get("style") or ""
+        if "verticalLabelPosition=bottom" in style:
+            x, y, w, h = out[n.id]
+            out[n.id] = (x, y, w, h + label_h)
+    return out
+
+
 def _parse_style(style):
     out = {}
     for chunk in (style or "").split(";"):
@@ -491,6 +515,11 @@ def test_8d_every_edge_has_array_points_matching_router_and_anchors(gen, sl, pat
 
     router_layout = dict(layout)
     router_layout["nodes"] = _node_abs_from_drawio(root, cells, diagram)
+    # FIX-1: the emitter also feeds the router caption-aware obstacle rects
+    # (icon nodes extended over their caption band) via "node_obstacles" —
+    # reconstruct the same rects here so this test's re-run of route() makes
+    # the identical routing decisions the emitted file reflects.
+    router_layout["node_obstacles"] = _node_obstacles_from_drawio(root, cells, diagram, sl)
     res = router.route(diagram, router_layout)
 
     for e in diagram.edges:
@@ -999,3 +1028,127 @@ def test_9b_count_piercings_kernel_matches_seg_intersects_rect():
     # a segment clear of M (and only touching its own endpoint A) never counts
     paths2 = {"e": [(40, 20), (48, 20)]}                      # stays strictly left of M
     assert router.count_piercings(paths2, node_geo, endpoints) == 0
+
+
+# ── FIX-2: _route_around's boxed-in fallback + per-edge piercing regression ──
+def test_9b_route_around_returns_none_when_target_is_boxed_in():
+    """When an edge's naive path pierces an obstacle but the target is fully
+    sealed in on all four sides (no gap the Hanan grid can route through),
+    ``_route_around`` must return ``None`` -- and the caller (``_avoid_
+    obstacles``, via ``route()``) must retain the naive path instead of
+    crashing or silently dropping the edge. Untested before FIX-2: the
+    ``if not interior: out[p.eid] = wps; continue`` branch in
+    ``_avoid_obstacles`` had no coverage."""
+    layout = {
+        "nodes": {
+            "S": (20, 400, 60, 40),          # left col
+            "T": (400, 400, 60, 40),         # center col, dead centre of the ring
+            # A sealed ring of 4 "wall" obstacles around T, each overlapping
+            # the others at the corners and extending well past T's
+            # AVOID_CLEARANCE (8px) margin on every side -- no legal Hanan
+            # grid line can reach T's entry anchor from anywhere.
+            "W_TOP":    (380, 370, 100, 31),   # y:[370,401]
+            "W_BOTTOM": (380, 439, 100, 31),   # y:[439,470]
+            "W_LEFT":   (369, 370, 32, 100),   # x:[369,401]
+            "W_RIGHT":  (459, 370, 32, 100),   # x:[459,491]
+        },
+        "groups": {}, "canvas": (900, 900),
+        "meta": {"columns": {"left": (0, 100), "center": (300, 700), "right": (760, 800)},
+                 "networkSeparator": None},
+    }
+    dia = _diagram([_edge("e1", "S", "T")])
+
+    # route() must not raise -- this is the "no crash" half of FIX-2(a).
+    res = router.route(dia, layout)
+
+    # The naive (pre-avoidance) path must be exactly what's kept: recompute
+    # it independently and compare, proving _route_around genuinely returned
+    # None here (not that it found some other, coincidentally-identical
+    # detour) and _avoid_obstacles fell back to it rather than raising.
+    plans = router.plan(dia, layout)
+    pf, lo = router.assign_ports_lanes(plans, layout)
+    p = plans[0]
+    efr, nfr = pf[p.eid]
+    exit_pt = router._abs_port(p.src, efr)
+    entry_pt = router._abs_port(p.dst, nfr)
+    naive = router._build_waypoints(p, exit_pt, entry_pt, lo.get(p.eid, 0.0))
+    assert res.waypoints["e1"] == naive
+
+    # Confirm directly that _route_around agrees it found no path (rather
+    # than the naive/avoided paths just happening to match).
+    node_geo = {nid: Rect(*t) for nid, t in layout["nodes"].items()}
+    obstacles = list(node_geo.values())
+    interior = router._route_around(exit_pt, entry_pt, p.exit_side, p.entry_side,
+                                    obstacles, None,
+                                    src_rect=node_geo.get("S"), dst_rect=node_geo.get("T"))
+    assert interior is None
+
+    # The naive path does pierce the ring (that's WHY avoidance was
+    # attempted) -- documents this is a genuine "no clear path exists" case,
+    # not a degenerate one where there was nothing to avoid.
+    path = [exit_pt] + naive + [entry_pt]
+    endpoints = {"e1": ("S", "T")}
+    assert router.count_piercings({"e1": path}, node_geo, endpoints) >= 1
+
+
+@pytest.mark.parametrize("path", [V2, NOVA], ids=["ir-v2", "nova"])
+def test_9b_every_individual_edge_has_zero_piercings(gen, sl, path):
+    """Not just the GLOBAL piercings total -- EVERY individual edge's own
+    path has zero (segment, non-endpoint node rect) intersections on both
+    shipped fixtures. Piercing counts are non-negative per edge, so a global
+    0 already implies every edge is individually 0 by construction; this test
+    makes that explicit and edge-addressable (a future regression that
+    re-pierces edge A onto a DIFFERENT box while some other edge B's
+    avoidance improves would still show up here, one row per edge, instead of
+    only as an aggregate count)."""
+    diagram, layout, res = _fixture_route(gen, sl, path)
+    node_geo = {nid: Rect(*t) for nid, t in layout["nodes"].items()}
+    endpoints = {e.id: (e.source, e.target) for e in diagram.edges}
+    offenders = []
+    for e in diagram.edges:
+        full_path = _full_path(res, e.id)
+        n = router.count_piercings({e.id: full_path}, node_geo, {e.id: endpoints[e.id]})
+        if n:
+            offenders.append((e.id, n))
+    assert offenders == [], f"edges with nonzero individual piercings: {offenders}"
+
+
+# ── FIX-3: obstacle-count cap (A* scaling guard) is a no-op on both fixtures ──
+@pytest.mark.parametrize("path", [V2, NOVA], ids=["ir-v2", "nova"])
+def test_9c_obstacle_cap_is_a_noop_below_the_cap(gen, sl, path):
+    """``_nearby_obstacles`` (FIX-3) is only a truncation once a diagram's
+    node count exceeds ``AVOID_OBSTACLE_CAP`` -- below it, it returns
+    ``list(node_geo.values())`` unchanged, so both shipped fixtures (nova-L1:
+    27 nodes, ir-v2: 12) are byte-identical to the pre-FIX-3 behaviour BY
+    CONSTRUCTION, not by comparing against a separately-computed baseline
+    (a geometric bounding-box pre-filter was tried first and had to be
+    dropped for exactly that reason -- see _nearby_obstacles' docstring)."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    diagram = gen.parse_json(payload)
+    layout = sl.compute_layout(diagram, gen.ShapeIndex.load())
+    assert len(layout["nodes"]) <= router.AVOID_OBSTACLE_CAP, (
+        f"{path.name} now has {len(layout['nodes'])} nodes -- at or above "
+        f"AVOID_OBSTACLE_CAP ({router.AVOID_OBSTACLE_CAP}), so this test no "
+        "longer proves the cap is a no-op here; re-verify byte-identical "
+        "waypoints against a pre-FIX-3 baseline instead."
+    )
+    node_geo = {nid: router._rect(t) for nid, t in layout["nodes"].items()}
+    all_obstacles = list(node_geo.values())
+    result = router._nearby_obstacles((0.0, 0.0), (1.0, 1.0), node_geo)
+    assert result == all_obstacles
+
+
+def test_9c_obstacle_cap_truncates_above_the_cap():
+    """Above ``AVOID_OBSTACLE_CAP``, ``_nearby_obstacles`` truncates to
+    exactly ``AVOID_OBSTACLE_CAP`` boxes, nearest-first to the edge's
+    exit/entry midpoint -- the scaling guard actually engages once a diagram
+    is dense enough (SSAM-scale), instead of silently doing nothing."""
+    cap = router.AVOID_OBSTACLE_CAP
+    node_geo = {f"n{i}": Rect(float(i) * 10.0, 0.0, 5.0, 5.0)
+                for i in range(cap + 20)}          # 20 nodes over the cap
+    exit_pt, entry_pt = (0.0, 0.0), (0.0, 0.0)      # midpoint at the origin
+    result = router._nearby_obstacles(exit_pt, entry_pt, node_geo)
+    assert len(result) == cap
+    # nearest-first: n0 (x=0) must beat the farthest node (x=(cap+19)*10)
+    assert node_geo["n0"] in result
+    assert node_geo[f"n{cap + 19}"] not in result

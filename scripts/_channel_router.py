@@ -77,6 +77,7 @@ crossings, the baseline Task 9 reduces).
 """
 from __future__ import annotations
 
+import heapq
 import importlib.util
 import sys
 from dataclasses import dataclass, field
@@ -206,6 +207,22 @@ class _Plans(list):
 # ── Geometry helpers ─────────────────────────────────────────────────────────
 def _rect(t: tuple[float, float, float, float]):
     return Rect(float(t[0]), float(t[1]), float(t[2]), float(t[3]))
+
+
+def _obstacle_geo(layout: dict) -> dict[str, Any]:
+    """Node rects used for OBSTACLE purposes — piercing avoidance
+    (``_avoid_obstacles`` / ``count_piercings``) and the pill/label slot
+    obstacle set (``_place_pills_and_labels``). ``layout["node_obstacles"]``
+    when the caller supplies it (the emitter does — FIX-1: icon nodes get a
+    rect extended DOWNWARD over their caption band, so the router treats
+    icon+caption as one box for these purposes), else the same rects
+    ``plan()`` uses for ports (``layout["nodes"]``) — the pre-FIX-1 behaviour,
+    which every test that hand-builds a bare ``{"nodes": …}`` layout still
+    gets. Deliberately NOT used for ports/exit-entry points: those must stay
+    on the real (icon-only) drawn geometry so edges anchor exactly where
+    draw.io renders the connection (see ``plan()``)."""
+    src = layout.get("node_obstacles") or layout.get("nodes", {})
+    return {nid: _rect(t) for nid, t in src.items()}
 
 
 def _side_frac(r, side: str, frac: float) -> tuple[float, float]:
@@ -735,19 +752,50 @@ def _simplify_path(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
     return out
 
 
-def _route_around(exit_pt, entry_pt, exit_side, entry_side, obstacles, net_sep):
+def _clear_anchor(pt, side, own_rect, cl):
+    """Step ``pt`` outward along ``side``'s outward normal by ``cl`` — and, if
+    ``own_rect`` (the endpoint's OWN obstacle rect, which is also IN the
+    caller's general obstacle list) reaches further out than that in the same
+    direction, all the way clear of it too.
+
+    Needed since FIX-1: an icon node's OBSTACLE rect can be taller than the
+    rect its port sits on (extended downward over the caption band, while the
+    port itself still sits on the real rendered icon edge — see
+    ``_obstacle_geo``). Without this, a "B"-side exit port stepped only ``cl``
+    past the icon's real bottom edge could land INSIDE that same node's own
+    (taller) obstacle rect in the general obstacles list — trapping the A*
+    start/goal state with no legal first move (every direction blocked by its
+    own box) and silently returning ``None`` (naive path kept, piercing not
+    fixed) instead of finding the real detour."""
+    dx, dy = _SIDE_DIR[side]
+    x, y = pt[0] + dx * cl, pt[1] + dy * cl
+    if own_rect is not None:
+        if dx > 0:
+            x = max(x, own_rect.right + cl)
+        elif dx < 0:
+            x = min(x, own_rect.x - cl)
+        elif dy > 0:
+            y = max(y, own_rect.bottom + cl)
+        elif dy < 0:
+            y = min(y, own_rect.y - cl)
+    return (x, y)
+
+
+def _route_around(exit_pt, entry_pt, exit_side, entry_side, obstacles, net_sep,
+                  src_rect=None, dst_rect=None):
     """Deterministic orthogonal A* over the Hanan grid of obstacle-box edges,
     each offset ``AVOID_CLEARANCE`` outward.
 
     Rather than route port→port (which would let a path sneak THROUGH the
     endpoint boxes to reach a face from the wrong side), it routes between
     **outward anchors**: each port stepped ``AVOID_CLEARANCE`` out along its
-    side's outward normal, into free space. The two short port stubs
-    (``exit_pt``→``exit_anchor`` and ``entry_anchor``→``entry_pt``) fix the
-    exit/entry SIDES geometrically, so the ports the caller already assigned
-    (and emitted as exitX/entryX) stay valid and the final approach always
-    meets the face from outside — no in-search direction constraint, and no
-    arriving through the box.
+    side's outward normal (and clear of its OWN endpoint's obstacle rect —
+    see ``_clear_anchor``, ``src_rect``/``dst_rect``), into free space. The
+    two short port stubs (``exit_pt``→``exit_anchor`` and
+    ``entry_anchor``→``entry_pt``) fix the exit/entry SIDES geometrically, so
+    the ports the caller already assigned (and emitted as exitX/entryX) stay
+    valid and the final approach always meets the face from outside — no
+    in-search direction constraint, and no arriving through the box.
 
     A vertical grid segment is blocked when it runs within ``AVOID_CLEARANCE``
     (horizontally) of any obstacle whose y-range it overlaps, a horizontal one
@@ -762,12 +810,9 @@ def _route_around(exit_pt, entry_pt, exit_side, entry_side, obstacles, net_sep):
     excluded, collinear vertices collapsed) or ``None`` when no clear
     orthogonal path exists on the grid (the caller then keeps the naive path).
     """
-    import heapq
     cl = AVOID_CLEARANCE
-    ed = _SIDE_DIR[exit_side]
-    nd = _SIDE_DIR[entry_side]
-    exit_anchor = (exit_pt[0] + ed[0] * cl, exit_pt[1] + ed[1] * cl)
-    entry_anchor = (entry_pt[0] + nd[0] * cl, entry_pt[1] + nd[1] * cl)
+    exit_anchor = _clear_anchor(exit_pt, exit_side, src_rect, cl)
+    entry_anchor = _clear_anchor(entry_pt, entry_side, dst_rect, cl)
 
     xs = {exit_anchor[0], entry_anchor[0]}
     ys = {exit_anchor[1], entry_anchor[1]}
@@ -850,6 +895,51 @@ def _route_around(exit_pt, entry_pt, exit_side, entry_side, obstacles, net_sep):
     return _simplify_path([exit_pt] + seq + [entry_pt])[1:-1]
 
 
+AVOID_OBSTACLE_CAP = 60  # FIX-3: node count above which _route_around's
+                         # obstacle set is restricted (see _nearby_obstacles)
+
+
+def _nearby_obstacles(exit_pt, entry_pt, node_geo):
+    """FIX-3 scaling guard for ``_route_around``'s obstacle set.
+
+    ``_avoid_obstacles`` hands ALL N diagram nodes to ``_route_around`` for
+    EVERY rerouted edge (~O(E·N³) — a real cost on a dense diagram like
+    SSAM's). A geometric bounding-box pre-filter was tried first (drop node
+    boxes far from the edge's exit/entry span) but had to be abandoned: the
+    Hanan grid's x/y coordinates are the UNION of every kept obstacle's edges
+    ± clearance, so removing even a box nowhere near the edge's own path can
+    shift which coordinate VALUES exist in the grid — and hence, via A*'s
+    ``(f, g, ix, iy, dir)`` tie-break (grid INDICES, not raw coordinates),
+    which of several equal-cost paths wins. Confirmed on nova-L1 itself: a
+    300px-margin bbox filter changed 3 edges' bend points by a few px
+    (functionally equivalent detours, but NOT byte-identical) — exactly the
+    regression this task said not to risk. So instead of a filter that can
+    silently perturb output on ANY layout, this is a CAP that provably never
+    engages on either shipped fixture: nova-L1 has 27 nodes, ir-v2 has 12,
+    both far under ``AVOID_OBSTACLE_CAP`` — below the cap this returns
+    ``list(node_geo.values())`` unchanged (the exact pre-FIX-3 expression),
+    so both fixtures are byte-identical by CONSTRUCTION, not by empirical
+    verification of a heuristic. Only a diagram denser than the cap (SSAM-
+    scale) has its obstacle set truncated, to the ``AVOID_OBSTACLE_CAP``
+    boxes nearest the edge's exit/entry midpoint — bounding the A* grid size
+    there too, with no byte-identical guarantee (there is no smaller-N
+    baseline to match) but a reasonable one (favouring the obstacles most
+    likely to actually lie on the detour)."""
+    obstacles = list(node_geo.values())
+    if len(obstacles) <= AVOID_OBSTACLE_CAP:
+        return obstacles
+    cx = (exit_pt[0] + entry_pt[0]) / 2.0
+    cy = (exit_pt[1] + entry_pt[1]) / 2.0
+
+    def _dist2(r):
+        dx = max(r.x - cx, 0.0, cx - r.right)
+        dy = max(r.y - cy, 0.0, cy - r.bottom)
+        return dx * dx + dy * dy
+
+    obstacles.sort(key=_dist2)
+    return obstacles[:AVOID_OBSTACLE_CAP]
+
+
 def _avoid_obstacles(plans, ports, waypoints, layout):
     """Reroute every edge whose naive path pierces a non-endpoint node box so
     it travels AROUND the box(es) instead of through them (Task 9B — the user's
@@ -861,7 +951,7 @@ def _avoid_obstacles(plans, ports, waypoints, layout):
     guarantee is preserved. Ports are held fixed, so port distribution and the
     emitted exit/entry anchors stay valid. Deterministic (edges processed in
     IR/plan order; ``_route_around`` itself is deterministic)."""
-    node_geo = {nid: _rect(t) for nid, t in layout.get("nodes", {}).items()}
+    node_geo = _obstacle_geo(layout)
     net_sep = (layout.get("meta") or {}).get("networkSeparator")
     out: dict[str, list[tuple[float, float]]] = {}
     for p in plans:
@@ -877,10 +967,15 @@ def _avoid_obstacles(plans, ports, waypoints, layout):
         # the detour can't shortcut THROUGH an endpoint box to reach its face
         # from the wrong side. The outward port anchors (see _route_around) sit
         # on the endpoint boxes' clearance boundary, so the ports stay
-        # reachable even though the boxes themselves are blocked.
-        obstacles = list(node_geo.values())
+        # reachable even though the boxes themselves are blocked. FIX-3:
+        # _nearby_obstacles caps the obstacle count on dense diagrams (see its
+        # docstring) — below the cap (both shipped fixtures) this is
+        # ``list(node_geo.values())`` unchanged.
+        obstacles = _nearby_obstacles(exit_pt, entry_pt, node_geo)
         interior = _route_around(exit_pt, entry_pt, p.exit_side, p.entry_side,
-                                 obstacles, net_sep)
+                                 obstacles, net_sep,
+                                 src_rect=node_geo.get(p.src_id),
+                                 dst_rect=node_geo.get(p.dst_id))
         if not interior:
             out[p.eid] = wps
             continue
@@ -943,7 +1038,7 @@ def _route_cost(plans, layout, lane_order, port_order) -> tuple[int, int]:
     channel-routing concern; a reorder that helps the naive channel layout
     without breaking a slot is always safe to keep, and one that doesn't is
     declined — cheap, and independent of the Task 9B reroute.)"""
-    node_geo = {nid: _rect(t) for nid, t in layout.get("nodes", {}).items()}
+    node_geo = _obstacle_geo(layout)
     port_fracs, lane_offsets = assign_ports_lanes(
         plans, layout, lane_order=lane_order, port_order=port_order)
     paths = {}
@@ -971,13 +1066,18 @@ def reduce_crossings(plans, layout, *, max_sweeps: int = CROSS_MAX_SWEEPS):
     byte-for-byte). Repeats until a whole sweep makes no improvement, the count
     hits 0, or ``max_sweeps`` is reached.
 
-    The winning candidate is then ACCEPTED only if it lowers the true
-    ``_route_cost`` — lexicographic ``(slot_fallbacks, crossings)`` on the
-    FINAL post-avoidance geometry — versus the default order; otherwise the
-    default (barycenter) order is kept. This guard is what makes the lever
-    safe: on a diagram like nova-L1, where obstacle avoidance dominates and a
-    naive-crossing-optimal port reshuffle would only shove an edge's label into
-    a slot that can't be placed, the reorder is simply declined. On a
+    The winning candidate is then ACCEPTED only if it lowers ``_route_cost``
+    — lexicographic ``(slot_fallbacks, crossings)`` on the NAIVE channel
+    paths (FIX-4: ``_route_cost`` builds these with the same single-edge
+    ``_build_waypoints`` this search already uses, deliberately BEFORE
+    ``_avoid_obstacles`` — see its own docstring; crossing reduction is a
+    channel-routing concern, independent of the Task 9B reroute, so the
+    final post-avoidance geometry is never computed just to evaluate a
+    candidate here) — versus the default order; otherwise the default
+    (barycenter) order is kept. This guard is what makes the lever safe: on
+    a diagram like nova-L1, where obstacle avoidance dominates and a naive-
+    crossing-optimal port reshuffle would only shove an edge's label into a
+    slot that can't be placed, the reorder is simply declined. On a
     reorderable bundle (the crafted 4-edge crossing case) it is a clear win.
 
     Returns ``(lane_order, port_order)`` — hook callables for
@@ -1210,7 +1310,7 @@ def build_waypoints(plans: list[_Plan],
     waypoints out — the routing decisions of steps 1-2 are mechanically
     realised here, no re-planning.
     """
-    node_geo = {nid: _rect(t) for nid, t in layout.get("nodes", {}).items()}
+    node_geo = _obstacle_geo(layout)
 
     ports: dict[str, tuple[tuple, tuple]] = {}
     waypoints: dict[str, list[tuple[float, float]]] = {}
@@ -1250,6 +1350,16 @@ def route(diagram, layout: dict) -> RouteResult:
     reroute), plus the absolute-ports arithmetic ``RouteResult.ports`` needs.
     A caller that wants to intervene between steps (e.g. Task 12/13) calls the
     same functions directly against the SAME ``plans`` — the seam is intact.
+
+    NOTE for Task 13: this hardcodes ``reduce_crossings`` as the ONLY
+    ``(lane_order, port_order)`` source between ``plan`` and
+    ``assign_ports_lanes``. Task 13's rubric hooks (``channel_prefer`` /
+    ``order_override``) will need a composition path that applies BOTH a
+    rubric override AND crossing reduction (e.g. seed the greedy sweep from
+    the rubric's order instead of the default barycenter one, or run the
+    rubric override first and let ``reduce_crossings`` only accept a further
+    swap that doesn't undo it) — not designed here, just flagged so it isn't
+    a surprise.
     """
     plans = plan(diagram, layout)
     lane_order, port_order = reduce_crossings(plans, layout)

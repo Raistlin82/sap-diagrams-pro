@@ -1538,6 +1538,15 @@ def emit(
     _sl = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(_sl)
     icon_dim = _sl.icon_size(diagram.level)
+    # Caption band the zone layout reserves under an icon node (see
+    # _skeleton_layout._footprint: icon footprint height = icon + LABEL_H).
+    # Router FIX-1: icon nodes are re-squared to icon_dim x icon_dim for
+    # RENDERING (below), which drops this band from node_abs_geom — making the
+    # caption invisible to the router's piercing check and label-slot obstacle
+    # set. caption_reserve lets us build a SEPARATE, taller obstacle rect
+    # (node_obstacle_geom) for the router while keeping node_abs_geom exactly
+    # what's drawn (so ports/edges still anchor to the real icon border).
+    caption_reserve = getattr(_sl, "LABEL_H", 24)
 
     if layout == "greedy":
         group_geo = layout_groups(diagram.groups)
@@ -1822,6 +1831,13 @@ def emit(
     # Track each node's absolute geometry so edges can compute anchor points
     # based on their endpoints' relative positions.
     node_abs_geom: dict[str, tuple[int, int, int, int]] = {}
+    # Router FIX-1: obstacle geometry fed to the channel router for piercing
+    # avoidance + pill/label slot placement. Identical to node_abs_geom for
+    # every node EXCEPT icon nodes, whose rect is extended DOWNWARD by
+    # caption_reserve so the router treats icon+caption as one obstacle box
+    # (node_abs_geom itself stays icon-only — it's what's actually drawn, and
+    # what ports/edges anchor to).
+    node_obstacle_geom: dict[str, tuple[float, float, float, float]] = {}
 
     for n in diagram.nodes:
         # IR v2 leaf archetypes → contract-driven molecules. Position origin
@@ -1851,6 +1867,9 @@ def emit(
                 icon_resolver=icon_resolver, warnings=mol_warnings,
             )
             node_abs_geom[n.id] = (nx, ny, cells[0]["w"], cells[0]["h"])
+            # Molecule frames have no floating caption below them (any title/
+            # subtitle is drawn INSIDE the frame) — obstacle == drawn rect.
+            node_obstacle_geom[n.id] = node_abs_geom[n.id]
             continue
 
         gtype = _group_type.get(n.group)
@@ -1870,16 +1889,27 @@ def emit(
                 # Square icon at the top-centre of its footprint cell; the
                 # caption (verticalLabelPosition=bottom in the icon style)
                 # floats below it, in the space the zone layout reserved.
+                footprint_h = h                            # icon + caption band
                 x = x + (w - icon_dim) / 2
                 w = h = icon_dim
             # else: box / plain node → keep the footprint size from zone layout.
         else:
             x, y = node_xy.get(n.id, (0, 0))
             if is_icon:
+                footprint_h = icon_dim + caption_reserve
                 w = h = icon_dim
             else:
                 w, h = NODE_W, NODE_H
         node_abs_geom[n.id] = (x, y, w, h)
+        # Router FIX-1: for icon nodes, the obstacle rect extends over the
+        # caption band the zone layout reserved below the icon (footprint_h,
+        # which is >= icon_dim + caption_reserve by construction) — so the
+        # router's piercing check and label-slot obstacle set see icon+caption
+        # as one box. Box/plain nodes have no floating caption: obstacle ==
+        # drawn rect.
+        node_obstacle_geom[n.id] = (
+            (x, y, w, max(h, footprint_h)) if is_icon else (x, y, w, h)
+        )
 
         # Real drawio parenting: if the node belongs to a (sub-)group, parent
         # the mxCell to that group cell and emit relative coordinates.
@@ -2012,6 +2042,11 @@ def emit(
     if layout != "greedy":
         router_layout = dict(layout_result)
         router_layout["nodes"] = dict(node_abs_geom)
+        # FIX-1: caption-aware obstacle rects (icon+caption for icon nodes) —
+        # kept SEPARATE from "nodes" so ports/exit-entry points still anchor
+        # to the real (icon-only) drawn geometry; only the piercing check and
+        # pill/label slot obstacle set see the taller box.
+        router_layout["node_obstacles"] = dict(node_obstacle_geom)
         route_result = _crmod.route(diagram, router_layout)
         edge_anchors = dict(route_result.port_fracs)
         edge_waypoints = dict(route_result.waypoints)
