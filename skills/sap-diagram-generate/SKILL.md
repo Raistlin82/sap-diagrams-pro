@@ -90,6 +90,7 @@ Using `AskUserQuestion`, ask only what is still ambiguous **after** Steps 2–3 
 - **Backends** — S/4HANA on-prem (PCE) / S/4HANA Cloud / non-SAP DBs / which.
 - **Connectivity** — Cloud Connector / Private Link / direct.
 - **Observability scope** — Cloud Logging only / + Audit Log + Alert Notification + Cloud ALM.
+- **Branding** — ask explicitly whether to add a **partner watermark** and/or a **customer logo**. **Default is NONE — never assume a company or apply a watermark on your own** (do not default to "Lutech" or any partner). If the user says yes, ask them to **provide the image** (paste/attach the logo file, or point to a path). Save it under `assets/brand-pack.local/` (gitignored — trademarks/customer assets stay local) with a short key, add it to that pack's `index.json` as a `dataUri`, and only then set `metadata.branding.partnerWatermark` / `branding.customerLogo` to that key. If the user declines or provides nothing, omit `branding` entirely.
 
 ### Step 5 — Confirm the inventory
 
@@ -105,8 +106,8 @@ Compose one JSON object per level. See [`examples/`](examples/) for worked v1 pa
 |---|---|---|
 | `title`, `level`, `author` | string | as v1 |
 | `iconSize` | `S`\|`M`\|`L` (optional) | default service-icon render size |
-| `branding.customerLogo` | string (optional) | ref into `assets/brand-pack(.local)/`; renders top-left, next to the title. Only set this from the customer's own asset pack — never embed a customer logo you don't have explicit rights to use (see the confidentiality rule for customer logos) |
-| `branding.partnerWatermark` | string (optional) | large, low-contrast background image ref |
+| `branding.customerLogo` | string (optional) | ref into `assets/brand-pack(.local)/`; renders top-left, next to the title. **Set ONLY when the user asked for it in Step 4 and provided the asset** — never embed a logo you don't have explicit rights to use (see the confidentiality rule for customer logos). Omit otherwise |
+| `branding.partnerWatermark` | string (optional) | large, low-contrast background image ref. **Set ONLY when the user opted in (Step 4) and supplied the image** — never default to a partner (e.g. Lutech). Omit otherwise |
 | `badges.hyperscalers` / `badges.runtimes` | `[string, ...]` (optional) | diagram-level badge strip (same shape as a group's `badges`) |
 | `networkSeparator` | bool (default `true`) | draws the vertical grey NETWORK bar between the BTP center and any RIGHT-zone tier; leave it on whenever a `cloud-tier`/`sap-app`/`non-sap`/`third-party`/`external` group sits outside the BTP frame, set `false` only when there is nothing on the right to separate from |
 | `layoutHints` | `[]` (top-level, sibling of `metadata`) | the 7-op patch vocabulary — see [`references/visual-rubric.md`](references/visual-rubric.md). **Leave this empty at authoring time.** It exists for Step 8's vision loop to fill in; hand-authoring a hint here almost always means the real fix belongs in `zone`/`flow`/`type` instead |

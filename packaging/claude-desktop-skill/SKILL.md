@@ -49,6 +49,14 @@ Confirm just what you can't infer: **level(s)** (L0/L1/L2, default L1); **runtim
 (sync OData/REST vs async events); **backends** (S/4HANA on-prem/PCE/Cloud, non-SAP
 DBs); **connectivity** (Cloud Connector / Private Link); **observability**.
 
+**Branding — always ask, never assume.** Ask explicitly whether to add a **partner
+watermark** and/or **customer logo**. **Default is NONE** — never apply a watermark
+or default to any company (e.g. do NOT assume "Lutech"). If the user wants one, ask
+them to **paste/attach the logo image**; save it into `assets/brand-pack/` with a
+short key + add it to that pack's `index.json` as a `dataUri`, then set
+`metadata.branding.partnerWatermark` / `branding.customerLogo` to that key. If they
+decline or provide nothing, omit `branding` entirely.
+
 ### 3. Build the IR v2 (JSON)
 
 The IR has `metadata`, `groups[]`, `nodes[]`, `edges[]`, and optional `layoutHints[]`.
