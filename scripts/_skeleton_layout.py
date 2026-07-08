@@ -90,6 +90,52 @@ TOP_BAND = 64         # reserved for the diagram title
 BOTTOM_BAND = 76      # reserved for the legend + "Diagram Level" caption
 BAND_GAP = 44         # gap between a top/bottom band and the column block
 
+# ── Legend footprint (FIX-1) ──────────────────────────────────────────────────
+# The emitter draws the auto-legend bottom-right at ``y = canvas_h - legend_h -
+# 40``. When the legend is taller than the default BOTTOM_BAND it used to be
+# pushed UP into the last right-column zone, obscuring that zone's label. So the
+# layout RESERVES a bottom band sized for the legend, growing canvas_h until the
+# legend lands in its own strip clear of every placed group. The row-selection /
+# height formula below is kept byte-identical with ``_emit_legend`` in
+# generate-drawio.py (a drift test asserts the two agree).
+LEGEND_W = 220
+LEGEND_ROW_H = 18
+LEGEND_TITLE_H = 32       # title band above the rows
+LEGEND_PAD_BOTTOM = 12    # padding under the last row
+LEGEND_BAND_GAP = 24      # clear gap between the deepest content and the legend
+_LEGEND_LINE_STYLES = ("solid", "dashed", "dotted", "thick")
+_LEGEND_KIND_ORDER = (
+    "trust", "authenticate", "authorize", "generic_protocol",
+    "annotation", "positive", "critical", "negative",
+)
+
+
+def legend_row_count(diagram) -> int:
+    """Number of rows the auto-legend will render for ``diagram`` — one per
+    distinct line-style and per non-default edge kind actually used. Mirrors
+    the row selection in ``_emit_legend`` (generate-drawio.py)."""
+    used_styles = {e.style for e in diagram.edges}
+    used_kinds = {e.kind for e in diagram.edges if e.kind != "default"}
+    n = sum(1 for s in _LEGEND_LINE_STYLES if s in used_styles)
+    n += sum(1 for k in _LEGEND_KIND_ORDER if k in used_kinds)
+    return n
+
+
+def legend_height(n_rows: int) -> int:
+    """Legend box height for ``n_rows`` rows (0 ⇒ no legend)."""
+    if n_rows <= 0:
+        return 0
+    return LEGEND_TITLE_H + n_rows * LEGEND_ROW_H + LEGEND_PAD_BOTTOM
+
+
+def legend_footprint(diagram) -> tuple[int, int] | None:
+    """(w, h) the auto-legend reserves, or ``None`` when nothing to legend."""
+    n = legend_row_count(diagram)
+    if n == 0:
+        return None
+    return (LEGEND_W, legend_height(n))
+
+
 # Backend box molecule (RIGHT zone: SAP apps / on-prem / 3rd-party)
 BOX_MIN_W, BOX_MAX_W = 156, 240
 BOX_H, BOX_H_SUB = 60, 74
@@ -706,7 +752,7 @@ def compute_layout(diagram, shape_index, hints=None) -> dict[str, Any]:
         bottom = by + band_h
 
     canvas_w = int(round(max(columns_right, band_right) + MARGIN))
-    canvas_h = int(round(max(content_top + max_h, bottom) + BOTTOM_BAND))
+    content_bottom = max(content_top + max_h, bottom)
 
     # ---- orphan nodes (no group) --------------------------------------------
     if orphans:
@@ -717,7 +763,22 @@ def compute_layout(diagram, shape_index, hints=None) -> dict[str, Any]:
         for n, (px, py), (w, h) in zip(orphans, pos, fps):
             out_nodes[n.id] = (int(round(ox + px)), int(round(oy + py)),
                                int(round(w)), int(round(h)))
-        canvas_h = max(canvas_h, int(oy + H + BOTTOM_BAND))
+        content_bottom = max(content_bottom, oy + H)
+
+    # FIX-1: reserve the bottom band. The emitter places the auto-legend at
+    # ``canvas_h - legend_h - 40`` (bottom-right); if the legend is taller than
+    # the default BOTTOM_BAND it would be pushed UP into the last right-column
+    # zone. Grow the band by the legend's own height (+ a clear gap) so it lands
+    # below every placed group instead. legend_footprint() uses the SAME
+    # row/height formula the emitter draws with, so the reserved strip and the
+    # drawn box line up exactly.
+    _leg = legend_footprint(diagram)
+    if _leg is not None:
+        legend_reserve = _leg[1] + 40 + LEGEND_BAND_GAP
+    else:
+        legend_reserve = BOTTOM_BAND
+    bottom_band = max(BOTTOM_BAND, legend_reserve)
+    canvas_h = int(round(content_bottom + bottom_band))
 
     return {
         "groups": out_groups,

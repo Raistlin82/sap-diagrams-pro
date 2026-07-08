@@ -309,7 +309,11 @@ def test_subaccount_shows_chip_rule(M):
     assert M.subaccount_shows_chip("subaccount", "governance") is True
     assert M.subaccount_shows_chip("subaccount", "btp-layer") is False
     assert M.subaccount_shows_chip("subaccount", "subaccount") is False
-    assert M.subaccount_shows_chip("governance", None) is False
+    # FIX-3: a governance frame is a top-level BTP container → it carries the chip.
+    assert M.subaccount_shows_chip("governance", None) is True
+    # A btp-typed group is not a chip-bearing frame via this rule (its chip is the
+    # btp-layer logo badge, emitted separately — and suppressed on identity groups).
+    assert M.subaccount_shows_chip("cloud-tier", None) is False
 
 
 def test_subaccount_frame_suppresses_chip_when_nested(M, contract):

@@ -1024,6 +1024,18 @@ _STEP_KIND_GRADIENT = {
     "teal":    ("#066068", "#07838F"),
 }
 
+# FIX-2 step-badge clearance tuning.
+# A step node whose top edge is within this many px of its group's top is
+# treated as a TOP-ROW node (its group title band sits just above it), so the
+# badge is kept from overhanging up into the title. Comfortably above the
+# tallest group header (~54px for a btp-layer) and below the second row's top
+# (~114px = header + node + row gap), so interior rows keep the canonical
+# half-outside corner badge.
+_STEP_HEADER_ROW_BAND = 72
+# When a node also carries a top-centre interface pill (rel y in [-8, 8]),
+# drop the step badge just below the pill's bottom edge.
+_STEP_PILL_CLEAR = 10
+
 
 def _edge_style(
     e: Edge,
@@ -1311,7 +1323,7 @@ def _group_molecule_cells(
     if g.type == "subaccount":
         return M.subaccount_frame(g, contract, size, show_chip)
     if g.type == "governance":
-        return M.governance_strip(g, contract, size)
+        return M.governance_strip(g, contract, size, show_chip)
     if g.type == "cloud-tier":
         return M.tier_box(g, contract, size)
     if g.type == "custom-app":
@@ -1718,6 +1730,11 @@ def emit(
     # what's drawn (so ports/edges still anchor to the real icon border).
     caption_reserve = getattr(_sl, "LABEL_H", 24)
 
+    # FIX-3: identity groups (SAP Cloud Identity Services family) must NOT carry
+    # a "SAP BTP" chip — neither the btp-layer logo badge nor a frame chip. The
+    # skeleton already classifies them (meta["identity"]); reuse that set.
+    identity_group_ids: set[str] = set()
+
     if layout == "greedy":
         group_geo = layout_groups(diagram.groups)
         node_geo = {}
@@ -1729,6 +1746,7 @@ def emit(
         node_geo = layout_result["nodes"]
         edge_waypoints = layout_result["edges"]
         canvas_w, canvas_h = layout_result["canvas"]
+        identity_group_ids = set(layout_result["meta"].get("identity", []))
         # layout_result["meta"] (slots / lanes / ranks) is the channel router's
         # input — consumed when routing is wired in (Task 8).
 
@@ -1906,6 +1924,8 @@ def emit(
             # The layout already sized the frame (footprint ≥ contract min); the
             # builder reflows its decorations to that final size.
             show_chip = _M.subaccount_shows_chip(g.type, _group_type.get(g.parent))
+            if g.id in identity_group_ids:
+                show_chip = False   # FIX-3: identity frames carry no SAP BTP chip
             cells = _group_molecule_cells(g, contract, size=(float(w), float(h)),
                                           show_chip=show_chip)
             _place_molecule(
@@ -1939,8 +1959,8 @@ def emit(
                 "as": "geometry",
             },
         )
-        if g.type == "btp-layer":
-            _emit_sap_btp_badge(root, cell_id)
+        if g.type == "btp-layer" and g.id not in identity_group_ids:
+            _emit_sap_btp_badge(root, cell_id)   # FIX-3: not on identity groups
 
     for g in nested_groups:
         if g.id not in group_geo or g.parent not in group_geo:
@@ -1955,6 +1975,8 @@ def emit(
         # to the parent cell's origin).
         if g.type in MOLECULE_GROUP_TYPES:
             show_chip = _M.subaccount_shows_chip(g.type, _group_type.get(g.parent))
+            if g.id in identity_group_ids:
+                show_chip = False   # FIX-3: identity frames carry no SAP BTP chip
             cells = _group_molecule_cells(g, contract, size=(float(w), float(h)),
                                           show_chip=show_chip)
             _place_molecule(
@@ -2167,6 +2189,25 @@ def emit(
                 n.stepKind, _STEP_KIND_GRADIENT["default"]
             )
             step_w, step_h = 28, 28
+            # FIX-2: keep the SAP-canonical badge at the node's top-left corner
+            # (half-outside, -14/-14) for interior nodes, but nudge it DOWN out
+            # of two things it used to cover on TOP-ROW nodes:
+            #   (a) the containing group's title band — the layout reserves the
+            #       header as the group's top padding, so a top-row node's top
+            #       edge sits just below the title; a -14 overhang pokes back up
+            #       into it. Clamping the badge's top to the node's own top edge
+            #       (rel y >= 0) clears the title for ANY header height.
+            #   (b) this node's top-centre interface pill (rel y in [-8, 8]),
+            #       which on a narrow icon node spans the full width and reaches
+            #       the left corner — drop the badge below it.
+            # Non-top-row step nodes keep the canonical -14/-14 corner badge.
+            step_x, step_y = -14, -14
+            if n.group and n.group in group_geo:
+                gy = group_geo[n.group][1]
+                if (y - gy) <= _STEP_HEADER_ROW_BAND:   # top-row node
+                    step_y = max(step_y, 0)
+            if n.interface in ("sap", "generic"):
+                step_y = max(step_y, _STEP_PILL_CLEAR)
             step_cell = ET.SubElement(
                 root,
                 "mxCell",
@@ -2190,13 +2231,14 @@ def emit(
                     "connectable": "0",
                 },
             )
-            # Half-outside the node's top-left corner (centred on the corner).
+            # Top-left corner badge, nudged clear of the group title / interface
+            # pill by the FIX-2 logic above (step_x / step_y).
             ET.SubElement(
                 step_cell,
                 "mxGeometry",
                 attrib={
-                    "x": "-14",
-                    "y": "-14",
+                    "x": str(step_x),
+                    "y": str(step_y),
                     "width": str(step_w),
                     "height": str(step_h),
                     "as": "geometry",

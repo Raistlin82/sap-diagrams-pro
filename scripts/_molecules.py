@@ -183,6 +183,7 @@ def _resolve_asset(
     key: str,
     brand_packs: dict | None,
     icon_resolver: Callable[[str], str | None] | None = None,
+    brand_only: bool = False,
 ) -> str | None:
     """Resolve a logical asset name to a draw.io dataUri, or ``None`` if absent.
 
@@ -190,13 +191,19 @@ def _resolve_asset(
     the icon resolver (for ``@{service}`` glyphs, reusing the emitter's own
     ShapeIndex path). dataUris are used verbatim (comma-form, no ``;base64``)
     so the downstream sha1 / atlas lookup stays stable.
-    """
+
+    FIX-4: ``brand_only`` skips the icon-resolver leg. Hyperscaler / runtime
+    badges are BRAND assets — an unrelated fuzzy glyph match (e.g. the icon
+    resolver matching ``cloud-foundry`` to some small SAP icon) must NOT stand
+    in for a missing brand-pack asset; without the real asset the badge has to
+    degrade to the deterministic text-chip fallback (+ WARNING), exactly like
+    ``aws`` / ``azure`` already do (they simply have no fuzzy match)."""
     packs = brand_packs or {}
     for cand in _key_candidates(key):
         entry = packs.get(cand)
         if isinstance(entry, dict) and entry.get("dataUri"):
             return entry["dataUri"]
-    if icon_resolver is not None:
+    if icon_resolver is not None and not brand_only:
         uri = icon_resolver(key)
         if uri:
             return uri
@@ -210,18 +217,20 @@ def resolve_style_placeholders(
     style: str,
     brand_packs: dict | None,
     icon_resolver: Callable[[str], str | None] | None = None,
+    brand_only: bool = False,
 ) -> tuple[str, list[str]]:
     """Replace ``image=@{key}`` / ``image=@key`` tokens with resolved dataUris.
 
     Returns ``(new_style, unresolved_keys)``. Idempotent: an already-resolved
     ``image=data:…`` has no ``@`` and is left untouched. When ``unresolved_keys``
-    is non-empty the caller applies the text-badge fallback.
+    is non-empty the caller applies the text-badge fallback. ``brand_only``
+    (FIX-4) forbids the fuzzy icon-resolver leg for brand-asset badges.
     """
     unresolved: list[str] = []
 
     def repl(m: re.Match) -> str:
         key = m.group(1)
-        uri = _resolve_asset(key, brand_packs, icon_resolver)
+        uri = _resolve_asset(key, brand_packs, icon_resolver, brand_only)
         if uri is None:
             unresolved.append(key)
             return m.group(0)
@@ -254,7 +263,9 @@ def resolve_cell(
     style = cell.get("style", "")
     if "@" not in style:
         return out
-    resolved, unresolved = resolve_style_placeholders(style, brand_packs, icon_resolver)
+    resolved, unresolved = resolve_style_placeholders(
+        style, brand_packs, icon_resolver, brand_only=bool(cell.get("brand_only"))
+    )
     if not unresolved:
         out["style"] = resolved
         return out
@@ -305,6 +316,10 @@ def _badge_slot(kind: str, name: str, contract: dict) -> dict:
         "connectable": False,
         "placeholder_mode": "badge",
         "fallback_name": display_name(name),
+        # FIX-4: hyperscaler/runtime badges are brand assets — resolve them from
+        # brand packs only, never a fuzzy icon-glyph match, so a missing asset
+        # degrades to the text-chip fallback (+ WARNING) deterministically.
+        "brand_only": kind in ("hyperscaler", "runtime"),
     }
 
 
@@ -597,14 +612,21 @@ def _title_w(label: str, cap: float = 240.0) -> float:
 
 
 def subaccount_shows_chip(group_type: str | None, parent_type: str | None) -> bool:
-    """Whether a subaccount stamps the "SAP BTP" chip (FIX-B).
+    """Whether a BTP frame stamps the "SAP BTP" chip.
 
     The chip marks the OUTERMOST BTP container: a top-level subaccount, or one
     whose parent is not itself a BTP container. A subaccount nested inside a
     ``btp-layer``/``subaccount`` suppresses it (otherwise every nested tier
     repeats an identical "SAP BTP" chip — the staircase the review flagged) and
-    shows only its own name. Single source of truth shared by the layout engine
-    (frame-min sizing) and the emitter (which builder arg to pass)."""
+    shows only its own name.
+
+    FIX-3: a ``governance`` frame is Gabriele's subaccount-style BTP governance
+    band, which carries the chip like a subaccount (it is always a top-level
+    container, so it always shows it). Single source of truth shared by the
+    layout engine (frame-min sizing) and the emitter (which builder arg to
+    pass)."""
+    if group_type == "governance":
+        return parent_type not in ("btp-layer", "subaccount")
     if group_type != "subaccount":
         return False
     return parent_type not in ("btp-layer", "subaccount")
@@ -681,7 +703,11 @@ def frame_insets(group: Any, contract: dict) -> tuple[float, float, float]:
         return pad_x, deco_bottom + 10.0, pad_x
     if gtype == "governance":
         g = _geo(contract, "governance-strip")
-        pad_top = _f(g, "padTop", 35.0) + (brow_h + 8.0 if brow_h else 8.0)
+        # FIX-3: the SAP BTP chip (y=8, h≈30) sits in the header, so the base
+        # top inset must clear it before the badge row / content start.
+        chip_h = _f(_geo(contract, "sap-btp-chip"), "h", 30.0)
+        base_top = max(_f(g, "padTop", 35.0), 8.0 + chip_h)
+        pad_top = base_top + (brow_h + 8.0 if brow_h else 8.0)
         return 24.0, pad_top, 16.0
     if gtype == "custom-app":
         # title band at the top; the runtime badge row is drawn just BELOW it
@@ -723,7 +749,10 @@ def _frame_min(group: Any, contract: dict, show_chip: bool = True) -> tuple[floa
         header_w = (chip_w + HEADER_GAP + title_w) if show_chip else title_w
         return max(header_w, brow_w) + 2 * pad_x, pad_top + pad_bot + 30.0
     if gtype == "governance":
-        return max(120.0, brow_w, title_w) + 2 * pad_x, pad_top + pad_bot + 30.0
+        # FIX-3: reserve chip + gap + title on the header line when the chip shows.
+        chip_w = _f(_geo(contract, "sap-btp-chip"), "w", 90.0)
+        header_w = (chip_w + HEADER_GAP + title_w) if show_chip else title_w
+        return max(120.0, brow_w, header_w) + 2 * pad_x, pad_top + pad_bot + 30.0
     return 2 * pad_x, pad_top + pad_bot
 
 
@@ -818,8 +847,14 @@ def subaccount_frame(group: Any, contract: dict, size: tuple[float, float] | Non
     return cells
 
 
-def governance_strip(group: Any, contract: dict, size: tuple[float, float] | None = None) -> list[dict]:
-    """Governance band → the contract BTP strip enclosing its members."""
+def governance_strip(group: Any, contract: dict, size: tuple[float, float] | None = None,
+                     show_chip: bool = True) -> list[dict]:
+    """Governance band → the contract BTP strip enclosing its members.
+
+    FIX-3: like a subaccount, the governance frame carries a top-left "SAP BTP"
+    chip beside its own name (Gabriele's governance box IS a subaccount-style
+    BTP frame). ``show_chip`` mirrors ``subaccount_shows_chip`` so the layout's
+    reserved header width and the drawn header agree."""
     g = _geo(contract, "governance-strip")
     box_w, box_h = size if size else (_f(g, "w", 946.0), _f(g, "h", 236.0))
     frame = {
@@ -832,9 +867,30 @@ def governance_strip(group: Any, contract: dict, size: tuple[float, float] | Non
         "h": box_h,
         "parent": None,
     }
-    # FIX-A: title as its own top-left cell (aligned with the content inset),
-    # never the middle-centred frame value.
-    cells = [frame, _frame_title_cell(group, contract, 24.0, 8.0, box_w)]
+    cells = [frame]
+    cg = _geo(contract, "sap-btp-chip")
+    chip_w, chip_h = _f(cg, "w", 90.0), _f(cg, "h", 30.0)
+    x0 = 24.0
+    title_x = x0
+    if show_chip:
+        cells.append(
+            {
+                "id": "btpchip",
+                "value": "SAP BTP",
+                "style": _style(contract, "sap-btp-chip") + "image=@sap-btp-chip;",
+                "x": x0,
+                "y": 8.0,
+                "w": chip_w,
+                "h": chip_h,
+                "parent": "frame",
+                "connectable": False,
+                "placeholder_mode": "strip",
+            }
+        )
+        title_x = x0 + chip_w + HEADER_GAP
+    # FIX-A: title as its own top-left cell (beside the chip), never the
+    # middle-centred frame value.
+    cells.append(_frame_title_cell(group, contract, title_x, 8.0, box_w))
     _append_badge_slots(
         cells, group, contract, "frame",
         _f(g, "padX", 64.0), _f(g, "padTop", 35.0),
