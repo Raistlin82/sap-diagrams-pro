@@ -2,29 +2,40 @@
 # SPDX-FileCopyrightText: 2026 Gabriele Capparelli
 # SPDX-License-Identifier: Apache-2.0
 """
-build-shape-index.py — parse SAP draw.io shape libraries and emit shape-index.json.
+build-shape-index.py — harvest SAP service icons + utility libraries into
+shape-index.json.
 
-Reads the XML library files under
-    $SAP_DIAGRAMS_CACHE/btp-solution-diagrams/assets/shape-libraries-and-editable-presets/draw.io/
-and produces a JSON catalog conformant to assets/shape-index.schema.json.
+SERVICE ICONS are harvested from the authoritative per-service SVG library
+    <repo>/assets/shape-libraries-and-editable-presets/svg/*.svg
+(one clean-``techId`` filename per service, e.g.
+``32133-sap-integration-suite_api-management_sd.svg``). Each SVG is embedded
+as a ``data:image/svg+xml,<base64>`` data URI inside a synthesized draw.io
+``shape=image;...`` style, matching the format the runtime (generate-drawio.py
+``_extract_image_uri`` / build-icon-atlas.py) expects.
 
-Usage:
-    python3 build-shape-index.py
-    python3 build-shape-index.py --cache /path/to/cache --out shape-index.json
+UTILITY LIBRARIES (connectors, annotations_and_interfaces, area_shapes,
+default_shapes, numbers, sap_brand_names, essentials, text_elements) and the
+generic-icons set are still parsed from the draw.io/ ``mxlibrary`` XML files
+exactly as before — those feed pills, brand chips, essentials presets and
+generic pictograms.
+
+BACKWARD COMPATIBILITY: every canonical name + alias that resolved against the
+previous shape-index (mined from ``--legacy-index``, default: the existing
+--out file) and every curated entry of service-name-overrides.csv is matched to
+its new SVG-based entry (by techId number, then slug) and re-attached as an
+alias, so no previously-resolvable name becomes unresolvable.
 
 The output is consumed at runtime by sap-icons-resolve (look up service name →
 draw.io style) and by sap-diagram-generate (resolve node.service → icon).
 
-Each shape library file is a draw.io ``mxlibrary`` containing a JSON-encoded
-array of shape entries with fields: ``xml`` (mxCell snippet), ``w``, ``h``,
-``aspect``, ``title``. Sizes are inferred from the directory naming:
-    ...-size-S.xml → small (24px)
-    ...-size-M.xml → medium (48px)
-    ...-size-L.xml → large (96px)
+Usage:
+    python3 build-shape-index.py --cache /path/to/cache-root
+    python3 build-shape-index.py --cache /path --out shape-index.json
 """
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import json
 import os
@@ -39,8 +50,15 @@ DEFAULT_CACHE = Path.home() / ".cache" / "sap-diagrams-pro"
 LIB_SUBPATH = (
     "btp-solution-diagrams/assets/shape-libraries-and-editable-presets/draw.io"
 )
+# The authoritative per-service SVG icon library sits next to draw.io/.
+SVG_SUBPATH = (
+    "btp-solution-diagrams/assets/shape-libraries-and-editable-presets/svg"
+)
 DEFAULT_OVERRIDES_CSV = (
     Path(__file__).resolve().parent.parent / "assets" / "service-name-overrides.csv"
+)
+DEFAULT_LEGACY_INDEX = (
+    Path(__file__).resolve().parent.parent / "assets" / "shape-index.json"
 )
 
 # Standalone library files (top-level of draw.io/) → category bucket they
@@ -70,18 +88,42 @@ UPPERCASE_TERMS = {
     "wms", "xml", "xsuaa",
 }
 
-SET_ID_BY_DIR = {
-    "20-02-00-sap-btp-service-icons-foundational-set": "foundational",
-    "20-02-01-sap-btp-service-icons-integration-suite-set": "integration-suite",
-    "20-02-02-sap-btp-service-icons-app-dev-automation-set": "app-dev-automation",
-    "20-02-04-sap-btp-service-icons-data-analytics-set": "data-analytics",
-    "20-02-05-sap-btp-service-icons-ai-set": "ai",
-    "20-02-06-sap-btp-service-icons-btp-saas-set": "btp-saas",
-    "20-02-99-sap-btp-service-icons-all": "all",  # aggregate, skipped
-    "20-03-generic-icons": "generic",
+# Friendly labels for the six service-icon set buckets (the taxonomy is kept
+# stable across the SVG re-harvest). ``generic`` is reserved for genericIcons.
+SET_LABELS = {
+    "foundational": "Foundational Services",
+    "integration-suite": "Integration Suite",
+    "app-dev-automation": "App Dev & Automation",
+    "data-analytics": "Data & Analytics",
+    "ai": "AI",
+    "btp-saas": "BTP SaaS",
+    "generic": "Generic Icons",
 }
 
-SIZE_FROM_FILENAME = re.compile(r"-size-(?P<size>[SML])\.xml$", re.IGNORECASE)
+# Canonical draw.io style for a synthesized SAP service icon. The
+# ``image=data:image/svg+xml,<base64>`` value is the ONLY load-bearing part
+# for the runtime (generate-drawio.py ``_extract_image_uri`` reads it back with
+# ``re.search(r"image=([^;]+)")``, so the value must be ';'-delimited and must
+# NOT contain a literal ``;base64,`` marker — we emit the comma form). The
+# leading ``shape=image;...`` flags and the trailing connection ``points``
+# mirror the format the previous per-service mxlibrary entries used.
+_STYLE_PREFIX = (
+    "shape=image;verticalLabelPosition=bottom;verticalAlign=top;"
+    "imageAspect=0;aspect=fixed;image="
+)
+_STYLE_SUFFIX = (
+    ";points=[[0,0,0,0,0],[0,0.25,0,0,0],[0,0.5,0,0,0],[0,0.75,0,0,0],"
+    "[0.25,0,0,0,0],[0.5,0,0,0,0],[0.75,0,0,0,0],[1,0,0,0,0],[1,0.25,0,0,0],"
+    "[1,0.5,0,0,0],[1,0.75,0,0,0]];fontStyle=0;fontSize=10;fontColor=#556B82"
+)
+
+# Tokens dropped when computing a slug fingerprint for old↔new matching, so
+# "SAP Connectivity Service" ~ "connectivity-service" and the ``_sd`` /
+# "for SAP BTP" decorations don't defeat the match.
+_SLUG_NOISE = {
+    "sap", "for", "btp", "service", "services", "sd", "edition",
+    "the", "on", "of", "and",
+}
 
 
 def _git_short_sha(repo_dir: Path) -> str | None:
@@ -224,6 +266,240 @@ def _aliases_for(name: str) -> list[str]:
     return sorted(aliases)
 
 
+def _leading_number(tech_id: str) -> str | None:
+    """The leading numeric id of a techId (e.g. ``32133-...`` → ``"32133"``)."""
+    m = re.match(r"(\d+)", tech_id or "")
+    return m.group(1) if m else None
+
+
+def _slug_tokens(tech_id: str) -> frozenset[str]:
+    """A noise-stripped token fingerprint of a techId's descriptive part.
+
+    ``32133-sap-integration-suite_api-management_sd`` →
+    ``{integration, suite, api, management}``. Used to match legacy/CSV
+    entries to their new SVG entry across the space/underscore/number drift.
+    """
+    t = re.sub(r"^\d+-", "", tech_id or "")
+    t = re.sub(r"\.svg$", "", t)
+    t = re.sub(r"[_.\s]sd$", "", t)
+    t = t.replace("_", " ").replace("-", " ")
+    return frozenset(
+        w for w in re.findall(r"[a-z0-9]+", t.lower()) if w not in _SLUG_NOISE
+    )
+
+
+def _heuristic_set(tech_id: str, tokens: frozenset[str]) -> str:
+    """Bucket a brand-new service (one with no legacy set) into the existing
+    set taxonomy from keywords in its techId. Conservative — defaults to
+    ``foundational``."""
+    s = (tech_id or "").lower()
+    if "integration-suite" in s or (
+        "integration" in tokens and ("suite" in tokens or "for-data-services" in s)
+    ):
+        return "integration-suite"
+    if tokens & {
+        "ai", "joule", "classification", "enrichment", "grounding",
+        "recommendation", "intelligence", "genai", "generative",
+    }:
+        return "ai"
+    if "integration" not in tokens and tokens & {
+        "analytics", "datasphere", "quality",
+    }:
+        return "data-analytics"
+    if tokens & {
+        "build", "process", "forms", "visibility", "automation",
+        "workflow", "code",
+    }:
+        return "app-dev-automation"
+    return "foundational"
+
+
+def _svg_style(svg_path: Path) -> str:
+    """Read an SVG file and wrap it in a draw.io ``shape=image`` style with the
+    icon embedded as a base64 ``data:image/svg+xml,`` URI (comma form — see
+    ``_STYLE_PREFIX`` docstring)."""
+    raw = svg_path.read_bytes()
+    b64 = base64.b64encode(raw).decode("ascii")
+    return f"{_STYLE_PREFIX}data:image/svg+xml,{b64}{_STYLE_SUFFIX}"
+
+
+class _NewIndex:
+    """Fast old→new matcher over the harvested SVG techIds."""
+
+    def __init__(self, tech_ids: list[str]):
+        self._by_num: dict[str, list[str]] = {}
+        self._tokens: dict[str, frozenset[str]] = {}
+        for t in tech_ids:
+            n = _leading_number(t)
+            if n:
+                self._by_num.setdefault(n, []).append(t)
+            self._tokens[t] = _slug_tokens(t)
+
+    def _best_slug(self, tokens: frozenset[str]) -> str | None:
+        if not tokens:
+            return None
+        cands: list[tuple[int, int, str]] = []
+        for t, tk in self._tokens.items():
+            if tk == tokens:
+                cands.append((0, len(tk), t))            # exact fingerprint
+            elif tokens <= tk or tk <= tokens:
+                cands.append((1, len(tk ^ tokens), t))   # subset either way
+        if not cands:
+            return None
+        cands.sort()  # (tier, symmetric-diff, techId) — fully deterministic
+        return cands[0][2]
+
+    def match(self, tech_id: str, *, trust_number: bool) -> str | None:
+        """Best new techId for a legacy/CSV entry.
+
+        ``trust_number=True`` (legacy-index entries, whose numbers share the
+        current SAP numbering) tries an exact number match, then a 48xxx→32xxx
+        collapse, then slug. ``trust_number=False`` (CSV rows, keyed by a
+        stale/older numbering that SAP has since re-assigned) skips the number
+        entirely and matches on slug only.
+        """
+        if trust_number:
+            n = _leading_number(tech_id)
+            if n and n in self._by_num:
+                return sorted(self._by_num[n])[0]
+            if n and n.startswith("48") and ("32" + n[2:]) in self._by_num:
+                return sorted(self._by_num["32" + n[2:]])[0]
+        return self._best_slug(_slug_tokens(tech_id))
+
+
+def _mine_legacy(legacy_path: Path, new_index: "_NewIndex") -> dict[str, dict]:
+    """Group the previous shape-index's service names+aliases by the new
+    techId they now map to, so they can be re-attached as aliases."""
+    out: dict[str, dict] = {}
+    if not legacy_path or not legacy_path.exists():
+        return out
+    try:
+        data = json.loads(legacy_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return out
+    for svc in data.get("services", []):
+        tech = svc.get("techId", "")
+        target = new_index.match(tech, trust_number=True)
+        if not target:
+            continue
+        bucket = out.setdefault(
+            target, {"names": [], "aliases": set(), "sets": [], "numbers": set()}
+        )
+        name = svc.get("name")
+        if name:
+            bucket["names"].append(name)
+        bucket["aliases"].update(svc.get("aliases", []) or [])
+        if svc.get("set"):
+            bucket["sets"].append(svc["set"])
+        n = _leading_number(tech)
+        if n:
+            bucket["numbers"].add(n)
+    return out
+
+
+def _mine_overrides(overrides: dict[str, dict], new_index: "_NewIndex") -> dict[str, dict]:
+    """Group service-name-overrides.csv canonical names + aliases by the new
+    techId they map to (slug match — CSV numbers are stale)."""
+    out: dict[str, dict] = {}
+    for tech_id, row in overrides.items():
+        target = new_index.match(tech_id, trust_number=False)
+        if not target:
+            continue
+        bucket = out.setdefault(target, {"names": [], "aliases": set()})
+        canonical = (row.get("canonical_name") or "").strip()
+        if canonical:
+            bucket["names"].append(canonical)
+        bucket["aliases"].update(row.get("aliases", []) or [])
+    return out
+
+
+def _harvest_svg_services(
+    svg_dir: Path,
+    overrides: dict[str, dict],
+    legacy_path: Path | None,
+) -> list[dict]:
+    """Build the ``services`` list from every ``svg/*.svg`` file.
+
+    techId = filename stem; name = mined legacy canonical name (backward-compat)
+    → CSV canonical name → auto-normalized techId; set = mined legacy set →
+    keyword heuristic; aliases = union of the auto acronym/short forms, all
+    legacy names+aliases, all CSV names+aliases, and the techId itself.
+    """
+    if not svg_dir.exists():
+        raise SystemExit(
+            f"ERROR: SVG icon library not found at {svg_dir}\n"
+            "  Run scripts/bootstrap-cache.sh first (or pass --cache)."
+        )
+
+    stems = sorted(p.stem for p in svg_dir.glob("*.svg"))
+    new_index = _NewIndex(stems)
+    legacy = _mine_legacy(legacy_path, new_index) if legacy_path else {}
+    csv_map = _mine_overrides(overrides, new_index)
+
+    # Curated (CSV) short-forms must win over the accidental initial-letter
+    # acronyms _aliases_for() synthesizes — e.g. "SAP AI Core" auto-generates
+    # "SAC", which would otherwise shadow SAP Analytics Cloud's curated "SAC".
+    curated_alias_owner: dict[str, str] = {}
+    for target, ovr in csv_map.items():
+        for alias in ovr.get("aliases", set()):
+            curated_alias_owner.setdefault(alias.strip().lower(), target)
+
+    services: list[dict] = []
+    for stem in stems:
+        svg_path = svg_dir / f"{stem}.svg"
+        number = _leading_number(stem)
+        tokens = _slug_tokens(stem)
+        leg = legacy.get(stem, {})
+        ovr = csv_map.get(stem, {})
+
+        # ── canonical name ──────────────────────────────────────────────
+        # Prefer the legacy canonical name of the entry that shared THIS
+        # techId number (keeps every previously-resolvable canonical name
+        # canonical); then any legacy name; then the CSV canonical; then the
+        # auto-normalized techId.
+        name = ""
+        for cand in leg.get("names", []):
+            name = cand
+            if number and number in leg.get("numbers", set()):
+                break
+        if not name and ovr.get("names"):
+            name = ovr["names"][0]
+        if not name:
+            name = _normalize_tech_id(stem) or stem
+
+        # ── set bucket ──────────────────────────────────────────────────
+        set_id = leg["sets"][0] if leg.get("sets") else _heuristic_set(stem, tokens)
+
+        # ── aliases (union, minus the canonical name) ───────────────────
+        # Curated CSV short-forms win over accidental initial-letter acronyms:
+        # drop any auto- or legacy-sourced alias that a DIFFERENT entry owns as
+        # a curated CSV alias (e.g. "SAP AI Core" must not keep "SAC", which
+        # belongs to SAP Analytics Cloud). This entry's own CSV names/aliases
+        # and every legacy full name are always kept.
+        def _not_owned_elsewhere(a: str) -> bool:
+            return curated_alias_owner.get(a.strip().lower(), stem) == stem
+
+        aliases: set[str] = {a for a in _aliases_for(name) if _not_owned_elsewhere(a)}
+        aliases.update(leg.get("names", []))
+        aliases.update(a for a in leg.get("aliases", set()) if _not_owned_elsewhere(a))
+        aliases.update(ovr.get("names", []))
+        aliases.update(ovr.get("aliases", set()))
+        aliases.add(stem)  # techId is always a resolvable alias
+        aliases = {a for a in aliases if a and a != name}
+
+        services.append(
+            {
+                "name": name,
+                "techId": stem,
+                "aliases": sorted(aliases),
+                "set": set_id,
+                "size": "M",  # one canonical icon per service in the SVG library
+                "drawioStyle": _svg_style(svg_path),
+            }
+        )
+    return services
+
+
 def _parse_generic_icons(libs_dir: Path) -> list[dict]:
     """Parse the 20-03-generic-icons libraries (User, Mobile, Desktop,
     Cloud Connector, On-Premise, Third Party, Adapter, Admin, AI, ...).
@@ -347,8 +623,13 @@ def _parse_standalone_libraries(libs_dir: Path) -> dict[str, list[dict]]:
     return catalog
 
 
-def build_index(cache: Path, overrides_path: Path = DEFAULT_OVERRIDES_CSV) -> dict:
+def build_index(
+    cache: Path,
+    overrides_path: Path = DEFAULT_OVERRIDES_CSV,
+    legacy_index_path: Path | None = DEFAULT_LEGACY_INDEX,
+) -> dict:
     libs_dir = cache / LIB_SUBPATH
+    svg_dir = cache / SVG_SUBPATH
     if not libs_dir.exists():
         raise SystemExit(
             f"ERROR: shape libraries not found at {libs_dir}\n"
@@ -356,64 +637,30 @@ def build_index(cache: Path, overrides_path: Path = DEFAULT_OVERRIDES_CSV) -> di
         )
 
     overrides = _load_overrides(overrides_path)
-    sets: list[dict] = []
-    services: list[dict] = []
 
-    for set_dir in sorted(libs_dir.iterdir()):
-        if not set_dir.is_dir():
-            continue
-        set_id = SET_ID_BY_DIR.get(set_dir.name)
-        if not set_id or set_id == "all":
-            continue  # skip the aggregate "all" set to avoid duplicates
+    # ── Service icons: harvested from the authoritative svg/ library ─────
+    services = _harvest_svg_services(svg_dir, overrides, legacy_index_path)
 
-        set_count = 0
-        for xml_file in sorted(set_dir.glob("*.xml")):
-            m = SIZE_FROM_FILENAME.search(xml_file.name)
-            if not m:
-                continue
-            size = m.group("size").upper()
+    # Set buckets: one entry per set-id actually used, with its service count.
+    counts: dict[str, int] = {}
+    for svc in services:
+        counts[svc["set"]] = counts.get(svc["set"], 0) + 1
+    set_order = [
+        "foundational", "integration-suite", "app-dev-automation",
+        "data-analytics", "ai", "btp-saas",
+    ]
+    sets: list[dict] = [
+        {
+            "id": sid,
+            "name": SET_LABELS.get(sid, sid),
+            "fileBasename": sid,
+            "serviceCount": counts[sid],
+        }
+        for sid in set_order
+        if sid in counts
+    ]
 
-            entries = _parse_library(xml_file)
-            for entry in entries:
-                tech_id = _normalize_service(entry.get("title") or "")
-                if not tech_id:
-                    continue
-                xml_snippet = entry.get("xml") or ""
-                style = _extract_style(xml_snippet)
-                # 3-tier name resolution: CSV override → SAP `value` → auto-normalize.
-                override = overrides.get(tech_id, {})
-                display = (
-                    override.get("canonical_name")
-                    or _extract_display_name(xml_snippet)
-                    or _normalize_tech_id(tech_id)
-                    or tech_id
-                )
-                aliases: set[str] = set(_aliases_for(display))
-                aliases.update(override.get("aliases", []) or [])
-                aliases.add(tech_id)  # tech ID stays as alias for backwards compat
-
-                services.append(
-                    {
-                        "name": display,
-                        "techId": tech_id,
-                        "aliases": sorted(aliases),
-                        "set": set_id,
-                        "size": size,
-                        "drawioStyle": style,
-                    }
-                )
-                set_count += 1
-
-        sets.append(
-            {
-                "id": set_id,
-                "name": set_dir.name,
-                "fileBasename": set_dir.name,
-                "serviceCount": set_count,
-            }
-        )
-
-    # Standalone catalogs — what was completely missing before.
+    # Standalone catalogs (the 8 draw.io/ utility libraries) — unchanged.
     standalone = _parse_standalone_libraries(libs_dir)
     standalone_total = sum(len(v) for v in standalone.values())
 
@@ -463,9 +710,17 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(__file__).resolve().parent.parent / "assets" / "shape-index.json",
         help="Output path for shape-index.json (default: assets/shape-index.json).",
     )
+    parser.add_argument(
+        "--legacy-index",
+        type=Path,
+        default=None,
+        help="Previous shape-index.json to mine names/aliases from for "
+             "backward-compat (default: the --out file, read before overwrite).",
+    )
     args = parser.parse_args(argv)
 
-    index = build_index(args.cache)
+    legacy_index_path = args.legacy_index if args.legacy_index is not None else args.out
+    index = build_index(args.cache, legacy_index_path=legacy_index_path)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8")
     print(
