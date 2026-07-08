@@ -41,7 +41,8 @@ now applied to every v2 check too.
 
 Usage:
     python3 check-composition.py diagram.drawio [--strict] [--json]
-Exit: 0 ok · 2 any FAIL is present (unconditionally — see below) · 3 unreadable.
+Exit: 0 ok · 2 any FAIL is present, including a malformed-but-present .drawio
+(unconditionally — see below) · 3 the path doesn't exist on disk at all.
 
 ``--strict`` is accepted for backward compatibility with existing callers
 (e.g. the CI workflow) but is now a no-op: a FAIL always exits 2, aligning
@@ -54,7 +55,6 @@ import argparse
 import json
 import re
 import sys
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -121,13 +121,18 @@ def _line_kind(kv: dict[str, str]) -> str:
 
 
 # ── Task 12 geometric-gate constants ────────────────────────────────────────
-# The vertical band a "verticalLabelPosition=bottom" icon reserves for its
-# caption, in px — MUST match ``_skeleton_layout.LABEL_H`` (the router's own
-# constant; see generate-drawio.py's ``node_obstacle_geom`` / FIX-1, and
-# tests/test_router.py's ``_node_obstacles_from_drawio`` reconstruction
-# helper, which this mirrors exactly). Not imported directly: this gate reads
-# a plain .drawio, deliberately independent of the layout engine's module.
-CAPTION_BAND_H = 24.0
+# Fallback caption-band height, in px — used ONLY when the .drawio has no
+# ``sapdp:node_obstacles`` metadata cell (a pre-review-round file, or one
+# generated with ``--layout greedy``). This is a graceful-degrade
+# approximation, NOT a source of truth: whenever the metadata cell IS
+# present (the normal, routed-layout case), PIERCING/CAPTION_OUT read the
+# router's own obstacle rects verbatim (see ``_load_node_obstacles`` below /
+# generate-drawio.py's ``_emit_node_obstacles_metadata``) instead of
+# reconstructing them here — closing the drift hazard the old
+# ``CAPTION_BAND_H`` constant had (it had to be hand-kept in sync with
+# ``_skeleton_layout.LABEL_H`` and would silently lie about clearance if it
+# ever drifted).
+_FALLBACK_CAPTION_BAND_H = 24.0
 # TEXT_OVERLAP severity split: overlap covering LESS than this fraction of
 # the smaller rect's area is a cosmetic graze (WARN); at/above it, text is
 # plausibly hidden (FAIL). ~20% per the Task 12 spec.
@@ -287,6 +292,35 @@ def _top_zone_of(cid: str | None, cells_by_id: dict, zone_ids: set) -> str | Non
     return None
 
 
+def _load_node_obstacles(cells_by_id: dict) -> "dict[str, Rect] | None":
+    """Read the ``sapdp:node_obstacles`` metadata cell generate-drawio.py's
+    ``_emit_node_obstacles_metadata`` publishes — a JSON object
+    ``{cell_id: [x, y, w, h]}`` of the router's ACTUAL node-obstacle rects
+    (icon+caption-extended boxes for icon nodes), absolute coordinates.
+    Returns ``None`` when the cell is absent (pre-review-round file, or
+    ``--layout greedy``) or malformed, so callers can degrade gracefully —
+    this is the FIX-1 root fix: PIERCING/CAPTION_OUT check the router's OWN
+    obstacle set instead of re-deriving one with a hardcoded band height that
+    could silently drift from ``_skeleton_layout.LABEL_H``."""
+    cell = cells_by_id.get("sapdp:node_obstacles")
+    if cell is None:
+        return None
+    try:
+        raw = json.loads(cell.get("value") or "{}")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, Rect] = {}
+    for cid, rect in raw.items():
+        try:
+            x, y, w, h = (float(v) for v in rect)
+        except (TypeError, ValueError):
+            continue
+        out[cid] = Rect(x, y, w, h)
+    return out
+
+
 def _check_v2_geometry(cells: list, out: list[Finding]) -> None:
     """Task 12 — the geometric FAIL-blocking checks (PIERCING/EDGE_THROUGH_BOX,
     TEXT_OVERLAP, CAPTION_OUT, PILL_COLLISION) plus two WARN-only advisories
@@ -303,6 +337,18 @@ def _check_v2_geometry(cells: list, out: list[Finding]) -> None:
         if r is not None:
             zone_rects[cid] = r
 
+    # FIX-1 (review round): prefer the router's OWN published obstacle rects
+    # over reconstructing them — ``None`` means the metadata cell is absent
+    # (pre-review-round file / ``--layout greedy``), so every rect below
+    # falls back to the old caption-band approximation and we say so once.
+    metadata_obstacles = _load_node_obstacles(cells_by_id)
+    if metadata_obstacles is None:
+        out.append(Finding(
+            "INFO", "NODE_OBSTACLES",
+            "no sapdp:node_obstacles metadata — PIERCING/CAPTION_OUT fall back "
+            f"to a {_FALLBACK_CAPTION_BAND_H:.0f}px caption-band approximation "
+            "(greedy layout or pre-review-round file)"))
+
     node_ids = [cid for cid, c in cells_by_id.items()
                 if _NODE_ID_RE.match(cid) and c.get("vertex") == "1"]
     node_drawn: dict[str, Rect] = {}
@@ -313,18 +359,25 @@ def _check_v2_geometry(cells: list, out: list[Finding]) -> None:
             continue
         node_drawn[nid] = r
         style = cells_by_id[nid].get("style") or ""
-        # FIX-1 (Task 9): an icon node's OBSTACLE rect extends downward over
-        # its caption band, independent of whether the caption text is
-        # non-empty (the zone layout reserves the band either way) — see
-        # generate-drawio.py's node_obstacle_geom.
-        if "verticalLabelPosition=bottom" in style:
-            node_obstacle[nid] = Rect(r.x, r.y, r.w, r.h + CAPTION_BAND_H)
+        if metadata_obstacles is not None and nid in metadata_obstacles:
+            # The router's exact rect — no reconstruction, no drift.
+            node_obstacle[nid] = metadata_obstacles[nid]
+        elif "verticalLabelPosition=bottom" in style:
+            # FIX-1 (Task 9) fallback: an icon node's OBSTACLE rect extends
+            # downward over its caption band, independent of whether the
+            # caption text is non-empty (the zone layout reserves the band
+            # either way) — see generate-drawio.py's node_obstacle_geom.
+            node_obstacle[nid] = Rect(r.x, r.y, r.w, r.h + _FALLBACK_CAPTION_BAND_H)
         else:
             node_obstacle[nid] = r
 
     # Every vlp-captioned vertex with actual caption text — generalised
     # beyond "n-…" nodes (e.g. a hyperscaler/runtime badge icon), used by
     # TEXT_OVERLAP + CAPTION_OUT. (cid -> (caption text, caption band rect))
+    # Band height comes from the router's own obstacle rect (obstacle.h -
+    # drawn.h) when available, so this can never drift from what the router
+    # actually reserved either; only the fallback path uses the approximate
+    # constant.
     captions: dict[str, tuple[str, Rect]] = {}
     for cid, cell in cells_by_id.items():
         if cell.get("vertex") != "1" or _decorative(cid):
@@ -338,7 +391,12 @@ def _check_v2_geometry(cells: list, out: list[Finding]) -> None:
         r = _abs_rect(cid, cells_by_id)
         if r is None:
             continue
-        captions[cid] = (value, Rect(r.x, r.bottom, r.w, CAPTION_BAND_H))
+        obstacle = node_obstacle.get(cid)
+        if obstacle is not None and obstacle.h > r.h:
+            band_h = obstacle.h - r.h
+        else:
+            band_h = _FALLBACK_CAPTION_BAND_H
+        captions[cid] = (value, Rect(r.x, r.bottom, r.w, band_h))
 
     # ── PIERCING / EDGE_THROUGH_BOX ──────────────────────────────────────────
     # FAIL scope is deliberately NODE rects only (icon+caption combined for
@@ -388,6 +446,14 @@ def _check_v2_geometry(cells: list, out: list[Finding]) -> None:
                 if seg_intersects_rect(a, b, r):
                     zone_cross_hits.append((eid, zid))
 
+    # FIX-3(a) (review round): two CONSECUTIVE segments of the same edge can
+    # both hit the same box (e.g. a waypoint sits inside it, or the box is
+    # wide enough to catch both the incoming and outgoing leg) — that's one
+    # physical piercing, not two. Dedupe on (eid, oid)/(eid, zid), preserving
+    # first-seen order so the truncated "first 6" detail stays deterministic.
+    piercing_hits = list(dict.fromkeys(piercing_hits))
+    zone_cross_hits = list(dict.fromkeys(zone_cross_hits))
+
     if piercing_hits:
         detail = "; ".join(f"{e}→{o}" for e, o in piercing_hits[:6])
         more = "" if len(piercing_hits) <= 6 else f" (+{len(piercing_hits) - 6} more)"
@@ -427,7 +493,9 @@ def _check_v2_geometry(cells: list, out: list[Finding]) -> None:
     # Every pill is ALSO a text-bearing cell for this scan — a pill colliding
     # with a caption/title is still "two text-bearing rects overlapping",
     # even though PILL_COLLISION below treats pill/pill + pill/box more
-    # strictly (any overlap, not just a substantial one).
+    # strictly (any overlap, not just a substantial one). pill/pill pairs
+    # ARE skipped in the scan below (FIX-3(b)) so that overlap is reported
+    # once, as PILL_COLLISION, not twice.
     text_rects.update(pill_rects)
 
     # ── TEXT_OVERLAP ──────────────────────────────────────────────────────────
@@ -439,15 +507,22 @@ def _check_v2_geometry(cells: list, out: list[Finding]) -> None:
     # PRE-EXISTING pipeline gap, not something Task 9/11 ever guaranteed
     # against (observed on the shipped nova-L1: the "audit events" label
     # overlaps the "Identity + Ops" zone title — confirmed by rendering the
-    # fixture, see the Task 12 report). Every other pairing (pill/pill,
-    # pill/caption, caption/caption, caption/title, …) IS something the
-    # router guarantees, so it keeps the full FAIL-at-≥20% severity.
+    # fixture, see the Task 12 report). Every other pairing (pill/caption,
+    # caption/caption, caption/title, …) IS something the router guarantees,
+    # so it keeps the full FAIL-at-≥20% severity. pill/pill pairs are
+    # deliberately EXCLUDED here (FIX-3(b), review round): PILL_COLLISION
+    # below already reports every pill/pill overlap (any-overlap, stricter
+    # than this 20% threshold), so scanning them again here would double-
+    # report the same physical defect under two rule codes and inflate the
+    # finding count a caller (e.g. the Task 14 loop) tallies.
     fail_hits: list[str] = []
     warn_hits: list[str] = []
     tids = list(text_rects)
     for i in range(len(tids)):
         a = text_rects[tids[i]]
         for j in range(i + 1, len(tids)):
+            if tids[i] in pill_rects and tids[j] in pill_rects:
+                continue  # FIX-3(b): pill/pill is PILL_COLLISION's job alone
             b = text_rects[tids[j]]
             ox = min(a.right, b.right) - max(a.x, b.x)
             oy = min(a.bottom, b.bottom) - max(a.y, b.y)

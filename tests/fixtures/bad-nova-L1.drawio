@@ -13,10 +13,18 @@
     • CAPTION_OUT    — icon node n-22222222 sits near the bottom of zone
                         g-aaaaaaaa; its reserved 24px caption band (below the
                         48x48 icon) spills 32px past the zone's bottom edge.
-    • TEXT_OVERLAP   — pills p-55555555 ("Label A") and p-66666666 ("Label B")
-                        overlap by ~63% of the smaller rect's area.
-    • PILL_COLLISION — the SAME p-55555555 / p-66666666 pair also collide as
-                        pills (any-overlap, no size threshold).
+                        (No sapdp:node_obstacles metadata cell here — this
+                        exercises check-composition.py's FIX-1 fallback path,
+                        which reconstructs the same 24px band.)
+    • PILL_COLLISION — pills p-55555555 ("Label A") and p-66666666 ("Label B")
+                        collide (any-overlap, no size threshold).
+    • TEXT_OVERLAP   — a SEPARATE pair, text labels leglbl-77777777 ("Title A")
+                        and leglbl-88888888 ("Title B"), overlap by ~76% of
+                        the smaller rect's area. Kept independent of the pill
+                        pair on purpose: check-composition.py's FIX-3(b)
+                        (review round) dedupes a pill/pill overlap down to
+                        PILL_COLLISION alone, so reusing the pill pair here
+                        would no longer trip TEXT_OVERLAP.
 
   Ids follow generate-drawio.py's _stable_id("<prefix>", key) convention
   (prefix-<8 lowercase hex chars>) so check-composition.py's node/zone/pill
@@ -70,12 +78,25 @@
         </mxCell>
 
         <!-- p-55555555 / p-66666666: two pills overlapping by ~63% of the smaller
-             rect's area — DEFECT: TEXT_OVERLAP (substantial) AND PILL_COLLISION. -->
+             rect's area — DEFECT: PILL_COLLISION (any-overlap). Since FIX-3(b),
+             a pill/pill overlap is reported ONLY as PILL_COLLISION, not also
+             TEXT_OVERLAP (see the header comment). -->
         <mxCell id="p-55555555" value="Label A" style="rounded=1;whiteSpace=wrap;html=1;arcSize=50;strokeColor=#188918;fillColor=#f5fae5;fontColor=#188918;fontStyle=1;strokeWidth=1.5;fontSize=10;align=center;verticalAlign=middle;" vertex="1" parent="1" connectable="0">
           <mxGeometry x="500" y="400" width="80" height="18" as="geometry" />
         </mxCell>
         <mxCell id="p-66666666" value="Label B" style="rounded=1;whiteSpace=wrap;html=1;arcSize=50;strokeColor=#470bed;fillColor=#f1edff;fontColor=#470bed;fontStyle=1;strokeWidth=1.5;fontSize=10;align=center;verticalAlign=middle;" vertex="1" parent="1" connectable="0">
           <mxGeometry x="510" y="405" width="80" height="18" as="geometry" />
+        </mxCell>
+
+        <!-- leglbl-77777777 / leglbl-88888888: two plain text labels (NOT
+             pills — no arcSize=50/rounded=1) overlapping by ~76% of the
+             smaller rect's area — DEFECT: TEXT_OVERLAP (substantial),
+             independent of the pill/pill PILL_COLLISION defect above. -->
+        <mxCell id="leglbl-77777777" value="Title A" style="text;html=1;fontSize=11;fontColor=#1D2D3E;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="650" y="150" width="80" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="leglbl-88888888" value="Title B" style="text;html=1;fontSize=11;fontColor=#1D2D3E;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="655" y="153" width="80" height="16" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>

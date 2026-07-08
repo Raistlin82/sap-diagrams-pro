@@ -1533,6 +1533,42 @@ def _emit_channels_metadata(root: ET.Element, channels: list) -> None:
     )
 
 
+def _emit_node_obstacles_metadata(root: ET.Element, node_obstacles: dict) -> None:
+    """Task 12 (review round, FIX-1): serialize the router's ACTUAL node-
+    obstacle rects — ``node_obstacle_geom``'s icon+caption-extended boxes,
+    keyed by the STABLE cell id (``n-<hash>``) that ends up in the .drawio —
+    as ONE invisible metadata vertex, ``id="sapdp:node_obstacles"``, its
+    ``value`` a compact JSON object ``{cell_id: [x, y, w, h]}`` (absolute
+    coordinates, same frame ``check-composition.py``'s ``_abs_rect`` computes).
+
+    Why this exists: check-composition.py's PIERCING/CAPTION_OUT checks used
+    to RE-DERIVE the caption band with a hardcoded constant that had to be
+    kept in sync with ``_skeleton_layout.LABEL_H`` by hand — a silent-drift
+    hazard if that constant ever changed. Publishing the router's own rects
+    here means the gate checks the router's guarantee against the router's
+    OWN obstacle set: no reconstruction, no drift possible. Same zero-
+    footprint pattern as ``sapdp:channels`` (1×1, ``visible=0``, no style
+    outline). Emitted alongside it (routed layouts only — ``--layout greedy``
+    has neither cell, and the gate degrades gracefully when both are absent)."""
+    payload = {cid: [rect[0], rect[1], rect[2], rect[3]]
+               for cid, rect in node_obstacles.items()}
+    cell = ET.SubElement(
+        root, "mxCell",
+        attrib={
+            "id": "sapdp:node_obstacles",
+            "value": json.dumps(payload, separators=(",", ":")),
+            "style": "text;html=0;",
+            "vertex": "1",
+            "parent": "1",
+            "visible": "0",
+        },
+    )
+    ET.SubElement(
+        cell, "mxGeometry",
+        attrib={"x": "0", "y": "0", "width": "1", "height": "1", "as": "geometry"},
+    )
+
+
 def emit(
     diagram: Diagram,
     shape_index: "ShapeIndex | None" = None,
@@ -2088,6 +2124,13 @@ def emit(
         # Task 12: publish the channels the router reserved so the geometric
         # gate can verify CHANNEL_DISCIPLINE without re-running the router.
         _emit_channels_metadata(root, route_result.channels)
+        # Task 12 (review round, FIX-1): publish the router's OWN node-obstacle
+        # rects (caption-extended for icon nodes) so PIERCING/CAPTION_OUT check
+        # against them directly instead of re-deriving a caption band — see
+        # _emit_node_obstacles_metadata's docstring.
+        _emit_node_obstacles_metadata(
+            root, {_stable_id("n", nid): rect for nid, rect in node_obstacle_geom.items()}
+        )
     else:
         edge_anchors = _distribute_anchors(diagram.edges, node_abs_geom)
     for e in diagram.edges:
