@@ -9,6 +9,28 @@ All notable changes to `sap-diagrams-pro` are documented in this file. The forma
 
 ## [Unreleased]
 
+### Added — icon coverage + branding (0.4.0)
+
+- **SAP icons re-harvested from the official `svg/` library** (129 clean service
+  icons + newly-covered services: the Integration Suite capability family,
+  Document Grounding, Data Enrichment, Process Visibility, UI Theme Designer,
+  Dynamic Forms, Data Quality Services, and more). `scripts/build-shape-index.py`
+  now reads the authoritative per-service SVGs (clean techIds) and keeps the 8
+  `draw.io/` utility libraries for pills/connectors/brand. Backward-compat aliases
+  are preserved so existing IRs still resolve.
+- **Curated generic cloud-icon set** (`assets/generic-icons.json`, 213 icons from
+  mingrammer/diagrams, MIT — see `assets/GENERIC-ICONS-NOTICE.md`): non-SAP
+  components (PostgreSQL, Kafka, Redis, Kubernetes, AWS/Azure/GCP compute+storage,
+  on-prem) now resolve to real vendor glyphs. shape-index = 342 services; atlas =
+  585 entries.
+- **Curated aliases** for the identity family (IAS→Identity Authentication, IPS,
+  SCI) and Integration Suite capabilities (APIM, CPI, TPM, AEM, Open Connectors,
+  Graph…); fixed a slug collision that mis-routed CPI onto Cloud Integration
+  Automation.
+- **Branding is opt-in**: the generate skill now asks whether to add a partner
+  watermark / customer logo (default none — never assumes a company) and, if so,
+  has the user supply the image; never defaults to a partner.
+
 ### Changed — perfect-diagrams engine (deterministic pipeline)
 
 - **New render pipeline** replacing the graphviz `dot` backend, staged end-to-end:
