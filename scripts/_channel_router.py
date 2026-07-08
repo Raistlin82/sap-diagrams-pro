@@ -72,8 +72,10 @@ renderer prepends the exit port and appends the entry port), ``ports`` /
 ``port_fracs`` (absolute + fractional attach points), ``pill_pos`` /
 ``label_pos`` (absolute centres), ``channels`` (the reserved corridors),
 ``slot_fallbacks`` (edge ids whose pill/label slot scan was exhausted — empty
-on both shipped fixtures) and a ``crossings`` count (segment/segment
-crossings, the baseline Task 9 reduces).
+on both shipped fixtures), a ``crossings`` count (segment/segment crossings,
+the baseline Task 9 reduces) and ``hint_warnings`` (review-round FIX-1: one
+message per ``channel_prefer`` rubric hint whose edge/channel id didn't
+resolve — empty when there are no hints or every id resolved).
 """
 from __future__ import annotations
 
@@ -176,6 +178,15 @@ class RouteResult:
     # 12's quality gate distinguish "collision-free" from "fell back" instead
     # of silently accepting either.
     slot_fallbacks: list[str] = field(default_factory=list)
+    # Review-round FIX-1: one message per ``channel_prefer`` hint whose edge
+    # or channel id didn't resolve against THIS render's plans (ids are read
+    # off the current layout, never memorised, so a stale id is expected and
+    # not an error — but silently discarding it left Task 14's render→patch→
+    # regenerate loop with no way to tell "fix applied" from "fix silently
+    # ignored"). Empty when there are no hints or every id resolved.
+    # ``generate-drawio.emit()`` folds these into the same stderr WARNING
+    # channel as the molecule/brand preflight warnings.
+    hint_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1410,26 +1421,41 @@ def build_waypoints(plans: list[_Plan],
     return waypoints, pill_pos, label_pos, crossings, piercings, slot_fallbacks
 
 
-def _apply_channel_prefer(plans, prefs: dict | None) -> None:
+def _apply_channel_prefer(plans, prefs: dict | None) -> list[str]:
     """Task 13 ``channel_prefer`` — re-point flagged edges' shared channel, as a
     HARD CONSTRAINT applied to the plans BEFORE ``reduce_crossings`` runs.
 
     ``prefs`` is ``{edge_id: channel_id}`` (channel ids are the per-diagram
     ``V0``/``V1``/… gutters and ``Htop``/``Hbot`` corridors ``plan()`` built;
-    an unknown edge or channel id is ignored, matching the rubric's rule that
+    an unknown edge or channel id is IGNORED, matching the rubric's rule that
     ids are read off the CURRENT layout, never memorised). Besides swapping
     ``p.channel``, the plan's ``kind`` + exit/entry sides + barycenter axis are
     realigned to the target channel's axis so ``_build_waypoints`` draws a
     geometrically consistent route (vertical gutter → H-V-H "adjacent";
-    horizontal corridor → out-across-back "long")."""
+    horizontal corridor → out-across-back "long").
+
+    Review-round FIX-1: "ignored" used to mean silently dropped, which left no
+    trace an unresolved hint was ever seen — a caller (Task 14's render→patch→
+    regenerate loop) couldn't distinguish "fix applied" from "fix discarded"
+    and could loop forever re-detecting the same defect. Returns one WARNING
+    message per unresolved hint (empty list when every id resolved, or there
+    were no hints) — ``route()`` threads these onto ``RouteResult.
+    hint_warnings`` for ``generate-drawio.emit()`` to print to stderr."""
+    warnings: list[str] = []
     if not prefs:
-        return
+        return warnings
     by_id = {ch.id: ch for ch in getattr(plans, "channels", []) or []}
     plan_by_eid = {p.eid: p for p in plans}
     for eid, cid in prefs.items():
         p = plan_by_eid.get(eid)
+        if p is None:
+            warnings.append(
+                f"layoutHint channel_prefer referenced unknown edge {eid!r}; ignored")
+            continue
         ch = by_id.get(cid)
-        if p is None or ch is None:
+        if ch is None:
+            warnings.append(
+                f"layoutHint channel_prefer referenced unknown channel {cid!r}; ignored")
             continue
         p.channel = ch
         if ch.axis == "v":                            # vertical gutter → H-V-H
@@ -1442,6 +1468,7 @@ def _apply_channel_prefer(plans, prefs: dict | None) -> None:
             side = "T" if ch.center <= p.src.cy else "B"
             p.kind, p.exit_side, p.entry_side = "long", side, side
             p.src_bary, p.dst_bary = p.src.cx, p.dst.cx
+    return warnings
 
 
 def route(diagram, layout: dict, hints=None) -> RouteResult:
@@ -1484,7 +1511,7 @@ def route(diagram, layout: dict, hints=None) -> RouteResult:
     """
     hints = hints or {}
     plans = plan(diagram, layout)
-    _apply_channel_prefer(plans, hints.get("channel_prefer"))
+    hint_warnings = _apply_channel_prefer(plans, hints.get("channel_prefer"))
     lane_order, port_order = reduce_crossings(plans, layout)
     port_fracs, lane_offsets = assign_ports_lanes(
         plans, layout, lane_order=lane_order, port_order=port_order)
@@ -1506,4 +1533,5 @@ def route(diagram, layout: dict, hints=None) -> RouteResult:
         crossings=crossings,
         piercings=piercings,
         slot_fallbacks=slot_fallbacks,
+        hint_warnings=hint_warnings,
     )

@@ -41,8 +41,13 @@ byte-stable).
 
 Exit codes (mirroring validate-ir.py's style):
     0 — patches applied, IR written. Prints a one-line summary to stderr.
-    2 — an unknown op or malformed patch. Prints one
-        ``ERROR <where>: <what>. Allowed: <ops>`` line per problem.
+    2 — one or more unknown/malformed patches. ``_collect_patches`` scans the
+        WHOLE findings list rather than stopping at the first bad one, so
+        every problem is reported in a single run (friendlier to Task 14's
+        automated patch→regenerate loop than a fail-fast, fix-one-see-the-
+        next cycle); prints one ``ERROR <where>: <what>. Allowed: <ops>``
+        line per problem, all to STDERR (I/O errors already went there —
+        this keeps every exit-2 error line on the one stream).
 """
 from __future__ import annotations
 
@@ -53,6 +58,13 @@ from pathlib import Path
 from typing import Any
 
 # ── The fixed 7-op vocabulary (order matches visual-rubric.md's table) ────────
+# Two OTHER copies of this vocabulary must stay in lockstep with this tuple:
+# ``_parse_layout_hints``'s ``if/elif`` chain in ``scripts/generate-drawio.py``
+# (the engine-side consumer) and the table in
+# ``skills/sap-diagram-generate/references/visual-rubric.md`` (the vision
+# loop's authoring reference). An 8th op added only here would validate but
+# never actually change the render; added only in generate-drawio.py it would
+# render but never pass validation here.
 ALLOWED_OPS = (
     "set_group_flow",
     "set_zone",
@@ -91,6 +103,20 @@ class PatchError(Exception):
 def _require(cond: bool, where: str, what: str, allowed: list[str] | None = None) -> None:
     if not cond:
         raise PatchError(where, what, allowed)
+
+
+class PatchErrors(Exception):
+    """One or more ``PatchError``s collected while scanning a findings list.
+
+    ``_collect_patches`` keeps scanning past a bad finding instead of raising
+    on the first one, so a single findings run reports every problem — see
+    the module docstring's exit-code-2 contract. ``str(exc)`` joins every
+    contained error onto its own line (the CLI in ``main()`` prints them the
+    same way, one per line, to stderr)."""
+
+    def __init__(self, errors: list["PatchError"]):
+        self.errors = errors
+        super().__init__("\n".join(str(e) for e in errors))
 
 
 def validate_patch(patch: Any, where: str) -> None:
@@ -160,25 +186,38 @@ def _collect_patches(findings: Any) -> list[dict]:
     Each finding is either a ``{rule, location, patch}`` wrapper or a bare
     patch (``{op, ...}``). A finding whose ``patch`` is ``null`` is a manual
     finding — passed through (dropped from the patch stream), never an error.
-    Every extracted patch is validated before it is returned."""
+    Every extracted patch is validated before it is returned.
+
+    Collect-all, not fail-fast: a bad finding is recorded and scanning
+    continues, so ONE call surfaces every problem in the list (raised
+    together as a single ``PatchErrors``) instead of stopping at the first —
+    see the module docstring's exit-code-2 contract. ``findings`` itself not
+    being a list is still a single structural error, raised immediately
+    (there is nothing else to scan)."""
     _require(isinstance(findings, list), "findings",
              f"findings must be a JSON list (got {type(findings).__name__})")
     patches: list[dict] = []
+    errors: list[PatchError] = []
     for i, f in enumerate(findings):
         where = f"finding[{i}]"
-        _require(isinstance(f, dict), where,
-                 f"finding must be an object (got {type(f).__name__})")
-        if "patch" in f:
-            patch = f["patch"]
-            if patch is None:            # manual finding — pass through
-                continue
-        elif "op" in f:                  # a bare patch object
-            patch = f
-        else:
-            raise PatchError(where, "finding has neither a 'patch' nor an 'op' key")
-        validate_patch(patch, where)
-        # normalise to the canonical hint object (drop any extra finding keys)
-        patches.append({k: patch[k] for k in ("op", "group", "edge", "value") if k in patch})
+        try:
+            _require(isinstance(f, dict), where,
+                     f"finding must be an object (got {type(f).__name__})")
+            if "patch" in f:
+                patch = f["patch"]
+                if patch is None:            # manual finding — pass through
+                    continue
+            elif "op" in f:                  # a bare patch object
+                patch = f
+            else:
+                raise PatchError(where, "finding has neither a 'patch' nor an 'op' key")
+            validate_patch(patch, where)
+            # normalise to the canonical hint object (drop extra finding keys)
+            patches.append({k: patch[k] for k in ("op", "group", "edge", "value") if k in patch})
+        except PatchError as exc:
+            errors.append(exc)
+    if errors:
+        raise PatchErrors(errors)
     return patches
 
 
@@ -252,8 +291,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         before = len(ir.get("layoutHints") or [])
         apply(ir, findings)
+    except PatchErrors as exc:
+        # FIX-3: every exit-2 error line goes to STDERR (I/O errors above
+        # already do) — Task 14's loop captures errors from stderr only.
+        for err in exc.errors:
+            print(str(err), file=sys.stderr)
+        return 2
     except PatchError as exc:
-        print(str(exc))
+        print(str(exc), file=sys.stderr)
         return 2
 
     out = args.out or args.ir

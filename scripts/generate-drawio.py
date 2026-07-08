@@ -1580,6 +1580,18 @@ def _parse_layout_hints(hints: list[dict[str, Any]] | None) -> dict | None:
     structured bag the engine consumes, or ``None`` when there are none (which
     keeps the whole layout+route path byte-identical to pre-Task-13).
 
+    The 7-op vocabulary recognised in the ``if/elif`` chain below MUST stay in
+    lockstep with two other copies: ``ALLOWED_OPS`` in
+    ``scripts/apply-rubric-patches.py`` (validates the same ops before they
+    ever reach an IR) and the table in
+    ``skills/sap-diagram-generate/references/visual-rubric.md`` (the vision
+    loop's authoring reference). Adding an 8th op here without updating both
+    leaves it validated-and-documented-nowhere or parsed-nowhere.
+
+    Lenient by design — validation is ``apply-rubric-patches.py``'s job; a
+    malformed or off-vocabulary hint here is simply skipped rather than raising,
+    so a hand-authored IR never dead-ends generation. Later hints for the same
+
     Lenient by design — validation is ``apply-rubric-patches.py``'s job; a
     malformed or off-vocabulary hint here is simply skipped rather than raising,
     so a hand-authored IR never dead-ends generation. Later hints for the same
@@ -1641,7 +1653,26 @@ def emit(
     # compute_layout (``set_icon_size`` / ``order_override``) and route()
     # (``channel_prefer`` / ``nudge_label``) below.
     _hints = _parse_layout_hints(diagram.layoutHints)
+    # Review-round FIX-1: a set_zone / set_group_flow / order_override hint
+    # targeting a group id that doesn't exist in THIS diagram used to be
+    # silently dropped (the loop below only touches groups it finds; Task
+    # 13's ``order_override`` consumer in ``_skeleton_layout`` is equally
+    # keyed by ``group_overrides.get(gid)``, so a stale id never matches
+    # there either) — correct per the rubric (ids are read off the CURRENT
+    # IR, never memorised) but invisible, leaving Task 14's render→patch→
+    # regenerate loop unable to tell "fix applied" from "fix discarded".
+    # Collected here (before groups even exist yet is impossible — checked
+    # against ``diagram.groups`` directly) and flushed to stderr alongside
+    # the molecule/brand WARNINGs below.
+    _hint_warnings: list[str] = []
     if _hints:
+        _group_ids = {g.id for g in diagram.groups}
+        for _op, _key in (("set_zone", "zone"), ("set_group_flow", "flow"),
+                          ("order_override", "order")):
+            for _gid in _hints[_key]:
+                if _gid not in _group_ids:
+                    _hint_warnings.append(
+                        f"layoutHint {_op} referenced unknown group {_gid!r}; ignored")
         for _g in diagram.groups:
             if _g.id in _hints["zone"]:
                 _g.zone = _hints["zone"][_g.id]
@@ -1705,10 +1736,12 @@ def emit(
     # icon resolver reusing the ShapeIndex path. Molecule cell styles come only
     # from the contract; missing brand assets degrade to text-badges (warnings
     # collected here, flushed to stderr at the end — never a hard failure).
+    # Seeded with the unresolved-group layoutHint warnings collected above (FIX-1)
+    # so both flush through the SAME dedup + stderr pass below.
     _M = _molecules_module()
     contract = _M.load_contract()
     brand_packs = _M.load_brand_packs()
-    mol_warnings: list[str] = []
+    mol_warnings: list[str] = list(_hint_warnings)
 
     def icon_resolver(name: str | None) -> str | None:
         if not name:
@@ -2194,6 +2227,9 @@ def emit(
             _route_hints = {"channel_prefer": _hints["channel_prefer"],
                             "nudge_label": _hints["nudge_label"]}
         route_result = _crmod.route(diagram, router_layout, hints=_route_hints)
+        # Review-round FIX-1: fold the router's own unresolved-hint warnings
+        # (unknown channel_prefer edge/channel id) into the same stderr flush.
+        mol_warnings.extend(route_result.hint_warnings)
         edge_anchors = dict(route_result.port_fracs)
         edge_waypoints = dict(route_result.waypoints)
         # Task 12: publish the channels the router reserved so the geometric
