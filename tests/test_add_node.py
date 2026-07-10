@@ -244,3 +244,61 @@ def test_add_node_append_errors_when_no_clean_reflow(tmp_path, capsys):
 
     assert f.read_bytes() == before, "the file must be unchanged on a refusal"
     assert not Path(str(f) + ".bak").exists(), "nothing saved ⇒ no .bak either"
+
+
+def test_add_node_append_leaves_header_decoration_untouched(tmp_path):
+    # A molecule-frame header child (connectable="0", small y — the "SAP BTP"
+    # chip / badge band) must NOT be swept into the content re-pack: it stays put
+    # and the content packs BELOW it.
+    header = (
+        '<mxCell id="btpbadge-x" value="SAP BTP" parent="g" vertex="1" '
+        'connectable="0" style="rounded=0;">'
+        '<mxGeometry x="10" y="8" width="90" height="30" as="geometry"/></mxCell>'
+    )
+    content = (
+        '<mxCell id="c1" value="One" parent="g" vertex="1" style="rounded=1;">'
+        '<mxGeometry x="20" y="60" width="200" height="70" as="geometry"/></mxCell>'
+        '<mxCell id="c2" value="Two" parent="g" vertex="1" style="rounded=1;">'
+        '<mxGeometry x="250" y="60" width="200" height="70" as="geometry"/></mxCell>'
+    )
+    mx = (
+        '<mxfile><diagram><mxGraphModel><root>'
+        '<mxCell id="0"/><mxCell id="1" parent="0"/>'
+        '<mxCell id="g" value="" parent="1" vertex="1" style="rounded=1;">'
+        '<mxGeometry x="100" y="80" width="480" height="160" as="geometry"/></mxCell>'
+        f'{header}{content}'
+        '</root></mxGraphModel></diagram></mxfile>'
+    )
+    f = tmp_path / "d.drawio"
+    f.write_text(mx, encoding="utf-8")
+
+    rc = add_node.main([
+        str(f), "--group", "g", "--label", "Cloud ALM",
+        "--service", "Cloud ALM", "--mode", "append",
+    ])
+    assert rc == 0
+
+    cells = _cells(f)
+    deco = next(c for c in cells if c.get("id") == "btpbadge-x")
+    assert edit.geometry(deco) == (10.0, 8.0, 90.0, 30.0), \
+        "the header decoration must be left exactly where it was"
+
+    g = next(c for c in cells if c.get("id") == "g")
+    _, _, gw, gh = edit.geometry(g)
+
+    # content = the group's non-decoration vertex children (the two originals +
+    # the appended node) — all packed BELOW the header band, non-overlapping.
+    kids = [c for c in cells if c.get("parent") == "g" and c.get("vertex") == "1"
+            and c.get("id") != "btpbadge-x"]
+    assert len(kids) == 3, "two content children + the appended node"
+    deco_bottom = 8 + 30
+    rects = [edit.geometry(c) for c in kids]
+    R = []
+    for x, y, w, h in rects:
+        assert y >= deco_bottom, f"content {x, y} packed into the header band"
+        assert 0 <= x and x + w <= gw, f"content {x, y, w, h} escapes width {gw}"
+        assert 0 <= y and y + h <= gh, f"content {x, y, w, h} escapes height {gh}"
+        R.append(Rect(x, y, w, h))
+    for i in range(len(R)):
+        for j in range(i + 1, len(R)):
+            assert not R[i].intersects(R[j]), f"content overlaps after reflow: {rects}"

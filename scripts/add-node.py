@@ -331,22 +331,51 @@ def _set_xy(cell: ET.Element, x, y) -> None:
     geo.set("y", str(y))
 
 
-def _child_vertices(
+# Frame-furniture id markers (engine ``_stable_id`` prefixes + molecule-local
+# ids, which the emitter namespaces as ``<frame-anchor>-<localid>`` — hence a
+# marker matches at the id start OR right after a ``-``): the SAP-BTP chip, the
+# frame title, badge slots, step circles, info/separator cells.
+_DECORATION_ID_MARKERS = ("btpbadge", "btpchip", "frame-title", "badge-",
+                          "sep-", "st-", "if-")
+
+
+def _is_decoration(cell: ET.Element) -> bool:
+    """Whether a group child is frame FURNITURE (a header/decoration cell) rather
+    than reflowable content.
+
+    The engine marks every decoration cell ``connectable="0"`` (the "SAP BTP"
+    chip, frame title, hyperscaler/runtime badge slots, step circles, …), so that
+    is the primary, robust signal; a known decoration id segment is a
+    belt-and-suspenders fallback for a template cell that was left connectable.
+    Content nodes (``n-…``) and sub-group frames (``g-…``) match neither."""
+    if (cell.get("connectable") or "") == "0":
+        return True
+    cid = cell.get("id") or ""
+    return any(cid.startswith(m) or f"-{m}" in cid for m in _DECORATION_ID_MARKERS)
+
+
+def _partition_children(
     doc: ET.ElementTree, group_id: str,
-) -> list[tuple[ET.Element, float, float, float, float]]:
-    """The group's VERTEX children as ``(cell, x, y, w, h)`` in group-local
-    (parent-relative) coords — edges and zero-size cells excluded (the same set
-    ``_child_obstacles`` collides against, here with the elements so append can
-    re-place them)."""
-    out: list[tuple[ET.Element, float, float, float, float]] = []
+) -> tuple[list[tuple[ET.Element, float, float, float, float]],
+           list[tuple[ET.Element, float, float, float, float]]]:
+    """Split the group's non-edge, positive-size VERTEX children into
+    ``(content, decorations)`` as ``(cell, x, y, w, h)`` in group-local coords.
+
+    Only CONTENT is re-packed / measured; DECORATIONS (the frame's own header
+    band — chip, title, badge slots — see ``_is_decoration``) keep their geometry
+    untouched, and the content origin is pushed below their band. Re-packing them
+    inline would collapse content up into the header (the whole point of the
+    observed-inset approach)."""
+    content: list[tuple[ET.Element, float, float, float, float]] = []
+    decos: list[tuple[ET.Element, float, float, float, float]] = []
     for c in edit.children(doc, group_id):
         if c.get("edge") == "1":
             continue
         x, y, w, h = edit.geometry(c)
         if w <= 0 or h <= 0:
             continue
-        out.append((c, x, y, w, h))
-    return out
+        (decos if _is_decoration(c) else content).append((c, x, y, w, h))
+    return content, decos
 
 
 def add_node_append(
@@ -365,12 +394,14 @@ def add_node_append(
     (the caller must not save — the reflow can't be localized).
 
     Insets: the content's top-left origin and the right/bottom margins are read
-    from the EXISTING children's bounding box inside the current frame (an empty
-    group falls back to ``_molecules.frame_insets``). A scaffolded ``.drawio``
-    group carries no engine ``type``, so ``frame_insets`` alone would hand back
-    the one generic inset for every frame and re-pack children over a molecule
-    frame's own header (the "SAP BTP" chip / badge row); preserving the observed
-    insets keeps the reflow correct for whatever frame the scaffold produced.
+    from the EXISTING CONTENT children's bounding box inside the current frame
+    (an empty group falls back to ``_molecules.frame_insets``). A scaffolded
+    ``.drawio`` group carries no engine ``type``, so ``frame_insets`` alone would
+    hand back the one generic inset for every frame and re-pack children over a
+    molecule frame's own header (the "SAP BTP" chip / badge row); preserving the
+    observed insets keeps the reflow correct for whatever frame the scaffold
+    produced. Frame FURNITURE (``_is_decoration`` — the header band) is never
+    re-packed and never moved; the content origin is pushed below it.
 
     Returns ``{"id", "shifted": [ids], "conflicts": [ids]}``; mutates ``doc``."""
     SL = _skeleton()
@@ -381,23 +412,28 @@ def add_node_append(
     node_id = _new_node_id(gid, label, service, generic_icon)
 
     gx, gy, old_gw, old_gh = edit.geometry(group)
-    existing = _child_vertices(doc, gid)
+    content, decos = _partition_children(doc, gid)
 
-    # Content-origin insets + right/bottom margins, observed from the frame so
-    # any frame type (plain group or a molecule with a header band) reflows right.
-    if existing:
-        left = min(x for _, x, _, _, _ in existing)
-        top = min(y for _, _, y, _, _ in existing)
-        max_r = max(x + cw for _, x, _, cw, _ in existing)
-        max_b = max(y + ch for _, _, y, _, ch in existing)
+    # Decorations (the header band) are left where they are; the content must
+    # start BELOW their bottom edge, and the grown frame must still enclose them.
+    deco_bottom = max((y + h for _, _, y, _, h in decos), default=0.0)
+    deco_right = max((x + w for _, x, _, w, _ in decos), default=0.0)
+
+    # Content-origin insets + right/bottom margins, observed from the CONTENT box.
+    if content:
+        left = min(x for _, x, _, _, _ in content)
+        top = max(deco_bottom, min(y for _, _, y, _, _ in content))
+        max_r = max(x + cw for _, x, _, cw, _ in content)
+        max_b = max(y + ch for _, _, y, _, ch in content)
         right_margin = max(0.0, old_gw - max_r)
         bottom_margin = max(0.0, old_gh - max_b)
     else:
         pad_x, pad_top, pad_bot = M.frame_insets(None, contract)
-        left, top, right_margin, bottom_margin = pad_x, pad_top, pad_x, pad_bot
+        left, right_margin, bottom_margin = pad_x, pad_x, pad_bot
+        top = max(deco_bottom, pad_top)
 
-    # Re-pack the existing footprints + the new node under the engine's rule.
-    items = [(cw, ch) for _, _, _, cw, ch in existing] + [(float(w), float(h))]
+    # Re-pack the existing CONTENT footprints + the new node under the engine rule.
+    items = [(cw, ch) for _, _, _, cw, ch in content] + [(float(w), float(h))]
     mode = SL._leaf_mode(None, None, len(items))
     positions, _pw, _ph = SL._pack(items, mode, SL.NODE_GAP)
 
@@ -405,13 +441,13 @@ def add_node_append(
     oy0 = edit.snap(top, _GRID)
     rights: list[float] = []
     bottoms: list[float] = []
-    for (cell, _x, _y, cw, ch), (rx, ry) in zip(existing, positions):
+    for (cell, _x, _y, cw, ch), (rx, ry) in zip(content, positions):
         nx = edit.snap(ox0 + rx, _GRID)
         ny = edit.snap(oy0 + ry, _GRID)
         _set_xy(cell, nx, ny)                     # keep each child's own w/h
         rights.append(nx + cw)
         bottoms.append(ny + ch)
-    nrx, nry = positions[len(existing)]
+    nrx, nry = positions[len(content)]
     nnx = edit.snap(ox0 + nrx, _GRID)
     nny = edit.snap(oy0 + nry, _GRID)
     edit.add_cell(
@@ -423,9 +459,12 @@ def add_node_append(
     rights.append(nnx + w)
     bottoms.append(nny + h)
 
-    # Grow the frame to contain the re-packed children + the preserved margins.
-    new_gw = edit.snap(max(rights) + right_margin, _GRID)
-    new_gh = edit.snap(max(bottoms) + bottom_margin, _GRID)
+    # Grow the frame to contain the re-packed content + preserved margins, never
+    # shrinking below the old size (so the untouched decorations stay enclosed).
+    new_gw = max(int(round(old_gw)),
+                 edit.snap(max(max(rights) + right_margin, deco_right), _GRID))
+    new_gh = max(int(round(old_gh)),
+                 edit.snap(max(max(bottoms) + bottom_margin, deco_bottom), _GRID))
     edit.set_geometry(group, int(round(gx)), int(round(gy)), new_gw, new_gh)
 
     # Localized growth: g's x/y are fixed, so it only ever grows toward +x / +y.
@@ -438,7 +477,11 @@ def add_node_append(
 
     newly: list[tuple[ET.Element, float, float]] = []
     for s in edit.children(doc, group.get("parent")):
-        if s is group or s.get("vertex") != "1" or s.get("edge") == "1":
+        # Only real sibling GROUPS matter — skip self, edges, and top-level
+        # furniture (title / watermark / legend / NETWORK separator are
+        # connectable=0 decorations, not siblings to shove aside).
+        if (s is group or s.get("vertex") != "1" or s.get("edge") == "1"
+                or _is_decoration(s)):
             continue
         sx, sy, sw, sh = edit.geometry(s)
         srect = Rect(sx, sy, sw, sh)
