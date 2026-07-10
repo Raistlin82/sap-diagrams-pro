@@ -9,6 +9,35 @@ All notable changes to `sap-diagrams-pro` are documented in this file. The forma
 
 ## [Unreleased]
 
+### Added — scaffold-and-extend (0.6.0)
+
+- **Surgical edit tools** for the scaffold path — adapt a scaffolded real SAP
+  template beyond relabelling, then re-run the same gate the procedural path uses:
+  - `scripts/remove-cell.py` — remove a cell and everything it holds (its subtree)
+    plus any now-dangling edges (`--id` or `--match` by visible label).
+  - `scripts/add-node.py` — drop a new styled node into an existing group, icon
+    resolved via the emitter's own ShapeIndex. `--mode slot` places it in a free
+    grid slot (nothing else moves; scan seeded from `--near`); `--mode append` adds
+    it as a group child and reflows only that group, shifting at most one grown-into
+    sibling (refuses if ≥2 collide).
+  - `scripts/add-edge.py` — wire a styled, orthogonally-routed edge between two
+    vertices, with a separator-aware protocol pill (`--flowFamily`/`--kind`/`--pill`).
+  - `scripts/_drawio_edit.py` — shared geometry/IO helpers behind the three tools
+    (backup-on-save, group content-box, grid snap).
+- **Coverage + decision** (`scripts/select-template.py`): `--components … --json`
+  emits a scaffold/extend/generate decision with a per-component coverage delta, so
+  the skill can tell whether a template is close enough to *extend* or should be
+  generated procedurally.
+- **SKILL Step 5.5**: the three-path (scaffold → extend → generate) workflow is
+  documented in both SKILL.md flavours + `references/scaffold-workflow.md`; the four
+  edit scripts + `_drawio_edit.py` now ship in the Claude Desktop bundle
+  (`packaging/claude-desktop-skill/build.sh`), still under the 200-file Skills cap.
+- **End-to-end guard** (`tests/test_scaffold_extend_integration.py`): scaffold BPA-L2
+  → remove an out-of-scope node → relabel → add "SAP Cloud ALM" + wire it, then assert
+  the authoritative dual gate (validate `--strict` 0 CRITICAL · composition 0 FAIL ·
+  `--sap-like` ≥ 85 [measured 90.5] · `--corpus` ≥ 82 [measured 99.0]), plus a demos
+  byte-identical regression proving the engine core is untouched.
+
 ### Fixed — diagram polish (0.5.1)
 
 - **Governance ribbon**: a top-level `governance` group now renders as a full-width

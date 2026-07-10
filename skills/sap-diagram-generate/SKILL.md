@@ -96,36 +96,90 @@ Using `AskUserQuestion`, ask only what is still ambiguous **after** Steps 2–3 
 
 Present the consolidated inventory (canonical names from Step 2) + best-practice findings (Step 3) + the interview answers, and offer three choices: **accept** · **apply best-practice suggestions** · **amend manually** (then re-run Step 3 on the edits). Wait for the answer. Only proceed once confirmed (or `auto` was given).
 
-### Step 5.5 — Scaffold-or-generate (hybrid decision) — ALWAYS
+### Step 5.5 — Scaffold, scaffold-extend, or generate (hybrid decision) — ALWAYS
 
-Before authoring any IR, decide **how** to produce the diagram. We can either
-**scaffold** from the closest real SAP reference `.drawio` (higher fidelity —
-inherits the exact canvas, zones, Horizon palette, fonts and icons) or
-**generate** procedurally from an IR. Ask the selector:
+Before authoring any IR, decide **how** to produce the diagram. Feed the selector
+the **confirmed canonical component list** from Step 5 and read its `decision`:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/select-template.py" "<request>" --top 5 [--level L2]
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/select-template.py" "<request>" \
+  --components "<confirmed canonical components, comma-separated>" --json [--level L2]
 ```
 
-- **If the top candidate is flagged `★ recommended`** (its score clears the
-  confidence threshold, currently **14.0** — see [`references/scaffold-workflow.md`](references/scaffold-workflow.md)) → **take the SCAFFOLD path:**
+The JSON carries `decision` ∈ {`scaffold`, `scaffold-extend`, `generate`}, a
+coverage report (`present` / `missing` / `extra` — each extra tagged
+`light`|`heavy`), the top `template` id, `recommended`, `heavyGuardOk`, and a
+bounded `delta` = `{remove: ["<label>", …], relabel: [{from, to}, …], add: ["<label>", …]}`.
+The thresholds behind the decision (`RECOMMEND_THRESHOLD=14`, `COVERAGE_MIN=0.4`,
+`HEAVY_EXTRA_MAX=1` + the `zoneCount/3` clause) are documented in
+[`references/scaffold-workflow.md`](references/scaffold-workflow.md). **Branch on `decision`:**
 
-  ```bash
-  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scaffold-diagram.py" "<request>" --out "<out>.drawio"
-  ```
+**`scaffold`** (relabel-only — the existing pure path: `★ recommended`, nothing
+`missing`, nothing `extra`). Copy the template and apply the relabels; adapt
+**surgically — never redraw**:
 
-  This copies the chosen template and prints a **relabel checklist**. Adapt the
-  copy **surgically — never redraw**: change labels with `relabel.py`
-  (`--set <cellId>=…` and/or `--replace "<old>=<new>"`, preserves
-  geometry/style/ids, writes a `.bak`) and swap service icons with the
-  `sap-icons-resolve` skill / `extract` where the checklist calls for it. Do
-  **not** author an IR for this diagram. Then go straight to **Step 8.2's gate**.
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scaffold-diagram.py" --template <template> --out "<out>.drawio"
+# one relabel.py call per delta.relabel entry (preserves geometry/style/ids, writes a .bak):
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/relabel.py" "<out>.drawio" --replace "<from>=<to>"
+```
 
-- **Otherwise (nothing clears the threshold, `scaffold-diagram.py` exits `3`)**
-  → **take the GENERATE path:** proceed to Step 6 and author the IR as usual.
+Swap service icons with the `sap-icons-resolve` skill where the checklist calls
+for it. Do **not** author an IR. Then go straight to the **Step 8 gate**.
 
-Either way, the **SAME downstream gate applies** (Step 8): `validate-drawio.py`
-+ `check-composition.py` + `score-diagram.py --corpus` + the visual-rubric loop.
+**`scaffold-extend`** (base template + delta — `★ recommended`, `coverage ≥ 0.4`,
+at least one `missing`/`extra`, heavy guard holds). Scaffold, **snapshot the whole
+starting template**, then apply the delta as an **ordered chain**:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scaffold-diagram.py" --template <template> --out "<out>.drawio"
+cp "<out>.drawio" "<out>.drawio.pre-extend.bak"          # whole-chain snapshot
+```
+
+1. **Remove** each `delta.remove` — **heavy extras first** (they free the most space):
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/remove-cell.py" "<out>.drawio" --match "<label>"   # or --id <cellId>
+   ```
+2. **Relabel** each `delta.relabel` (as in the `scaffold` path).
+3. **Add** each `delta.add` — a node plus an edge to wire it in. Claude picks the
+   placement mode per component: `--mode append` for a group member (localized
+   reflow of that group), or `--mode slot --near <refCellId>` for the nearest free
+   slot (least invasive). `add-node.py --json` returns the new cell id for wiring:
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/add-node.py" "<out>.drawio" --group <groupId> \
+     --label "<…>" --service "<canonical name>" --mode append --json
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/add-edge.py" "<out>.drawio" --source <id> --target <id> \
+     --flowFamily <family> --pill "<protocol>" --label "<…>"
+   ```
+
+**Run `check-composition.py` after each structural edit** (add-node / add-edge /
+heavy remove) so a new FAIL is attributed to the edit that caused it:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/check-composition.py" "<out>.drawio"
+```
+
+On a FAIL: revert that one edit via its `.bak` and retry it with a different
+placement/port (`--mode slot --near …`, or different endpoint ports) — **max 2
+retries per edit**. Never hand-edit geometry. If the chain still can't converge,
+**restore the snapshot** (`cp "<out>.drawio.pre-extend.bak" "<out>.drawio"`) and
+fall through to the **`generate`** path. Then go to the **Step 8 gate**.
+
+**`generate`** (nothing clears the bar). Author the IR — proceed to **Step 6** as usual.
+
+**Authoritative score gate (enforced identically here and in the integration
+test).** Whichever path produced the artifact, it must clear **both**:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --sap-like "<out>.drawio" --json                                    # SAP-likeness ≥ 85
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --corpus "${CLAUDE_PLUGIN_ROOT}/assets/templates" "<out>.drawio" --min-score 82
+```
+
+A scaffolded / scaffold-extended diagram keeps the template's structure, so it
+clears both comfortably; a low score on the `generate` path means the IR drifted
+from SAP conventions. This dual score gate is the score portion of the **same
+downstream gate** all three paths converge on (Step 8): `validate-drawio.py --strict`
++ `check-composition.py` + this dual score gate + the visual-rubric loop.
 
 ### Step 6 — Build the IR v2 (authoring grammar)
 
@@ -255,7 +309,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate-ir.py" /tmp/diagram-<level>.json
 
    - `validate-drawio.py --strict` — XML structure, Horizon palette, line styles, orphan edges; exits 1 if any CRITICAL is found.
    - `check-composition.py` — the **geometric** gate (zone overlaps, piercings, crossing budget once computed, legend presence); exits 2 on any FAIL.
-   - `score-diagram.py --corpus … --min-score 82` — SAP-likeness fingerprint vs the whole template corpus; exits 2 when the best match scores below 82. **Both paths must clear it** — a scaffolded+relabelled diagram fingerprints ~98 (it keeps the SAP template's structure), and a well-formed procedural diagram should clear 82 too; a low score on the generate path means the IR drifted from SAP conventions. (If the corpus is absent, this step is a no-op — skip it.)
+   - `score-diagram.py --corpus … --min-score 82` — SAP-likeness fingerprint vs the whole template corpus; exits 2 when the best match scores below 82. **All three paths must clear it** (see Step 5.5's authoritative dual score gate) — a scaffolded / scaffold-extended diagram fingerprints ~98 (it keeps the SAP template's structure), and a well-formed procedural diagram should clear 82 too; a low score on the generate path means the IR drifted from SAP conventions. (If the corpus is absent, this step is a no-op — skip it.)
 
    On any CRITICAL/FAIL/low-score: **generate path** — fix the IR and regenerate; **scaffold path** — undo via the `.bak` and redo the `relabel.py` edits (or pick an alternate template), never hand-edit geometry. **Max 2 mechanical retries** before escalating to the user with the exact error.
 
@@ -304,7 +358,7 @@ Per file: path, level, element counts, the gate scorecard (validator + compositi
 
 ## References
 
-- [`references/scaffold-workflow.md`](references/scaffold-workflow.md) — the hybrid scaffold-or-generate decision, the selector's scoring formula + confidence threshold, and the surgical relabel workflow (Step 5.5).
+- [`references/scaffold-workflow.md`](references/scaffold-workflow.md) — the hybrid scaffold / scaffold-extend / generate decision, the coverage report + thresholds, the selector's scoring formula, the ordered extend workflow, and the surgical relabel rules (Step 5.5).
 - [`references/interactive-workflow.md`](references/interactive-workflow.md) — the full preflight → ground → interview flow.
 - [`references/sap-skills-integration.md`](references/sap-skills-integration.md) — which SAP skills + MCP to consult, per concern.
 - [`references/component-groups.md`](references/component-groups.md) — organisms + the BTP-service vs SaaS-product rule.

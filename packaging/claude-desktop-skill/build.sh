@@ -43,7 +43,13 @@ SCRIPTS=(
   scaffold-diagram.py       # copy the closest template + print relabel checklist
   relabel.py                # surgical label edits on a scaffolded .drawio
   build-template-index.py   # vocabularies reused by select-template.py (imported)
+  # scaffold-and-extend edit tools (Step 5.5) — surgically remove/add/wire cells
+  # on a scaffolded .drawio, then re-run the same gate the procedural path uses.
+  remove-cell.py            # remove a cell (subtree + dangling edges)
+  add-node.py               # drop a new styled node into a group (slot | append)
+  add-edge.py               # wire a styled, orthogonally-routed edge
   # private modules (path-imported by the entry points above)
+  _drawio_edit.py           # shared edit helpers (used by remove/add-node/add-edge)
   _skeleton_layout.py       # slot layout + flow ordering
   _channel_router.py        # deterministic edge router
   _molecules.py             # style-contract-driven molecule emission
