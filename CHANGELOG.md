@@ -9,6 +9,18 @@ All notable changes to `sap-diagrams-pro` are documented in this file. The forma
 
 ## [Unreleased]
 
+### Fixed — diagram polish (0.5.1)
+
+- **Governance ribbon**: a top-level `governance` group now renders as a full-width
+  band across the top (SAP spec) instead of a content-sized box that misread as a
+  second "SAP BTP" account floating above the diagram.
+- **Cross-network pills**: `_channel_router` keeps edge pills/labels off the NETWORK
+  separator bar + its "NETWORK" caption, so a cross-network edge (e.g. a `zero-copy`
+  pill) no longer lands on the seam — resolved in the router, no rubric-loop nudge.
+- **SAP BTP chip**: the governance/subaccount chip shows the SAP logo + "BTP" beside
+  it (was overlapping into "SSAP BTP").
+
+
 ### Added — hybrid scaffold path (0.5.0)
 
 - **Template corpus**: 156 real SAP reference `.drawio` diagrams (145 from
