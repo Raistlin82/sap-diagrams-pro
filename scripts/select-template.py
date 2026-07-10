@@ -235,6 +235,23 @@ def load_index(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def restrict_to_available(index: dict) -> dict:
+    """On Desktop the loose ``assets/templates/`` corpus isn't bundled, only the
+    curated ``templates-pack.json``. Rank only what can actually be scaffolded
+    here: the loose corpus when present, else the packed subset. When neither is
+    present, leave the index as-is (ranking still informs the procedural path)."""
+    loose = _REPO / "assets" / "templates"
+    if loose.exists() and any(loose.glob("*.drawio")):
+        return index
+    pack = _REPO / "assets" / "templates-pack.json"
+    if pack.exists():
+        ids = {e.get("id") for e in json.loads(pack.read_text(encoding="utf-8")).get("templates", [])}
+        kept = [e for e in index.get("templates", []) if e.get("id") in ids]
+        if kept:
+            return {**index, "templates": kept}
+    return index
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("request", nargs="*", help="free-text diagram request; stdin if omitted")
@@ -254,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     req_level = args.level.upper() if args.level else None
-    ranked = rank(load_index(args.index), query, args.top, req_level)
+    ranked = rank(restrict_to_available(load_index(args.index)), query, args.top, req_level)
 
     if args.json:
         payload = {

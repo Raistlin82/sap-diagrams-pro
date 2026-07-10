@@ -39,7 +39,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import shutil
 import sys
 from pathlib import Path
 
@@ -47,9 +46,37 @@ _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parent
 TEMPLATES_DIR = _REPO / "assets" / "templates"
 DEFAULT_INDEX = _REPO / "assets" / "template-index.json"
+TEMPLATES_PACK = _REPO / "assets" / "templates-pack.json"
 
 # Distinct exit code so a caller can branch: "no close template".
 EXIT_NO_TEMPLATE = 3
+
+_PACK_CACHE: dict | None = None
+
+
+def _pack_xml(entry: dict) -> str | None:
+    """The template's draw.io XML from the curated pack (``templates-pack.json``),
+    used on Desktop/claude.ai where the loose ``assets/templates/`` corpus isn't
+    bundled. Returns None when there's no pack or the id isn't in it."""
+    global _PACK_CACHE
+    if _PACK_CACHE is None:
+        _PACK_CACHE = (
+            json.loads(TEMPLATES_PACK.read_text(encoding="utf-8"))
+            if TEMPLATES_PACK.exists() else {"templates": []}
+        )
+    for e in _PACK_CACHE.get("templates", []):
+        if e.get("id") == entry.get("id") or e.get("file") == entry.get("file"):
+            return e.get("drawioXml")
+    return None
+
+
+def template_content(entry: dict, templates_dir: Path) -> str | None:
+    """The chosen template's draw.io XML — from the loose corpus file if present,
+    else the embedded pack. None means it can't be scaffolded here."""
+    src = (templates_dir / entry["file"]).resolve()
+    if src.exists():
+        return src.read_text(encoding="utf-8")
+    return _pack_xml(entry)
 
 
 def _load_selector():
@@ -160,10 +187,12 @@ def main(argv: list[str] | None = None) -> int:
         reasons = ranked[0].reasons
 
     assert chosen is not None
-    src = (args.templates_dir / chosen["file"]).resolve()
-    if not src.exists():
-        print(f"{src}: template file missing", file=sys.stderr)
-        return 1
+    content = template_content(chosen, args.templates_dir)
+    if content is None:
+        print(f"{chosen['file']}: template not available here (no loose corpus and "
+              f"not in templates-pack.json) — use the procedural engine "
+              f"(generate-drawio.py).", file=sys.stderr)
+        return EXIT_NO_TEMPLATE
 
     add_or_relabel, swap_or_remove = relabel_checklist(chosen, query)
     alternates = [c for c in ranked if c.id != chosen["id"]][: args.top]
@@ -187,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{dest}: already exists (use --force)", file=sys.stderr)
         return 1
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(src, dest)
+    dest.write_text(content, encoding="utf-8")
 
     if args.json:
         print(json.dumps({

@@ -55,9 +55,12 @@ for f in "${SCRIPTS[@]}"; do
   cp "$ROOT/scripts/$f" "$STAGE/scripts/$f"
 done
 
-# Assets — single files. template-index.json lets select-template.py rank even
-# though the loose template corpus (assets/templates/) is deliberately omitted.
-for f in shape-index.json canonical-pills.json style-contract.json template-index.json; do
+# Assets — single files. template-index.json lets select-template.py rank; the
+# loose 156-file corpus (assets/templates/) is omitted (200-file cap), but
+# templates-pack.json carries a CURATED ~21-template subset with embedded draw.io
+# XML so the SCAFFOLD path works on Desktop too (select-template restricts to it;
+# scaffold-diagram reads the XML from it). Rebuild it with build-templates-pack.py.
+for f in shape-index.json canonical-pills.json style-contract.json template-index.json templates-pack.json; do
   cp "$ROOT/assets/$f" "$STAGE/assets/$f"
 done
 

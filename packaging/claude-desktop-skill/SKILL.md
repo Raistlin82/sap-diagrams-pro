@@ -71,20 +71,21 @@ Ask the selector (it reads the bundled `assets/template-index.json`):
 python3 scripts/select-template.py "<request>" --top 5
 ```
 - If the top candidate is flagged **`★ recommended`** (score ≥ the confidence
-  threshold **14.0** — see [`references/scaffold-workflow.md`](references/scaffold-workflow.md)) **and the template corpus is bundled**
-  (`assets/templates/` present), take the **scaffold path**:
+  threshold **14.0** — see [`references/scaffold-workflow.md`](references/scaffold-workflow.md)), take the **scaffold path**:
   ```bash
-  python3 scripts/scaffold-diagram.py "<request>" --out "<out>.drawio"   # copies + prints a relabel checklist
+  python3 scripts/scaffold-diagram.py "<request>" --out "<out>.drawio"   # writes the template + prints a relabel checklist
   python3 scripts/relabel.py "<out>.drawio" --replace "Old Service=New Service" --set <cellId>="New label"
   ```
-  Relabel preserves geometry/style/ids and writes a `.bak`; swap icons as the
-  checklist indicates. Skip steps 3–4 (no IR) and go straight to the **step 5
-  gate**.
-- **Otherwise** — nothing clears the threshold, `scaffold-diagram.py` exits `3`,
-  **or this bundle ships without the `assets/templates/` corpus** (the default;
-  it is omitted to stay under the Skills file-upload cap) — take the **generate
-  path**: proceed to step 3. This is the safe default; the scaffold path is a
-  fidelity boost when the corpus is available, never a hard dependency.
+  This bundle ships a **curated ~21-template subset** in `assets/templates-pack.json`
+  (embedded draw.io XML — the full 156-file corpus can't ship under the Skills
+  file-cap). The selector automatically ranks only what's scaffoldable here, and
+  `scaffold-diagram.py` writes the template's XML from the pack. Relabel preserves
+  geometry/style/ids and writes a `.bak`; swap icons as the checklist indicates.
+  Skip steps 3–4 (no IR) and go straight to the **step 5 gate**.
+- **Otherwise** — nothing clears the threshold or `scaffold-diagram.py` exits `3`
+  (no scaffoldable template for this request) — take the **generate path**:
+  proceed to step 3. This is the safe default; the scaffold path is a fidelity
+  boost when a close template exists, never a hard dependency.
 
 Either way, the **same downstream gate** (step 5) applies.
 
@@ -193,8 +194,9 @@ python3 scripts/generate-drawio.py   ir.json --out "<title>-<level>.drawio"
 # both paths run this gate on "<title>-<level>.drawio":
 python3 scripts/validate-drawio.py   "<title>-<level>.drawio" --strict   # palette/XML; exit 1 on CRITICAL
 python3 scripts/check-composition.py "<title>-<level>.drawio"             # geometric gate; exit 2 on FAIL
-# SAP-likeness vs the corpus — ONLY if assets/templates/ is bundled (else skip):
-python3 scripts/score-diagram.py --corpus assets/templates "<title>-<level>.drawio" --min-score 82  # exit 2 if best < 82
+# SAP-likeness gate (advisory — the hard gates are validate-drawio + check-composition).
+# Reference-free score, works everywhere; ~80+ is good (sparse L0 diagrams score lower):
+python3 scripts/score-diagram.py --sap-like "<title>-<level>.drawio" --json   # objective 0-100 SAP-likeness
 ```
 On any CRITICAL/FAIL/low-score: **generate path** — fix the IR and regenerate;
 **scaffold path** — restore the `.bak` and redo the `relabel.py` edits (or pick an

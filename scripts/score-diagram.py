@@ -201,20 +201,40 @@ def _tokens(text: str) -> set[str]:
     return {w.lower() for w in words if len(w) >= 2 and w.lower() not in STOPWORDS}
 
 
-def _is_zone_style(style: str) -> bool:
-    """SAP composition zone: rounded area rect with a top/left bold label.
+# BTP / non-SAP / semantic AREA fills (foundation.md). A rounded rect carrying one
+# of these fills IS a composition zone regardless of its arcSize — this is what
+# lets the scorer recognise BOTH our engine's zones (arcSize 24/32) AND the SAP
+# reference templates' canonical arcSize=16 zones (else a scaffolded real SAP
+# diagram would score LOWER than our procedural output, which is backwards).
+_ZONE_AREA_FILLS = {
+    "#EBF8FF",  # SAP/BTP area
+    "#F5F6F7",  # non-SAP area
+    "#F5FAE5",  # positive
+    "#F1ECFF",  # accent indigo (authorization)
+    "#FFF0FA",  # accent pink (trust)
+    "#DAFDF5",  # accent teal
+}
+_FILL_RE = re.compile(r"fillColor=(#[0-9A-Fa-f]{6})")
 
-    In this repo zones use ``rounded=1;absoluteArcSize=1;strokeWidth=1.5`` with
-    ``verticalAlign=top`` and a small arc (24/32) — never the arcSize=50 of a
-    pill and never a shape/image cell.
+
+def _is_zone_style(style: str) -> bool:
+    """SAP composition zone: a rounded area rect (never an arcSize=50 pill, never
+    a shape/image cell). Detected by an area fill in the SAP palette OR — for the
+    engine's no-fill nested zones — a bold top label with a thin structural stroke.
     """
-    if "rounded=1" not in style or "absoluteArcSize=1" not in style:
-        return False
-    if "strokeWidth=1.5" not in style:
+    if "rounded=1" not in style:
         return False
     if ARC50_RE.search(style) or "shape=" in style or "image=" in style:
         return False
-    return "verticalAlign=top" in style
+    m = _FILL_RE.search(style)
+    if m and m.group(1).upper() in _ZONE_AREA_FILLS:
+        return True
+    # engine's no-fill nested zone idiom
+    return (
+        "verticalAlign=top" in style
+        and "absoluteArcSize=1" in style
+        and ("strokeWidth=1.5" in style or "strokeWidth=1" in style)
+    )
 
 
 def fingerprint(path: str | Path) -> Fingerprint:
