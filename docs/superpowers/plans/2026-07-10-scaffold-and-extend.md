@@ -157,6 +157,7 @@ git commit -m "feat(edit): _drawio_edit shared helpers for the edit tools"
 - [ ] **Step 3: Implement `--mode slot`:**
   - Resolve icon: import `generate-drawio`'s `ShapeIndex` (`load_script("generate-drawio").ShapeIndex.load()`), `.resolve(service)`. Build the node cell with the resolved `image=` style (mirror how `generate-drawio` builds a service node — factor the smallest reusable piece; if not cleanly reusable, replicate the `shape=image;...;image=<uri>;` style with label).
   - Placement: start from `--near`'s rect (or the group's content box); scan outward on the 10px grid for the first W×H rectangle inside the group that overlaps no existing child; snap; set geometry; `parent = group`.
+  - **Reuse note:** the packing helper for `--mode append` (Task 5) is `_skeleton_layout._pack` (NOT in `_molecules`); `footprint`/`frame_insets` are in `_molecules`. `load_script("_skeleton_layout")` pulls `_molecules` too (it imports it eagerly).
   - Default node W/H from the contract's product/box geometry.
 
 - [ ] **Step 4: Run — expect PASS.**
@@ -206,7 +207,9 @@ git commit -m "feat(edit): _drawio_edit shared helpers for the edit tools"
 - [ ] **Step 3: Implement:**
   - New `--components "<csv>"` and reuse `build-template-index`'s `kw_hit` for matching. Enumerate template components from `serviceTokens + scenarioAliases` ONLY.
   - PRESENT/MISSING (requested vs template), EXTRA (template minus requested). For light/heavy: open the candidate `assets/templates/<file>` (via `_drawio_edit.load`), find the cell whose label matches the extra, tag `heavy` iff another cell has `parent == that cell`, else `light`.
-  - Decision constants `COVERAGE_MIN = 0.4`, `HEAVY_EXTRA_MAX = 1`; evaluate paths in the spec's order (relabel → extend → generate). Emit human-readable + `--json` (`{"decision": …, "coverage": …, "delta": {"remove":[],"relabel":[],"add":[]}}`).
+  - Decision constants `COVERAGE_MIN = 0.4`, `HEAVY_EXTRA_MAX = 1`. The heavy-extra guard for the extend path is the spec's explicit AND: `heavy_extras ≤ HEAVY_EXTRA_MAX` **AND** `heavy_extras ≤ zoneCount/3` (zoneCount from `template-index.json`); failing either → generate. Evaluate paths in the spec's order (relabel → extend → generate). Emit human-readable + `--json` (`{"decision": …, "coverage": …, "delta": {"remove":[],"relabel":[],"add":[]}}`).
+  - **Matching note:** `build-template-index.kw_hit(haystack_low, kw)` lowercases NEITHER argument — lowercase BOTH the requested component and the token haystack before calling it, or mixed-case canonical names (e.g. "Integration Suite") silently miss.
+  - Add a test that a template with many zones but 1 heavy extra passes the guard, while one with few zones (≤3) and 1 heavy extra is blocked by the `zoneCount/3` clause.
 
 - [ ] **Step 4: Run — expect PASS**; also run the existing `tests/test_select_template.py` (unchanged behaviour when `--components` absent).
 
@@ -234,7 +237,7 @@ git commit -m "feat(edit): _drawio_edit shared helpers for the edit tools"
 - Modify: `packaging/claude-desktop-skill/build.sh`
 - Create: `tests/test_scaffold_extend_integration.py`
 
-- [ ] **Step 1: Write failing integration test:** scaffold `assets/templates/sap-build-process-automation-l2.drawio` into `tmp_path`; snapshot; `remove-cell` one heavy extra; `relabel` one match; `add-node --mode append` + `add-edge` two missing components (e.g. Cloud ALM + an edge); then assert the SAME authoritative gate as the workflow:
+- [ ] **Step 1: Write failing integration test:** scaffold the template by **id** (the on-disk filename differs from the id): `scaffold-diagram.py --template sap-build-process-automation-l2 --out <tmp>/base.drawio` — it resolves the id via `find_entry` to `assets/templates/SAP_Build_Process_Automation_L2.drawio`. (Do NOT `cp` a literal `sap-build-process-automation-l2.drawio` path — it does not exist.) Then snapshot; `remove-cell` one heavy extra; `relabel` one match; `add-node --mode append` + `add-edge` two missing components (e.g. Cloud ALM + an edge); then assert the SAME authoritative gate as the workflow:
   - `validate-drawio --strict` exit 0,
   - `check-composition` 0 FAIL,
   - `score-diagram --sap-like` ≥ 85 **and** `score-diagram --corpus assets/templates --min-score 82`.
