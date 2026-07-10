@@ -85,12 +85,37 @@ def _load_builder():
     return mod
 
 
+def _load_edit():
+    """Import the shared edit helpers (``_drawio_edit.py``) once, reusing an
+    already-registered copy (e.g. loaded by a test's ``load_script``) so module
+    identity stays single."""
+    if "_drawio_edit" in sys.modules:
+        return sys.modules["_drawio_edit"]
+    path = _HERE / "_drawio_edit.py"
+    spec = importlib.util.spec_from_file_location("_drawio_edit", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_drawio_edit"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 _B = _load_builder()
 FAMILY_KEYWORDS = _B.FAMILY_KEYWORDS
 SCENARIO_ALIASES = _B.SCENARIO_ALIASES
 kw_hit = _B.kw_hit
 infer_family = _B.infer_family
 detect_scenarios = _B.detect_scenarios
+clean_label = _B.clean_label
+_EDIT = _load_edit()
+
+# --- coverage / decision tuning ---------------------------------------------
+# Minimum share of the requested components the winner must already contain for
+# a scaffold-extend to be worthwhile (below this, generate from scratch).
+COVERAGE_MIN = 0.4
+# Most *heavy* (structural container) extras a scaffold-extend may strip; more
+# than this means the template's skeleton is wrong for the request.
+HEAVY_EXTRA_MAX = 1
+TEMPLATES_DIR = _REPO / "assets" / "templates"
 
 _WORD_RE = re.compile(r"[a-z0-9][a-z0-9+/&.\-]*", re.IGNORECASE)
 # Framing words that carry no discriminating signal for template selection.
@@ -231,6 +256,174 @@ def rank(index: dict, query: str, top: int, req_level: str | None = None) -> lis
     return top_n
 
 
+# --------------------------------------------------------------------------- #
+# Component coverage + scaffold/extend/generate decision (the --components path)
+# --------------------------------------------------------------------------- #
+def enumerate_components(entry: dict) -> list[str]:
+    """The template's *component* set: ``serviceTokens`` + ``scenarioAliases``,
+    deduped case-insensitively, order preserved. ``labelTokens`` are deliberately
+    excluded — they are a noisy word-bag (e.g. stray ``16px`` fragments) meant
+    for lexical ranking, not for enumerating real components."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for key in ("serviceTokens", "scenarioAliases"):
+        for v in entry.get(key) or ():
+            s = str(v).strip()
+            if s and s.lower() not in seen:
+                seen.add(s.lower())
+                out.append(s)
+    return out
+
+
+def _labeled_cell_id(doc, label: str) -> str | None:
+    """Id of the cell whose (cleaned) label matches ``label``, or ``None``.
+
+    Tries the shared exact/case-insensitive matcher first (clean scaffolds carry
+    the label verbatim on ``mxCell/@value``); falls back to cleaning HTML-bearing
+    ``mxCell``/``object``/``UserObject`` labels — as the real SAP corpus stores
+    them — so structural (heavy) extras are still detected there."""
+    cell = _EDIT.find_cell_by_label(doc, label)
+    if cell is not None:
+        return cell.get("id")
+    low = label.lower()
+    ci: str | None = None
+    for c in _EDIT.iter_cells(doc):
+        raw = c.get("value")
+        if not raw:
+            continue
+        cl = clean_label(raw)
+        if cl == label:
+            return c.get("id")
+        if ci is None and cl.lower() == low:
+            ci = c.get("id")
+    for el in _EDIT.root(doc).iter():
+        if el.tag in ("object", "UserObject"):
+            raw = el.get("label") or el.get("value") or ""
+            cl = clean_label(raw)
+            if cl == label:
+                return el.get("id")
+            if ci is None and cl.lower() == low:
+                ci = el.get("id")
+    return ci
+
+
+def classify_extra(doc, label: str) -> str:
+    """``"heavy"`` iff the extra is a container (some cell parents to it), i.e.
+    removing it means unpicking nested content; else ``"light"`` (a leaf swap).
+    Unlocatable labels default to ``"light"`` (the conservative, non-blocking
+    outcome)."""
+    if doc is None:
+        return "light"
+    cid = _labeled_cell_id(doc, label)
+    if cid is None:
+        return "light"
+    return "heavy" if _EDIT.children(doc, cid) else "light"
+
+
+def _clean_requested(requested) -> list[str]:
+    return [s for s in (str(r).strip() for r in requested or ()) if s]
+
+
+def coverage_report(entry: dict, requested, templates_dir=None) -> dict:
+    """Compare ``requested`` components against the template's own components.
+
+    PRESENT = requested found in the template; MISSING = requested not found;
+    EXTRA = template components nobody requested (each tagged light/heavy by
+    opening the candidate ``.drawio``). Matching is word-boundary (``kw_hit``)
+    with BOTH sides lowercased, so canonical names like ``Integration Suite``
+    match ``SAP Integration Suite`` and never partial-match across words."""
+    req = _clean_requested(requested)
+    comps = enumerate_components(entry)
+    comps_low = [(c, c.lower()) for c in comps]
+    req_low = [(r, r.lower()) for r in req]
+
+    present, missing = [], []
+    for r, rl in req_low:
+        (present if any(kw_hit(cl, rl) for _c, cl in comps_low) else missing).append(r)
+
+    extra_labels = [c for c, cl in comps_low
+                    if not any(kw_hit(cl, rl) for _r, rl in req_low)]
+
+    doc = None
+    if extra_labels:
+        base = Path(templates_dir) if templates_dir is not None else TEMPLATES_DIR
+        path = base / str(entry.get("file", ""))
+        if path.exists():
+            doc = _EDIT.load(path)
+
+    extra = []
+    heavy_count = 0
+    for label in extra_labels:
+        weight = classify_extra(doc, label)
+        if weight == "heavy":
+            heavy_count += 1
+        extra.append({"label": label, "weight": weight})
+
+    coverage = round(len(present) / (len(req) or 1), 3)
+    return {
+        "present": present,
+        "missing": missing,
+        "extra": extra,
+        "heavyCount": heavy_count,
+        "coverage": coverage,
+    }
+
+
+def decide(entry: dict, requested, recommended: bool, templates_dir=None) -> dict:
+    """Route the winner to scaffold / scaffold-extend / generate (first match
+    wins) and, for the scaffold paths, emit a bounded delta plan.
+
+    1. ``scaffold``        — ★ recommended, nothing missing and nothing extra:
+                             copy the template and relabel in place.
+    2. ``scaffold-extend`` — ★ recommended, coverage ≥ COVERAGE_MIN, at least one
+                             missing/extra, and the heavy guard holds: copy then
+                             apply the delta (remove extras / relabel / add missing).
+    3. ``generate``        — anything else: fall back to the procedural engine.
+
+    Heavy guard (BOTH must hold): heavy ≤ HEAVY_EXTRA_MAX AND heavy ≤ zoneCount/3
+    — a template with few zones can't absorb even one heavy structural removal."""
+    rep = coverage_report(entry, requested, templates_dir)
+    present, missing, extra = rep["present"], rep["missing"], rep["extra"]
+    coverage, heavy = rep["coverage"], rep["heavyCount"]
+
+    zone_count = float(entry.get("zoneCount") or 0)
+    heavy_guard = heavy <= HEAVY_EXTRA_MAX and heavy <= zone_count / 3
+
+    if recommended and not missing and not extra:
+        decision = "scaffold"
+    elif (recommended and coverage >= COVERAGE_MIN
+          and (missing or extra) and heavy_guard):
+        decision = "scaffold-extend"
+    else:
+        decision = "generate"
+
+    # Delta plan: strip extras, relabel each present match to its canonical
+    # requested name, add the missing components.
+    comps = enumerate_components(entry)
+    relabel = []
+    for r in present:
+        rl = r.lower()
+        for c in comps:
+            if kw_hit(c.lower(), rl):
+                relabel.append({"from": c, "to": r})
+                break
+    delta = {
+        "remove": [e["label"] for e in extra],
+        "relabel": relabel,
+        "add": list(missing),
+    }
+
+    return {
+        "decision": decision,
+        "coverage": coverage,
+        "present": present,
+        "missing": missing,
+        "extra": extra,
+        "heavyGuardOk": heavy_guard,
+        "delta": delta,
+    }
+
+
 def load_index(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -252,12 +445,49 @@ def restrict_to_available(index: dict) -> dict:
     return index
 
 
+def _emit_coverage(index: dict, ranked: list[Ranked], components: str,
+                   as_json: bool) -> int:
+    """Report component coverage + the routing decision for the top candidate."""
+    requested = _clean_requested(components.split(","))
+    top = ranked[0]
+    entry = next((e for e in index.get("templates", []) if e.get("id") == top.id),
+                 {"id": top.id, "file": top.file})
+    result = decide(entry, requested, top.recommended)
+    result["template"] = top.id
+    result["recommended"] = top.recommended
+
+    if as_json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+
+    print(f"template : {top.id}  [{top.family}/{top.level}]"
+          + ("  * recommended" if top.recommended else ""))
+    print(f"decision : {result['decision']}")
+    print(f"coverage : {result['coverage']:.2f}  (min {COVERAGE_MIN})")
+    if result["present"]:
+        print("present  : " + ", ".join(result["present"]))
+    if result["missing"]:
+        print("missing  : " + ", ".join(result["missing"]))
+    if result["extra"]:
+        print("extra    : " + ", ".join(
+            f"{e['label']} [{e['weight']}]" for e in result["extra"]))
+    if result["decision"] != "generate":
+        d = result["delta"]
+        print(f"delta    : remove={len(d['remove'])} "
+              f"relabel={len(d['relabel'])} add={len(d['add'])}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("request", nargs="*", help="free-text diagram request; stdin if omitted")
     ap.add_argument("--index", type=Path, default=DEFAULT_INDEX)
     ap.add_argument("--top", type=int, default=5)
     ap.add_argument("--level", help="constrain / bias to a level (L0|L1|L2|L3)")
+    ap.add_argument("--components",
+                    help="comma-separated components to check against the top "
+                         "candidate; prints a coverage report + a scaffold / "
+                         "scaffold-extend / generate decision")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
@@ -271,7 +501,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     req_level = args.level.upper() if args.level else None
-    ranked = rank(restrict_to_available(load_index(args.index)), query, args.top, req_level)
+    index = restrict_to_available(load_index(args.index))
+    ranked = rank(index, query, args.top, req_level)
+
+    # Coverage + decision path (only when --components is given). Without it the
+    # output below is EXACTLY the pre-existing ranking behaviour.
+    if args.components is not None:
+        return _emit_coverage(index, ranked, args.components, args.json)
 
     if args.json:
         payload = {
