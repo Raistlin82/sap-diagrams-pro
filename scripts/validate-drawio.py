@@ -18,8 +18,10 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
+import shutil
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -212,6 +214,39 @@ def _is_intentional_overlap_cell(cell: ET.Element) -> bool:
         or _is_step_counter(cell, kv)
         or _is_pill_like(cell, kv)
     )
+
+
+# Tolerance (px) within which two endpoint centers count as sharing an axis:
+# below this an orthogonalEdgeStyle edge with no explicit routing draws
+# straight; above it draw.io inserts a 90° kink.
+_AXIS_ALIGN_TOL = 2.0
+
+
+def _edge_has_waypoints(cell: ET.Element) -> bool:
+    """True when the edge carries at least one explicit interior waypoint
+    (``<Array as="points"><mxPoint/>``). Such an edge is already routed by
+    the emitter, so its shape is authorial — never a spurious bent-edge."""
+    geom = cell.find("mxGeometry")
+    if geom is None:
+        return False
+    arr = geom.find("Array[@as='points']")
+    return arr is not None and arr.find("mxPoint") is not None
+
+
+def _edge_has_anchor(kv: dict[str, str]) -> bool:
+    """True when the edge docks at an explicit fractional port
+    (exitX/exitY/entryX/entryY). The author picked the docking side, so
+    draw.io's orthogonal route between the two ports is intentional."""
+    return any(k in kv for k in ("exitX", "exitY", "entryX", "entryY"))
+
+
+def _is_capsule_arc(kv: dict[str, str]) -> bool:
+    """The SAP flow-pill / interface capsule idiom: ``rounded=1;arcSize=50``.
+    Here arcSize is *meant* as a percentage (50% ⇒ fully rounded ends), so
+    ``absoluteArcSize=1`` must NOT be forced on — doing so would give a 22px
+    pill a 50px radius. Every arcSize cell in the shipped demos is one of
+    these, which is why the ARC_SIZE_ABS check/​autofix exempt them."""
+    return kv.get("rounded") == "1" and kv.get("arcSize") == "50"
 
 
 def validate(path: Path) -> list[Issue]:
@@ -417,7 +452,144 @@ def validate(path: Path) -> list[Issue]:
                     )
                 )
 
+    # ── Rule 6: bent orthogonal edges (the highest-leverage polish check) ────
+    # An ``orthogonalEdgeStyle`` edge with NO explicit waypoints renders
+    # straight ONLY when its endpoints' centers share an axis (centerX≈centerX
+    # OR centerY≈centerY). Otherwise draw.io inserts a visible 90° kink through
+    # empty space. Edges the emitter already routed (explicit waypoints) or
+    # docked (explicit exit/entry ports) are authorial and skipped — our own
+    # engine always emits one or the other, so this never fires on our demos.
+    def _center(cid: str) -> tuple[float, float] | None:
+        cell = cells_by_id.get(cid)
+        if cell is None:
+            return None
+        geom = cell.find("mxGeometry")
+        if geom is None:
+            return None
+        try:
+            w = float(geom.get("width", "0") or 0)
+            h = float(geom.get("height", "0") or 0)
+        except ValueError:
+            return None
+        x, y = _absolute_pos(cid)
+        return (x + w / 2.0, y + h / 2.0)
+
+    for cell in cells:
+        if cell.get("edge") != "1":
+            continue
+        kv = _parse_style(cell.get("style") or "")
+        if kv.get("edgeStyle") != "orthogonalEdgeStyle":
+            continue
+        if _edge_has_waypoints(cell) or _edge_has_anchor(kv):
+            continue
+        src = cell.get("source")
+        tgt = cell.get("target")
+        if not src or not tgt:
+            continue
+        cs = _center(src)
+        ct = _center(tgt)
+        if cs is None or ct is None:
+            continue  # orphan endpoints already flagged by Rule 4
+        dx = cs[0] - ct[0]
+        dy = cs[1] - ct[1]
+        if abs(dx) > _AXIS_ALIGN_TOL and abs(dy) > _AXIS_ALIGN_TOL:
+            issues.append(
+                Issue(
+                    "CRITICAL",
+                    "EDGE_BENT",
+                    "orthogonal edge with no waypoints will kink 90° — "
+                    f"source/target centers align on neither axis "
+                    f"(Δx={dx:.0f}px, Δy={dy:.0f}px); align an axis or emit an "
+                    "explicit orthogonal waypoint",
+                    cell.get("id"),
+                )
+            )
+
+    # ── Rule 7: edge label without labelBackgroundColor ──────────────────────
+    # A labelled edge crossing the #EBF8FF BTP zone fill needs an opaque label
+    # backing or the text bleeds into the fill and becomes unreadable.
+    for cell in cells:
+        if cell.get("edge") != "1":
+            continue
+        if not (cell.get("value") or "").strip():
+            continue
+        kv = _parse_style(cell.get("style") or "")
+        if not kv.get("labelBackgroundColor"):
+            issues.append(
+                Issue(
+                    "WARNING",
+                    "EDGE_LABEL_BG",
+                    "edge has a label but no labelBackgroundColor=default — the "
+                    "text will bleed into the #EBF8FF zone fill",
+                    cell.get("id"),
+                )
+            )
+
+    # ── Rule 8: arcSize without absoluteArcSize=1 ────────────────────────────
+    # Without absoluteArcSize=1, arcSize is a PERCENTAGE of the shape, so a
+    # 700px-wide rounded zone with arcSize=16 gets a 112px radius instead of
+    # 16px. The capsule pill idiom (rounded=1;arcSize=50) is intentionally a
+    # percentage and is exempt (see _is_capsule_arc).
+    for cell in cells:
+        kv = _parse_style(cell.get("style") or "")
+        if "arcSize" not in kv or kv.get("absoluteArcSize") == "1":
+            continue
+        if _is_capsule_arc(kv):
+            continue
+        issues.append(
+            Issue(
+                "WARNING",
+                "ARC_SIZE_ABS",
+                f"arcSize={kv.get('arcSize')} without absoluteArcSize=1 is "
+                "treated as a percentage of the shape — a large rounded box "
+                "renders an oversized radius; add absoluteArcSize=1",
+                cell.get("id"),
+            )
+        )
+
     return issues
+
+
+# ── Autofix (--fix) ──────────────────────────────────────────────────────────
+# Only the mechanical, geometry-free repairs are safe to apply automatically:
+#   • add labelBackgroundColor=default to a labelled edge missing it
+#   • add absoluteArcSize=1 where arcSize is set on a NON-capsule shape
+# Bent edges are deliberately NOT auto-fixed here — moving geometry belongs in
+# the layout engine, not a text rewrite. Operates on each <mxCell> start tag as
+# a unit so formatting is otherwise preserved verbatim.
+_MXCELL_TAG_RE = re.compile(r"<mxCell\b[^>]*?/?>")
+
+
+def _fix_cell_tag(tag: str, stats: dict[str, int]) -> str:
+    m_style = re.search(r'style="([^"]*)"', tag)
+    if not m_style:
+        return tag
+    style = m_style.group(1)
+    kv = _parse_style(style)
+    additions: list[str] = []
+
+    if "arcSize" in kv and kv.get("absoluteArcSize") != "1" and not _is_capsule_arc(kv):
+        additions.append("absoluteArcSize=1")
+        stats["absoluteArcSize"] += 1
+
+    if re.search(r'\bedge="1"', tag):
+        m_val = re.search(r'\bvalue="([^"]*)"', tag)
+        value = html.unescape(m_val.group(1)).strip() if m_val else ""
+        if value and not kv.get("labelBackgroundColor"):
+            additions.append("labelBackgroundColor=default")
+            stats["labelBackgroundColor"] += 1
+
+    if not additions:
+        return tag
+    sep = "" if (style == "" or style.endswith(";")) else ";"
+    new_style = style + sep + ";".join(additions) + ";"
+    return tag[: m_style.start(1)] + new_style + tag[m_style.end(1) :]
+
+
+def apply_fixes(text: str) -> tuple[str, dict[str, int]]:
+    stats = {"absoluteArcSize": 0, "labelBackgroundColor": 0}
+    fixed = _MXCELL_TAG_RE.sub(lambda m: _fix_cell_tag(m.group(0), stats), text)
+    return fixed, stats
 
 
 def render_text(issues: list[Issue], path: Path) -> str:
@@ -457,12 +629,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON instead of text."
     )
+    parser.add_argument(
+        "--fix",
+        action="store_true",
+        help="Repair mechanical issues in place (labelBackgroundColor on labelled "
+        "edges; absoluteArcSize=1 on non-capsule arcSize shapes). Backs up to .bak.",
+    )
     args = parser.parse_args(argv)
 
     path = Path(args.path)
     if not path.exists():
         print(f"ERROR: file not found: {path}", file=sys.stderr)
         return 2
+
+    if args.fix:
+        original = path.read_text(encoding="utf-8")
+        fixed, stats = apply_fixes(original)
+        total = sum(stats.values())
+        if total == 0:
+            print(f"{path}: no mechanical fixes needed")
+        else:
+            shutil.copyfile(path, path.with_suffix(path.suffix + ".bak"))
+            path.write_text(fixed, encoding="utf-8")
+            summary = ", ".join(f"{k}={v}" for k, v in stats.items() if v)
+            print(f"{path}: applied {total} fix(es) — {summary}; backup at {path.name}.bak")
+        return 0
 
     issues = validate(path)
     if args.json:
