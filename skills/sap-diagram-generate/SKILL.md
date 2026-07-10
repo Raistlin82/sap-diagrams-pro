@@ -3,7 +3,7 @@ name: sap-diagram-generate
 description: Generate SAP-compliant draw.io architecture diagrams from a natural-language description. The skill FIRST grounds the content in authoritative SAP sources — it runs a dependency preflight (reference skills from secondsky/sap-skills + the mcp-sap-docs MCP), looks up every component in the SAP Discovery Center for the canonical name and category, consults the SAP-domain skills for best-practice completeness, and asks a focused set of questions — and ONLY THEN renders the diagram with the deterministic zone-composition engine. Use when the user asks to create, draw, generate, or build a SAP architecture / BTP solution diagram, mentions levels (L0/L1/L2/L3), or names SAP services (CAP, S/4HANA, BTP, Integration Suite, DOX, AI Core, Build Process Automation, Event Mesh, PCE, RISE).
 argument-hint: "[L0|L1|L2|L3|combo] <description of the architecture>"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill, mcp__sap-docs__search, mcp__sap-docs__fetch, mcp__sap-docs__sap_discovery_center_search, mcp__sap-docs__sap_discovery_center_service
-version: 0.2.0
+version: 0.3.0
 ---
 
 # Generate a SAP-Compliant Architecture Diagram
@@ -95,6 +95,37 @@ Using `AskUserQuestion`, ask only what is still ambiguous **after** Steps 2–3 
 ### Step 5 — Confirm the inventory
 
 Present the consolidated inventory (canonical names from Step 2) + best-practice findings (Step 3) + the interview answers, and offer three choices: **accept** · **apply best-practice suggestions** · **amend manually** (then re-run Step 3 on the edits). Wait for the answer. Only proceed once confirmed (or `auto` was given).
+
+### Step 5.5 — Scaffold-or-generate (hybrid decision) — ALWAYS
+
+Before authoring any IR, decide **how** to produce the diagram. We can either
+**scaffold** from the closest real SAP reference `.drawio` (higher fidelity —
+inherits the exact canvas, zones, Horizon palette, fonts and icons) or
+**generate** procedurally from an IR. Ask the selector:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/select-template.py" "<request>" --top 5 [--level L2]
+```
+
+- **If the top candidate is flagged `★ recommended`** (its score clears the
+  confidence threshold, currently **14.0** — see [`references/scaffold-workflow.md`](references/scaffold-workflow.md)) → **take the SCAFFOLD path:**
+
+  ```bash
+  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scaffold-diagram.py" "<request>" --out "<out>.drawio"
+  ```
+
+  This copies the chosen template and prints a **relabel checklist**. Adapt the
+  copy **surgically — never redraw**: change labels with `relabel.py`
+  (`--set <cellId>=…` and/or `--replace "<old>=<new>"`, preserves
+  geometry/style/ids, writes a `.bak`) and swap service icons with the
+  `sap-icons-resolve` skill / `extract` where the checklist calls for it. Do
+  **not** author an IR for this diagram. Then go straight to **Step 8.2's gate**.
+
+- **Otherwise (nothing clears the threshold, `scaffold-diagram.py` exits `3`)**
+  → **take the GENERATE path:** proceed to Step 6 and author the IR as usual.
+
+Either way, the **SAME downstream gate applies** (Step 8): `validate-drawio.py`
++ `check-composition.py` + `score-diagram.py --corpus` + the visual-rubric loop.
 
 ### Step 6 — Build the IR v2 (authoring grammar)
 
@@ -219,12 +250,14 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate-ir.py" /tmp/diagram-<level>.json
    ```bash
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate-drawio.py"   "<out>.drawio" --strict
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/check-composition.py" "<out>.drawio"
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --corpus "${CLAUDE_PLUGIN_ROOT}/assets/templates" "<out>.drawio" --min-score 82
    ```
 
    - `validate-drawio.py --strict` — XML structure, Horizon palette, line styles, orphan edges; exits 1 if any CRITICAL is found.
    - `check-composition.py` — the **geometric** gate (zone overlaps, piercings, crossing budget once computed, legend presence); exits 2 on any FAIL.
+   - `score-diagram.py --corpus … --min-score 82` — SAP-likeness fingerprint vs the whole template corpus; exits 2 when the best match scores below 82. **Both paths must clear it** — a scaffolded+relabelled diagram fingerprints ~98 (it keeps the SAP template's structure), and a well-formed procedural diagram should clear 82 too; a low score on the generate path means the IR drifted from SAP conventions. (If the corpus is absent, this step is a no-op — skip it.)
 
-   On any CRITICAL/FAIL: fix the IR and regenerate. **Max 2 mechanical retries** before escalating to the user with the exact error.
+   On any CRITICAL/FAIL/low-score: **generate path** — fix the IR and regenerate; **scaffold path** — undo via the `.bak` and redo the `relabel.py` edits (or pick an alternate template), never hand-edit geometry. **Max 2 mechanical retries** before escalating to the user with the exact error.
 
 3. **Render**
 
@@ -271,6 +304,7 @@ Per file: path, level, element counts, the gate scorecard (validator + compositi
 
 ## References
 
+- [`references/scaffold-workflow.md`](references/scaffold-workflow.md) — the hybrid scaffold-or-generate decision, the selector's scoring formula + confidence threshold, and the surgical relabel workflow (Step 5.5).
 - [`references/interactive-workflow.md`](references/interactive-workflow.md) — the full preflight → ground → interview flow.
 - [`references/sap-skills-integration.md`](references/sap-skills-integration.md) — which SAP skills + MCP to consult, per concern.
 - [`references/component-groups.md`](references/component-groups.md) — organisms + the BTP-service vs SaaS-product rule.
