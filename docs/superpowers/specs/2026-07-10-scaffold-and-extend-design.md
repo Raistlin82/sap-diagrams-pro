@@ -79,7 +79,8 @@ top candidate(s) it reports coverage on.
    only when path 1 did not match — i.e. there is at least one MISSING component to
    ADD or at least one EXTRA to REMOVE. Heavy-extra guard (BOTH must hold to allow
    the path; failing either sends it to generate): heavy extras ≤ `HEAVY_EXTRA_MAX`
-   (= 1) **AND** heavy extras ≤ ⅓ of the template's zones. Emit an explicit **delta
+   (= 1) **AND** heavy extras ≤ ⅓ of the template's zones (zones = the candidate's
+   `zoneCount` from `template-index.json`). Emit an explicit **delta
    plan**: `REMOVE […]`, `RELABEL/KEEP […]`, `ADD […]`.
 3. **generate** otherwise (no template clears the bar) — the current procedural path.
 
