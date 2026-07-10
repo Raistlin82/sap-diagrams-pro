@@ -202,7 +202,7 @@ def test_subaccount_frame_sap_btp_chip(M, contract):
     chip = chips[0]
     assert "image=@sap-btp-chip" in chip["style"]
     assert chip["style"].startswith(_style(contract, "sap-btp-chip"))
-    assert chip["value"] == "SAP BTP"
+    assert chip["value"] == "BTP"  # logo reads "SAP", text reads "BTP" → "SAP BTP"
     assert chip["parent"] == "frame"  # child of the frame, not the diagram
 
 
@@ -221,7 +221,7 @@ def test_subaccount_sap_btp_chip_strips_placeholder_when_absent(M, contract):
     resolved = M.resolve_cell(chip, {}, contract)  # empty pack
     assert "@sap-btp-chip" not in resolved["style"]
     assert resolved["style"].startswith(_style(contract, "sap-btp-chip"))
-    assert resolved["value"] == "SAP BTP"  # degrades to the text chip
+    assert resolved["value"] == "BTP"  # degrades to the text chip ("SAP" is the logo)
 
 
 def test_subaccount_frame_emits_badge_slots(M, contract):

@@ -991,10 +991,13 @@ def subaccount_frame(group: Any, contract: dict, size: tuple[float, float] | Non
         cells.append(
             {
                 "id": "btpchip",
-                "value": "SAP BTP",
+                "value": "BTP",
                 # contract text style + the SAP-BTP logo placeholder (resolved to
                 # the brand-pack image when present, else stripped → the text chip).
-                "style": _style(contract, "sap-btp-chip") + "image=@sap-btp-chip;",
+                # Label sits to the RIGHT of the SAP logo (his convention: the
+                # logo reads "SAP", the text reads "BTP" → together "SAP BTP").
+                # align=left;spacingLeft clears the ~28px logo so they never overlap.
+                "style": _style(contract, "sap-btp-chip") + "image=@sap-btp-chip;align=left;spacingLeft=34;",
                 "x": x0,
                 "y": pad_top,
                 "w": chip_w,
@@ -1041,8 +1044,11 @@ def governance_strip(group: Any, contract: dict, size: tuple[float, float] | Non
         cells.append(
             {
                 "id": "btpchip",
-                "value": "SAP BTP",
-                "style": _style(contract, "sap-btp-chip") + "image=@sap-btp-chip;",
+                "value": "BTP",
+                # Label sits to the RIGHT of the SAP logo (his convention: the
+                # logo reads "SAP", the text reads "BTP" → together "SAP BTP").
+                # align=left;spacingLeft clears the ~28px logo so they never overlap.
+                "style": _style(contract, "sap-btp-chip") + "image=@sap-btp-chip;align=left;spacingLeft=34;",
                 "x": x0,
                 "y": 8.0,
                 "w": chip_w,

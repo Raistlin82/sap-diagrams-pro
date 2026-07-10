@@ -173,7 +173,7 @@ def test_governance_strip_carries_btp_chip(M, contract):
     g = NS(id="gov", label="Governance", badges=None)
     with_chip = M.governance_strip(g, contract, show_chip=True)
     chips = [c for c in with_chip if c["id"] == "btpchip"]
-    assert chips and chips[0]["value"] == "SAP BTP"
+    assert chips and chips[0]["value"] == "BTP"  # logo reads "SAP", text reads "BTP"
     # title sits to the RIGHT of the chip (one header line)
     title = [c for c in with_chip if c["id"] == "frame-title"][0]
     assert title["x"] >= chips[0]["x"] + chips[0]["w"]
