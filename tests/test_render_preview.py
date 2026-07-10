@@ -26,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 from conftest import load_script
 
@@ -36,10 +36,15 @@ FIXTURE = ROOT / "tests" / "fixtures" / "render-sample.drawio"
 rp = load_script("render-preview")
 
 
-def _assert_valid_png(path: Path) -> None:
+def _assert_valid_png(path: Path, expected_size: tuple[int, int] | None = None, *, non_blank: bool = True) -> None:
     assert path.exists() and path.stat().st_size > 0
-    with Image.open(path) as img:
+    with Image.open(path).convert("RGB") as img:
         assert img.size[0] > 0 and img.size[1] > 0
+        if expected_size is not None:
+            assert img.size == expected_size
+        if non_blank:
+            blank = Image.new("RGB", img.size, (255, 255, 255))
+            assert ImageChops.difference(img, blank).getbbox() is not None
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -91,6 +96,14 @@ def test_engine_pure_on_real_fixture_is_deterministic(tmp_path):
     assert rp.main([str(FIXTURE), "--out", str(out2), "--engine", "pure", "--scale", "2"]) == 0
     _assert_valid_png(out1)
     assert out1.read_bytes() == out2.read_bytes()
+
+
+def test_engine_pure_fixture_png_has_expected_size_and_content(tmp_path):
+    """Visual smoke check through render-preview's pure engine: the fixture
+    must produce a non-blank PNG at the mxGraphModel page size."""
+    out = tmp_path / "out.png"
+    assert rp.main([str(FIXTURE), "--out", str(out), "--engine", "pure", "--scale", "1"]) == 0
+    _assert_valid_png(out, expected_size=(900, 500))
 
 
 def test_engine_pure_rejects_non_png_format(tmp_path, capsys):

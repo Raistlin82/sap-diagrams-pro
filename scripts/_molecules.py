@@ -8,8 +8,10 @@ app card, capability chip, protocol pill, step circle, image badge, …) is
 assembled here from the *style contract* (``assets/style-contract.json``) — this
 module contains **NO style literals of its own** (the
 ``test_no_style_literals_in_engine_sources`` guard greps this file for hardcoded
-styles). All colours/strokes/fills come verbatim from the contract; this module
-only picks the right contract entry and computes geometry.
+styles). Base molecule styles come verbatim from the contract; this module only
+picks the right contract entry and computes geometry. Protocol-pill semantic
+recolouring may also consult ``assets/canonical-pills.json`` so guideline-level
+Trust/AuthN/AuthZ intent can override ambiguous harvested examples.
 
 Public API (each vertex molecule returns a list of cell dicts, or a single dict,
 in PARENT-RELATIVE coordinates — the caller in ``generate-drawio.py`` offsets the
@@ -59,6 +61,7 @@ ASSETS = Path(__file__).resolve().parent.parent / "assets"
 # Loading
 # ─────────────────────────────────────────────────────────────────────────────
 _CONTRACT_CACHE: dict | None = None
+_CANONICAL_PILLS_CACHE: dict | None = None
 
 
 def load_contract() -> dict:
@@ -69,6 +72,25 @@ def load_contract() -> dict:
             (ASSETS / "style-contract.json").read_text(encoding="utf-8")
         )
     return _CONTRACT_CACHE
+
+
+def _load_canonical_pills() -> dict:
+    """Load the harvested SAP pill catalog, if present.
+
+    The catalog is evidence from examples, not the source of semantic truth:
+    semantic overrides below may intentionally supersede an entry when the
+    guideline has a clearer meaning for the current edge context.
+    """
+    global _CANONICAL_PILLS_CACHE
+    if _CANONICAL_PILLS_CACHE is None:
+        try:
+            data = json.loads(
+                (ASSETS / "canonical-pills.json").read_text(encoding="utf-8")
+            )
+            _CANONICAL_PILLS_CACHE = data if isinstance(data, dict) else {}
+        except (json.JSONDecodeError, OSError):
+            _CANONICAL_PILLS_CACHE = {}
+    return _CANONICAL_PILLS_CACHE
 
 
 def load_brand_packs() -> dict:
@@ -1132,6 +1154,132 @@ _FLOW_FAMILY_MOLECULE = {
     "default": "edge-default",
 }
 
+_KIND_PILL_FAMILY = {
+    "trust": "pink",
+    "authenticate": "green",
+    "authorize": "purple",
+}
+_SUPPORTED_PILL_FAMILIES = {"green", "pink", "purple"}
+_TRUST_PILL_KEYS = {"trust", "oidctrust", "mutualtrust"}
+_AUTHN_PILL_KEYS = {
+    "authenticate",
+    "authentication",
+    "saml",
+    "saml2",
+    "oidc",
+    "saml2oidc",
+    "jwt",
+}
+_AUTHZ_PILL_KEYS = {
+    "authorize",
+    "authorization",
+    "authz",
+    "policy",
+    "role",
+    "rolecollection",
+    "rolecollections",
+    "businessrole",
+    "rolereplica",
+    "scim",
+}
+_PILL_FAMILY_REPRESENTATIVES = {
+    "green": ("SAML2/OIDC", "OIDC", "Authenticate"),
+    "pink": ("OIDC Trust", "ORD", "Harmonized API"),
+    "purple": ("Role", "Policy", "Group"),
+}
+
+
+def _pill_key(text: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+
+
+def _canonical_pill_entry(label: str | None) -> dict | None:
+    if not label:
+        return None
+    catalog = _load_canonical_pills()
+    entry = catalog.get(label)
+    if isinstance(entry, dict):
+        return entry
+    norm = re.sub(r"\s+", "", label).lower()
+    for name, candidate in catalog.items():
+        if re.sub(r"\s+", "", name).lower() == norm and isinstance(candidate, dict):
+            return candidate
+    return None
+
+
+def _semantic_pill_family(edge: Any, text: str) -> str | None:
+    kind = str(getattr(edge, "kind", "") or "").lower()
+    if kind in _KIND_PILL_FAMILY:
+        return _KIND_PILL_FAMILY[kind]
+    if kind == "annotation":
+        pill_color = str(getattr(edge, "pillColor", "") or "").lower()
+        if pill_color in _SUPPORTED_PILL_FAMILIES:
+            return pill_color
+
+    key = _pill_key(text)
+    if key in _TRUST_PILL_KEYS:
+        return "pink"
+    if key in _AUTHN_PILL_KEYS:
+        return "green"
+    if key in _AUTHZ_PILL_KEYS:
+        return "purple"
+
+    canonical = _canonical_pill_entry(text)
+    family = str(canonical.get("family", "") if canonical else "").lower()
+    return family if family in _SUPPORTED_PILL_FAMILIES else None
+
+
+def _replace_style_values(style: str, replacements: dict[str, str]) -> str:
+    out: list[str] = []
+    applied: set[str] = set()
+    for token in filter(None, style.split(";")):
+        key, sep, _value = token.partition("=")
+        if sep and key in replacements:
+            out.append(f"{key}={replacements[key]}")
+            applied.add(key)
+        else:
+            out.append(token)
+    for key, value in replacements.items():
+        if key not in applied:
+            out.append(f"{key}={value}")
+    return ";".join(out) + ";"
+
+
+def _canonical_pill_colors(label: str, family: str) -> tuple[str, str] | None:
+    entry = _canonical_pill_entry(label)
+    if (
+        entry
+        and str(entry.get("family", "")).lower() == family
+        and entry.get("stroke")
+        and entry.get("fill")
+    ):
+        return str(entry["stroke"]), str(entry["fill"])
+
+    for representative in _PILL_FAMILY_REPRESENTATIVES.get(family, ()):
+        entry = _canonical_pill_entry(representative)
+        if entry and entry.get("stroke") and entry.get("fill"):
+            return str(entry["stroke"]), str(entry["fill"])
+    return None
+
+
+def _semantic_pill_style(edge: Any, contract: dict, text: str) -> str:
+    base = _style(contract, "pill-protocol")
+    family = _semantic_pill_family(edge, text)
+    if not family:
+        return base
+    colors = _canonical_pill_colors(text, family)
+    if not colors:
+        return base
+    stroke, fill = colors
+    return _replace_style_values(
+        base,
+        {
+            "strokeColor": stroke,
+            "fillColor": fill,
+            "fontColor": stroke,
+        },
+    )
+
 
 def flow_family_style(flow_family: str, contract: dict) -> str:
     """Contract edge style for a flow family (1:1 with the six edge-* molecules)."""
@@ -1147,7 +1295,7 @@ def pill(edge: Any, contract: dict) -> dict:
     return {
         "id": f"pill-{getattr(edge, 'id', 'e')}",
         "value": text,
-        "style": _style(contract, "pill-protocol"),
+        "style": _semantic_pill_style(edge, contract, text),
         "x": 0.0,
         "y": 0.0,
         "w": _f(g, "w", 35.43),

@@ -279,6 +279,7 @@ class Cell:
     parent: str | None
     style: str
     value: str
+    visible: bool
     vertex: bool
     edge: bool
     x: float = 0.0
@@ -336,6 +337,7 @@ def parse_cells(root_container: ET.Element) -> tuple[dict[str, Cell], list[str]]
             parent=mxcell.get("parent"),
             style=mxcell.get("style") or "",
             value=raw_value or "",
+            visible=mxcell.get("visible") != "0",
             vertex=vertex,
             edge=edge,
             source=mxcell.get("source"),
@@ -364,7 +366,7 @@ def parse_cells(root_container: ET.Element) -> tuple[dict[str, Cell], list[str]]
                 cell.offset = (_safe_float(offset_el.get("x"), 0.0), _safe_float(offset_el.get("y"), 0.0))
 
         cells[cid] = cell
-        if vertex or edge:
+        if cell.visible and (vertex or edge):
             order.append(cid)
 
     return cells, order

@@ -112,6 +112,67 @@ def test_text_cell_renders_in_fontcolor(tmp_path):
         assert _region_has_color(img, (240 * 2, 40 * 2, 460 * 2, 80 * 2), (0x00, 0x70, 0xF2))
 
 
+def test_visible_zero_cells_are_not_rendered(tmp_path):
+    """Internal sapdp metadata cells are stored as invisible vertices with
+    long JSON values. The pure renderer must keep them in the parse graph but
+    skip them in paint order so the preview PNG stays clean."""
+    diagram = tmp_path / "hidden-metadata.drawio"
+    diagram.write_text(
+        """<mxfile host="Electron"><diagram id="p1" name="Page-1"><mxGraphModel pageWidth="220" pageHeight="80"><root>
+  <mxCell id="0"/>
+  <mxCell id="1" parent="0"/>
+  <mxCell id="sapdp:channels" value="HIDDEN-METADATA-SHOULD-NOT-RENDER" style="text;html=1;fontColor=#1D2D3E;" vertex="1" parent="1" visible="0">
+    <mxGeometry x="0" y="0" width="220" height="40" as="geometry"/>
+  </mxCell>
+</root></mxGraphModel></diagram></mxfile>""",
+        encoding="utf-8",
+    )
+    out = tmp_path / "hidden-metadata.png"
+    assert pr.main([str(diagram), "--out", str(out)]) == 0
+    with Image.open(out).convert("RGB") as img:
+        blank = Image.new("RGB", img.size, (255, 255, 255))
+        assert ImageChops.difference(img, blank).getbbox() is None
+
+
+def test_visible_zero_cells_do_not_change_pixels_or_dimensions(tmp_path):
+    """A hidden cell must not affect the rendered visual output at all,
+    even if it is large enough to cover the whole page if accidentally
+    painted."""
+    base = tmp_path / "base.drawio"
+    with_hidden = tmp_path / "with-hidden.drawio"
+    visible_rect = """  <mxCell id="visible" value="Visible" style="rounded=1;fillColor=#EBF8FF;strokeColor=#0070F2;fontColor=#1D2D3E;" vertex="1" parent="1">
+    <mxGeometry x="20" y="20" width="80" height="40" as="geometry"/>
+  </mxCell>"""
+    hidden_rect = """  <mxCell id="hidden-cover" value="HIDDEN" style="fillColor=#FF0000;strokeColor=#FF0000;fontColor=#FF0000;" vertex="1" parent="1" visible="0">
+    <mxGeometry x="0" y="0" width="160" height="100" as="geometry"/>
+  </mxCell>"""
+
+    def write_diagram(path: Path, body: str) -> None:
+        path.write_text(
+            f"""<mxfile host="Electron"><diagram id="p1" name="Page-1"><mxGraphModel pageWidth="160" pageHeight="100"><root>
+  <mxCell id="0"/>
+  <mxCell id="1" parent="0"/>
+{body}
+</root></mxGraphModel></diagram></mxfile>""",
+            encoding="utf-8",
+        )
+
+    write_diagram(base, visible_rect)
+    write_diagram(with_hidden, visible_rect + "\n" + hidden_rect)
+
+    base_png = tmp_path / "base.png"
+    hidden_png = tmp_path / "with-hidden.png"
+    assert pr.main([str(base), "--out", str(base_png)]) == 0
+    assert pr.main([str(with_hidden), "--out", str(hidden_png)]) == 0
+
+    with Image.open(base_png).convert("RGB") as base_img, Image.open(hidden_png).convert("RGB") as hidden_img:
+        assert base_img.size == hidden_img.size == (160, 100)
+        blank = Image.new("RGB", base_img.size, (255, 255, 255))
+        assert ImageChops.difference(base_img, blank).getbbox() is not None
+        assert ImageChops.difference(base_img, hidden_img).getbbox() is None
+    assert base_png.read_bytes() == hidden_png.read_bytes()
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Fonts: bundled Arimo family (FIX-1 -- was DejaVuSans.ttf, unresolvable on
 # macOS, silently degrading every render to load_default()'s tiny bitmap

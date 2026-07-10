@@ -89,8 +89,12 @@ HORIZON_TEXT = {
     "#475F75", "#475E75",                   # Generic Protocol pill text
     "#FFFFFF",                              # step number circles use white text on coloured fill
 }
+STRUCTURAL_STROKES = {
+    "#5B738B",                              # NETWORK separator bar (style-contract)
+}
 
 SEVERITY_RANK = {"CRITICAL": 0, "WARNING": 1, "INFO": 2}
+PILL_ID_RE = re.compile(r"^(?:p|pp|legpill)-[0-9a-f]{8}$")
 
 
 @dataclass
@@ -128,6 +132,86 @@ def _parse_style(style: str) -> dict[str, str]:
         k, _, v = chunk.partition("=")
         out[k.strip()] = v.strip()
     return out
+
+
+def _style_float(kv: dict[str, str], key: str, default: float = 0.0) -> float:
+    try:
+        return float(kv.get(key, str(default)) or default)
+    except ValueError:
+        return default
+
+
+def _geometry_size(cell: ET.Element) -> tuple[float, float]:
+    geom = cell.find("mxGeometry")
+    if geom is None:
+        return 0.0, 0.0
+    try:
+        return (
+            float(geom.get("width", "0") or 0),
+            float(geom.get("height", "0") or 0),
+        )
+    except ValueError:
+        return 0.0, 0.0
+
+
+def _is_network_separator_stroke(
+    cell: ET.Element, kv: dict[str, str], stroke: str
+) -> bool:
+    if stroke not in STRUCTURAL_STROKES or cell.get("edge") != "1":
+        return False
+    return (
+        kv.get("endArrow", "").lower() == "none"
+        and kv.get("jumpStyle", "").lower() == "gap"
+        and _style_float(kv, "strokeWidth") >= 3.0
+    )
+
+
+def _stroke_allowed(cell: ET.Element, kv: dict[str, str], stroke: str) -> bool:
+    return (
+        stroke in HORIZON_BORDERS
+        or stroke == "#FFFFFF"
+        or stroke == "NONE"
+        or _is_network_separator_stroke(cell, kv, stroke)
+    )
+
+
+def _is_pill_like(cell: ET.Element, kv: dict[str, str]) -> bool:
+    cid = cell.get("id", "")
+    _, h = _geometry_size(cell)
+    if h <= 0:
+        return False
+    return (
+        kv.get("rounded") == "1"
+        and kv.get("arcSize") == "50"
+        and h <= 30
+        and (PILL_ID_RE.match(cid) is not None or cell.get("connectable") == "0")
+    )
+
+
+def _is_step_counter(cell: ET.Element, kv: dict[str, str]) -> bool:
+    cid = cell.get("id", "")
+    if cid.startswith("st-"):
+        return True
+    style = cell.get("style") or ""
+    w, h = _geometry_size(cell)
+    return (
+        style.startswith("ellipse;")
+        and kv.get("pointerEvents") == "0"
+        and _hex(kv.get("fillColor")) == "#5B738B"
+        and 0 < w <= 36
+        and 0 < h <= 36
+    )
+
+
+def _is_intentional_overlap_cell(cell: ET.Element) -> bool:
+    """Small local decorations intentionally sit on top of their host shape."""
+    cid = cell.get("id", "")
+    kv = _parse_style(cell.get("style") or "")
+    return (
+        cid.startswith("if-")
+        or _is_step_counter(cell, kv)
+        or _is_pill_like(cell, kv)
+    )
 
 
 def validate(path: Path) -> list[Issue]:
@@ -168,13 +252,14 @@ def validate(path: Path) -> list[Issue]:
         fill = _hex(kv.get("fillColor"))
         font = _hex(kv.get("fontColor"))
 
-        if stroke and stroke not in HORIZON_BORDERS and stroke != "#FFFFFF" and stroke != "NONE":
+        if stroke and not _stroke_allowed(cell, kv, stroke):
             issues.append(
                 Issue(
                     "WARNING",
                     "PALETTE_BORDER",
                     f"strokeColor {stroke} not in Horizon palette "
-                    f"(allowed: {sorted(HORIZON_BORDERS)})",
+                    f"(allowed: {sorted(HORIZON_BORDERS)}; "
+                    f"structural: {sorted(STRUCTURAL_STROKES)})",
                     cid,
                 )
             )
@@ -293,7 +378,7 @@ def validate(path: Path) -> list[Issue]:
             y += py
         return x, y
 
-    boxes: list[tuple[str, float, float, float, float]] = []
+    boxes: list[tuple[str, float, float, float, float, bool]] = []
     for cell in cells:
         if cell.get("vertex") != "1":
             continue
@@ -307,12 +392,14 @@ def validate(path: Path) -> list[Issue]:
             continue
         cid = cell.get("id", "?")
         x, y = _absolute_pos(cid)
-        boxes.append((cid, x, y, w, h))
+        boxes.append((cid, x, y, w, h, _is_intentional_overlap_cell(cell)))
 
     for i in range(len(boxes)):
-        a_id, ax, ay, aw, ah = boxes[i]
+        a_id, ax, ay, aw, ah, a_intentional = boxes[i]
         for j in range(i + 1, len(boxes)):
-            b_id, bx, by, bw, bh = boxes[j]
+            b_id, bx, by, bw, bh, b_intentional = boxes[j]
+            if a_intentional or b_intentional:
+                continue
             # Skip nested (parent containment): if B is fully inside A → not an overlap.
             if bx >= ax and by >= ay and bx + bw <= ax + aw and by + bh <= ay + ah:
                 continue

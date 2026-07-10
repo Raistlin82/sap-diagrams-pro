@@ -10,13 +10,19 @@
     {"id": "users", "type": "user", "label": "Users", "position": "top-left"},
 
     {"id": "btp", "type": "btp-layer", "label": "SAP BTP", "position": "center"},
-    {"id": "btp-app", "type": "btp-layer", "label": "Application", "parent": "btp"},
     {"id": "btp-portal", "type": "btp-layer", "label": "Portal + Workflow", "parent": "btp"},
+    {"id": "btp-app", "type": "btp-layer", "label": "Application", "parent": "btp"},
     {"id": "btp-identity", "type": "btp-layer", "label": "Identity", "parent": "btp"},
     {"id": "btp-storage", "type": "btp-layer", "label": "Storage", "parent": "btp"},
     {"id": "btp-ops", "type": "btp-layer", "label": "Operations", "parent": "btp"},
 
-    {"id": "pce", "type": "sap-app", "label": "On-Prem (PCE)", "position": "bottom-left"}
+    {"id": "pce", "type": "sap-app", "label": "On-Prem (PCE)", "position": "right"}
+  ],
+  "layoutHints": [
+    {"op": "channel_prefer", "edge": "e1", "value": "Htop"},
+    {"op": "channel_prefer", "edge": "e2", "value": "Hbot"},
+    {"op": "channel_prefer", "edge": "e6", "value": "Htop"},
+    {"op": "channel_prefer", "edge": "e10", "value": "Htop"}
   ],
   "nodes": [
     {"id": "end-user", "label": "End User", "group": "users", "genericIcon": "user", "step": 1, "stepKind": "default"},

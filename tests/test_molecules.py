@@ -39,6 +39,15 @@ def _style(contract, name):
     return contract["molecules"][name]["style"]
 
 
+def _style_tokens(style):
+    return {
+        key: value
+        for token in filter(None, style.split(";"))
+        for key, sep, value in [token.partition("=")]
+        if sep
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # load_contract / load_brand_packs
 # ─────────────────────────────────────────────────────────────────────────────
@@ -411,6 +420,38 @@ def test_pill_and_step_circle(M, contract):
     s = M.step_circle(NS(id="n1", step=3), contract)
     assert s["style"].startswith(_style(contract, "step-circle"))
     assert s["value"] == "3"
+
+
+@pytest.mark.parametrize("edge", [
+    NS(id="e1", pill="Trust", label=""),
+    NS(id="e2", pill="SAML2/OIDC", label="", kind="trust"),
+])
+def test_pill_trust_semantics_override_harvested_green(M, contract, edge):
+    tokens = _style_tokens(M.pill(edge, contract)["style"])
+    assert tokens["strokeColor"] == "#CC00DC"
+    assert tokens["fillColor"] == "#FFF0FA"
+    assert tokens["fontColor"] == "#CC00DC"
+
+
+@pytest.mark.parametrize("label", ["Authenticate", "Authentication", "SAML2/OIDC", "OIDC"])
+def test_pill_authentication_semantics_stay_green(M, contract, label):
+    tokens = _style_tokens(M.pill(NS(id="e1", pill=label, label=""), contract)["style"])
+    assert tokens["strokeColor"] == "#188918"
+    assert tokens["fillColor"] == "#F5FAE5"
+    assert tokens["fontColor"] == "#188918"
+
+
+@pytest.mark.parametrize("label,stroke", [
+    ("Authorization", "#5D36FF"),
+    ("Role", "#5D36FF"),
+    ("Policy", "#5D36FF"),
+    ("SCIM", "#470BED"),
+])
+def test_pill_authorization_semantics_are_purple(M, contract, label, stroke):
+    tokens = _style_tokens(M.pill(NS(id="e1", pill=label, label=""), contract)["style"])
+    assert tokens["strokeColor"] == stroke
+    assert tokens["fillColor"] == "#F1ECFF"
+    assert tokens["fontColor"] == stroke
 
 
 def test_network_separator(M, contract):
