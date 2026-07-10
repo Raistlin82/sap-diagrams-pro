@@ -281,6 +281,34 @@ def _zone_header_rects(layout: dict) -> list:
     return out
 
 
+def _sep_obstacle_rects(net_sep: dict | None) -> tuple:
+    """A keep-out band around the NETWORK separator, fed into
+    ``_place_pills_and_labels``'s obstacle set (label/pill placement only — NOT
+    ``_avoid_obstacles``/``count_piercings``; an edge still crosses the bar
+    once, it just can't PARK its pill/label on it). A pill dropped on the seam
+    is the classic TEXT_OVERLAP the gate flags on cross-network edges (e.g. a
+    ``zero-copy`` pill over the "NETWORK" caption); with the band as an
+    obstacle the slot scan lands the pill just before or after the crossing
+    instead. Empty tuple when there's no separator (byte-identical to today)."""
+    if not net_sep:
+        return ()
+    try:
+        x = float(net_sep["x"]); y0 = float(net_sep["y0"]); y1 = float(net_sep["y1"])
+    except (KeyError, TypeError, ValueError):
+        return ()
+    lo, hi = min(y0, y1), max(y0, y1)
+    half = SEP_CLEARANCE  # 14px each side → a 28px band centred on the bar
+    bar = Rect(x - half, lo, 2 * half, hi - lo)
+    # The "NETWORK" caption is the wider hazard: network_separator() centres an
+    # 80x30 label on the bar near its BOTTOM (x - LW/2, y1 - LH - 6). A pill can
+    # clear the thin bar band yet still clip the caption, so keep that rect out
+    # too (values mirror the molecule + a small margin). This is the fix for the
+    # cross-network pill-on-caption TEXT_OVERLAP the gate flags.
+    LW, LH, GAP, MG = 80.0, 30.0, 6.0, 6.0
+    label = Rect(x - LW / 2 - MG, hi - LH - GAP - MG, LW + 2 * MG, LH + 2 * MG)
+    return (bar, label)
+
+
 def _side_frac(r, side: str, frac: float) -> tuple[float, float]:
     """Fractional (exitX, exitY)-style anchor for ``side`` at ``frac``."""
     if side == "R":
@@ -703,7 +731,7 @@ def _place_in_slots(seg, dims, obstacles, foreign_segs, skip: int = 0):
     return base, Rect(base[0] - w / 2, base[1] - h / 2, w, h), False
 
 
-def _place_pills_and_labels(plans, paths, node_geo, header_rects=(), nudge=None):
+def _place_pills_and_labels(plans, paths, node_geo, header_rects=(), nudge=None, sep_rects=()):
     """Drop each edge's protocol pill and label into a collision-free slot on
     its longest segment. Processed in IR order; every placed rect becomes an
     obstacle for later ones, so results are overlap-free by construction and
@@ -729,7 +757,7 @@ def _place_pills_and_labels(plans, paths, node_geo, header_rects=(), nudge=None)
     ``_place_in_slots`` scan was exhausted (see there); empty when every slot
     was placed collision-free."""
     nudge = nudge or set()
-    node_rects = list(node_geo.values()) + list(header_rects)
+    node_rects = list(node_geo.values()) + list(header_rects) + list(sep_rects)
     placed: list = []                                 # pill + label rects so far
     all_segs = {p.eid: _segments(paths[p.eid]) for p in plans}
     pill_pos: dict[str, tuple[float, float]] = {}
@@ -1130,7 +1158,8 @@ def _route_cost(plans, layout, lane_order, port_order) -> tuple[int, int]:
                         + [entry_pt])
     crossings = _count_crossings(paths)
     _pill, _label, slot_fallbacks = _place_pills_and_labels(
-        plans, paths, node_geo, _zone_header_rects(layout))
+        plans, paths, node_geo, _zone_header_rects(layout),
+        sep_rects=_sep_obstacle_rects((layout.get("meta") or {}).get("networkSeparator")))
     return (len(slot_fallbacks), crossings)
 
 
@@ -1416,7 +1445,8 @@ def build_waypoints(plans: list[_Plan],
     # ── pill & label slots (8e; Task 14 adds zone-header bands as obstacles;
     #    Task 13 ``nudge`` shifts flagged edges' labels to the next free slot) ──
     pill_pos, label_pos, slot_fallbacks = _place_pills_and_labels(
-        plans, paths, node_geo, _zone_header_rects(layout), nudge=nudge)
+        plans, paths, node_geo, _zone_header_rects(layout), nudge=nudge,
+        sep_rects=_sep_obstacle_rects((layout.get("meta") or {}).get("networkSeparator")))
 
     return waypoints, pill_pos, label_pos, crossings, piercings, slot_fallbacks
 
