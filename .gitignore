@@ -45,3 +45,7 @@ build/
 .superpowers/
 assets/brand-pack.local/
 assets/icon-atlas.local/
+
+# Agent runtime scratch (never part of the product)
+.codex/
+.codex-work/

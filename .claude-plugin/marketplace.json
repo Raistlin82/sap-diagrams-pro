@@ -14,7 +14,7 @@
       "name": "sap-diagrams-pro",
       "source": ".",
       "description": "Generate SAP-compliant draw.io architecture diagrams: IR v2 engine (skeleton slot layout + channel-routed edges + geometric gate + visual-rubric loop) with content grounding via the SAP Discovery Center (mcp-sap-docs — a community-operated MCP, not SAP) and the SAP-domain skills.",
-      "version": "0.5.1",
+      "version": "0.6.0",
       "license": "Apache-2.0",
       "keywords": ["sap", "btp", "drawio", "architecture", "diagram", "solution-diagram"]
     }
