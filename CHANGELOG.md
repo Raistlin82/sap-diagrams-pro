@@ -9,6 +9,29 @@ All notable changes to `sap-diagrams-pro` are documented in this file. The forma
 
 ## [Unreleased]
 
+### Added — hybrid scaffold path (0.5.0)
+
+- **Template corpus**: 156 real SAP reference `.drawio` diagrams (145 from
+  `SAP/architecture-center` + 11 `SAP/btp-solution-diagrams` editable examples,
+  both Apache-2.0) in `assets/templates/`, indexed by `scripts/build-template-index.py`
+  → `assets/template-index.json` (level, family, service/label tokens, scenario aliases).
+- **Scaffold-or-generate**: `scripts/select-template.py` ranks templates against a
+  request (threshold 14.0); `scripts/scaffold-diagram.py` copies the closest match (or
+  exits 3 → procedural fallback); `scripts/relabel.py` makes surgical label edits.
+  Both SKILL.md files gain a "scaffold-or-generate" step: scaffold a real SAP diagram
+  when a strong template matches (higher fidelity), else the procedural IR engine —
+  full automation as the always-available fallback. Desktop degrades to the procedural
+  path (templates not bundled — Skills file-cap).
+- **SAP-likeness scorer** (`scripts/score-diagram.py`): 0–100 fingerprint — reference-free
+  `--sap-like`, `--compare ref cand`, `--corpus <dir> --min-score`. Objective quality gate
+  (nova-L1 95.6, gold replica 100). Wired into the shared gate (`--min-score 82`).
+- **Validator hardening** (`scripts/validate-drawio.py`): bent-edge (orthogonal edge
+  straight only if endpoint centers align on an axis — CRITICAL), missing
+  `labelBackgroundColor=default` (WARNING), `arcSize` without `absoluteArcSize=1`
+  (WARNING, capsule-pill exempt), plus a `--fix` autofix for the mechanical ones.
+- **Semantic pill coloring**: edge pills colored by flow family (trust=pink,
+  authentication=green, authorization=purple).
+
 ### Added — icon coverage + branding (0.4.0)
 
 - **SAP icons re-harvested from the official `svg/` library** (129 clean service
