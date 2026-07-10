@@ -47,30 +47,41 @@ gate + visual-rubric loop.
 
 `select-template.py` gains a **coverage report** for the top candidate against the
 confirmed component list (passed as `--components "<a>,<b>,…"`, the canonical names
-from the interview). Using the same word-boundary matching as the selector, it
-classifies:
+from the interview). Component enumeration uses the **`serviceTokens` +
+`scenarioAliases`** fields ONLY — `labelTokens` is deliberately excluded because it
+is noisy (CSS/px fragments like `2016px`, `20font-size`). Word-boundary matching
+(the selector's own `kw_hit`) classifies each into:
 
-- **PRESENT** — requested components matched in the template's `serviceTokens` /
-  `labelTokens` / `scenarioAliases`.
+- **PRESENT** — requested components matched in the template's tokens.
 - **MISSING** — requested components not found in the template → must be ADDED.
 - **EXTRA** — template components not requested → candidates to REMOVE, each tagged
-  **light** (a single node/leaf cell) or **heavy** (a whole zone / `subaccount` /
-  frame with children).
+  **light** (a leaf cell) or **heavy** (a container: a frame/`subaccount`/zone that
+  has children).
+
+**Structural (light/heavy) tagging requires reading the candidate `.drawio`, not
+just the index.** The index carries no per-component role, so the coverage report
+**opens the candidate template file** and, for each EXTRA, finds the cell whose
+label matches the component and marks it *heavy* when any other cell has
+`parent == that cell` (i.e. it is a container with children), else *light*. This is
+the only place `select-template.py` reads a template file; it does so only for the
+top candidate(s) it reports coverage on.
 
 `coverage = |PRESENT| / |requested|`.
 
-**Decision (Step 5.5), in order:**
+**Decision (Step 5.5), evaluated in this exact order (first match wins):**
 
-1. **scaffold-and-extend** when the top candidate is `★ recommended` (score ≥
+1. **scaffold (relabel-only)** — the existing pure path — when the top candidate is
+   `★ recommended`, `MISSING` is empty (template already covers every requested
+   component), and there are **no EXTRA** components to remove. Pure relabel suffices.
+2. **scaffold-and-extend** when the top candidate is `★ recommended` (score ≥
    `RECOMMEND_THRESHOLD` = 14) **AND** `coverage ≥ COVERAGE_MIN` (default **0.4**)
-   **AND** the extras are not dominated by *heavy* structural mismatches (heuristic:
-   no more than `HEAVY_EXTRA_MAX` = 1 heavy extra zone, or heavy extras ≤ ⅓ of the
-   template's zones). Emit an explicit **delta plan**: `REMOVE […]`,
-   `RELABEL/KEEP […]`, `ADD […]`.
-2. **scaffold (relabel-only)** when coverage is ~1.0 and MISSING is empty and no
-   heavy extras — the current pure path.
-3. **generate** otherwise (no template clears the bar) — the current procedural
-   path.
+   **AND** the extras are not dominated by *heavy* structural mismatches. Reached
+   only when path 1 did not match — i.e. there is at least one MISSING component to
+   ADD or at least one EXTRA to REMOVE. Heavy-extra guard (BOTH must hold to allow
+   the path; failing either sends it to generate): heavy extras ≤ `HEAVY_EXTRA_MAX`
+   (= 1) **AND** heavy extras ≤ ⅓ of the template's zones. Emit an explicit **delta
+   plan**: `REMOVE […]`, `RELABEL/KEEP […]`, `ADD […]`.
+3. **generate** otherwise (no template clears the bar) — the current procedural path.
 
 The thresholds live as named constants (tunable); the report is printed
 human-readably and available as `--json`.
@@ -120,14 +131,28 @@ Returns the new cell id (for wiring edges).
 
 Three paths reach the same downstream gate (Step 8):
 
-- **scaffold-and-extend** — `scaffold-diagram.py` the chosen template →
-  `remove-cell.py` each EXTRA (heavy first) → `relabel.py` the RELABEL set →
-  `add-node.py` + `add-edge.py` each MISSING component → gate (`validate-drawio` +
-  `check-composition` + `score-diagram --corpus --min-score 82`) + visual-rubric
-  loop (≤3) → deliver. On a gate failure, undo via `.bak` and retry the specific
-  edit (max 2 mechanical retries), never hand-edit geometry.
+- **scaffold-and-extend** — `scaffold-diagram.py` the chosen template → **take a
+  pre-delta snapshot** (`<file>.pre-extend.bak`, the whole starting template) →
+  apply the delta as an ordered chain: `remove-cell.py` each EXTRA (heavy first) →
+  `relabel.py` the RELABEL set → `add-node.py` + `add-edge.py` each MISSING
+  component. **Run `check-composition.py` after each structural edit** (add-node /
+  add-edge / heavy remove) so a new FAIL is attributed to the edit that caused it
+  (the per-edit `.bak` reverts exactly that step; the pre-delta snapshot reverts the
+  whole chain). Then the full gate (`validate-drawio --strict` +
+  `check-composition` + `score-diagram`) + visual-rubric loop (≤3) → deliver. On a
+  gate failure: revert the offending edit via its `.bak` and retry it with a
+  different placement/port hint (max 2 mechanical retries per edit); never hand-edit
+  geometry. If the chain cannot converge, restore the pre-delta snapshot and fall
+  back to the generate path.
 - **scaffold** (pure relabel) — unchanged.
 - **generate** — unchanged.
+
+**Score gate (authoritative, applied by BOTH the workflow and the tests):** an
+artifact must clear **both** `score-diagram --sap-like ≥ 85` (reference-free) **and**
+`score-diagram --corpus assets/templates --min-score 82` (corpus similarity). A
+scaffolded+extended diagram keeps the template's structure, so both should pass
+comfortably; the two are enforced identically in Step 5.5 and in the integration
+test so nothing can pass one and fail the other.
 
 `references/scaffold-workflow.md` documents the coverage report, the decision
 thresholds, and the extend workflow. Both SKILL.md files (Claude Code + Desktop)
@@ -144,8 +169,10 @@ get the updated Step 5.5.
 - `add-edge`: the edge has the right style for its family, both endpoints resolve,
   the path is orthogonal, and any pill clears the separator.
 - **Integration**: scaffold a real template, apply a delta (remove 1 heavy extra +
-  add 2 missing + relabel 1), assert the result: `validate-drawio --strict` exit 0,
-  `check-composition` 0 FAIL, `score-diagram --sap-like` ≥ 85.
+  add 2 missing + relabel 1), assert the result clears the **same authoritative
+  gate as the workflow**: `validate-drawio --strict` exit 0, `check-composition`
+  0 FAIL, `score-diagram --sap-like` ≥ 85 **and** `score-diagram --corpus
+  assets/templates --min-score 82`.
 - **Regression**: the four committed demos regenerate byte-identical (engine core
   untouched).
 
