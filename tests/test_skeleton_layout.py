@@ -511,3 +511,31 @@ def test_char_width_centralized_in_molecules(sl):
     assert M._title_w(s) == pytest.approx(min(240.0, max(40.0, 15 * M.CHAR_W + 12.0)))
     assert sl._text_w(s) == pytest.approx(
         min(sl.TEXT_MAX, max(sl.TEXT_MIN, 15 * M.CHAR_W + 12)))
+
+
+def test_governance_renders_as_full_width_ribbon(gen, sl):
+    """A single top-level governance group spans the composition width — a ribbon
+    across the top — instead of a content-sized box that misreads as a second
+    SAP BTP account floating above the diagram (the RTI-diagram finding)."""
+    ir = {
+        "metadata": {"title": "gov", "level": "L1"},
+        "groups": [
+            {"id": "gov", "type": "governance", "label": "Governance", "position": "top"},
+            {"id": "btp", "type": "btp-layer", "label": "SAP BTP", "position": "center"},
+            {"id": "sys", "type": "sap-app", "label": "Backends", "position": "right"},
+        ],
+        "nodes": [
+            {"id": "alm", "label": "Cloud ALM", "group": "gov", "service": "Cloud ALM"},
+            {"id": "svc", "label": "Svc", "group": "btp"},
+            {"id": "s4", "label": "S/4HANA", "group": "sys", "service": "SAP S/4HANA"},
+        ],
+        "edges": [],
+    }
+    lay = sl.compute_layout(gen.parse_json(ir), gen.ShapeIndex.load())
+    gx, gy, gw, gh = lay["groups"]["gov"]
+    bx, by, bw, bh = lay["groups"]["btp"]
+    sx, sy, sw, sh = lay["groups"]["sys"]
+    assert gx <= bx + 1, "ribbon starts at/left of the center frame"
+    assert gx + gw >= sx + sw - 2, "ribbon reaches the right column's right edge"
+    assert gw > bw, "ribbon is wider than the center BTP frame"
+    assert gy + gh <= by, "ribbon is a top band, above the columns"

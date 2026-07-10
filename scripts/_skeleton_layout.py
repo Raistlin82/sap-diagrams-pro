@@ -723,7 +723,22 @@ def compute_layout(diagram, shape_index, hints=None) -> dict[str, Any]:
         return col_center_x.get("center") or ((MARGIN + columns_right) / 2.0)
 
     band_right = columns_right
-    if top_groups:
+    single_gov = (len(top_groups) == 1
+                  and getattr(top_groups[0], "type", None) == "governance")
+    if single_gov:
+        # Governance renders as a full-width RIBBON across the top (SAP spec:
+        # "wide strip spanning the canvas width") — not a content-sized box that
+        # misreads as a second BTP account floating above the composition. Place
+        # it left-anchored so its title/chip/nodes stay at the left, then widen
+        # the FRAME to span the placed columns (nodes keep their absolute spots).
+        g = top_groups[0]
+        m = measures[g.id]
+        place(m, float(MARGIN), TOP_BAND + (top_band_h - m.h) / 2.0)
+        span_w = max(m.w, columns_right - float(MARGIN))
+        gx, gy, _gw, gh = out_groups[g.id]
+        out_groups[g.id] = (gx, gy, int(round(span_w)), gh)
+        band_right = max(band_right, float(MARGIN) + span_w)
+    elif top_groups:
         widths = [measures[g.id].w for g in top_groups]
         total = sum(widths) + max(0, len(top_groups) - 1) * ZONE_HGAP
         start = _center_x_fallback() - total / 2.0
