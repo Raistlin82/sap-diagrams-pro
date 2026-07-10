@@ -539,3 +539,7 @@ def test_governance_renders_as_full_width_ribbon(gen, sl):
     assert gx + gw >= sx + sw - 2, "ribbon reaches the right column's right edge"
     assert gw > bw, "ribbon is wider than the center BTP frame"
     assert gy + gh <= by, "ribbon is a top band, above the columns"
+    # With a governance band, columns TOP-ALIGN under it (no large centred gap):
+    # the BTP frame hangs just below the ribbon, not floating in the middle.
+    assert by - (gy + gh) <= sl.BAND_GAP + 4, (
+        f"BTP should hang under the ribbon (gap {by - (gy + gh)}), not be centred low")

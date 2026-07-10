@@ -685,7 +685,12 @@ def compute_layout(diagram, shape_index, hints=None) -> dict[str, Any]:
             continue
         cw = col_w[c]
         col_center_x[c] = cursor + cw / 2.0
-        y = content_top + (max_h - col_h[c]) / 2.0
+        # Centre each column against the tallest one — BUT when a governance
+        # ribbon bands the top, top-align instead so the columns hang directly
+        # under it (a centred short column would otherwise leave a large gap
+        # between the ribbon and, e.g., the BTP frame). Without a top band the
+        # centred rhythm is kept (NOVA/gold are byte-identical).
+        y = content_top if top_groups else content_top + (max_h - col_h[c]) / 2.0
         y_top = y
         for g in gs:
             m = measures[g.id]
