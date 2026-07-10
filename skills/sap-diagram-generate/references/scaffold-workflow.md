@@ -1,28 +1,104 @@
-# Hybrid scaffold-or-generate workflow
+# Hybrid scaffold / scaffold-extend / generate workflow
 
-The engine can produce a SAP diagram two ways. This reference documents the
-decision, the selector's scoring formula, and the confidence threshold that
-routes between them.
+The engine can produce a SAP diagram three ways. This reference documents the
+decision, the selector's scoring formula, the coverage report + thresholds that
+route between them, and the ordered extend workflow.
 
-## The two paths
+## The three paths
 
 | Path | How | When |
 |---|---|---|
-| **Scaffold** | Copy the closest real SAP reference `.drawio`, then edit it surgically (relabel cells, swap icons). Inherits the exact canvas, zones, Horizon palette, fonts and icons of a real SAP diagram → highest fidelity. | A real template in the corpus is *close enough* to the request (selector score clears the threshold). |
+| **Scaffold** (relabel-only) | Copy the closest real SAP reference `.drawio`, then edit it surgically — relabel cells, swap icons; **no add/remove**. Inherits the exact canvas, zones, Horizon palette, fonts and icons of a real SAP diagram → highest fidelity. | A real template is *close enough* AND already covers every requested component with nothing extra. |
+| **Scaffold-extend** | Start from that template, then **remove** out-of-scope cells, **relabel** the matches, and **add** the missing components — reaching the exact confirmed inventory while inheriting the template's real SAP layout, palette, fonts and icons. | A template covers *a good part but not all* of the request (or carries a few extras), and the mismatch is not dominated by *heavy* structural extras. |
 | **Generate** | Author an IR v2 and render it procedurally with `generate-drawio.py`. Full control, arbitrary topology. | No template is close enough — the request is novel or a combination no single template covers. |
 
-Both paths converge on the **same downstream gate**: `validate-drawio.py --strict`
-+ `check-composition.py` + `score-diagram.py --corpus … --min-score 82` + the
-visual-rubric vision loop. A diagram is only delivered when that gate is green.
+All three paths converge on the **same downstream gate**: `validate-drawio.py --strict`
++ `check-composition.py` + the **dual score gate** (below) + the visual-rubric
+vision loop. A diagram is only delivered when that gate is green.
 
 ## Decision procedure
 
-1. `select-template.py "<request>" --top 5 [--level L2]` ranks the 156 entries in
-   `assets/template-index.json`.
-2. If the top candidate is flagged **`★ recommended`** (score ≥ `RECOMMEND_THRESHOLD`)
-   → **scaffold**: `scaffold-diagram.py "<request>" --out <f>.drawio` copies it and
-   prints a relabel checklist; adapt with `relabel.py` + icon swaps.
-3. Else (`scaffold-diagram.py` exits `3`) → **generate**: author the IR.
+Feed the selector the **confirmed canonical component list** (the interview
+inventory) via `--components`; it ranks the entries in `assets/template-index.json`
+and, for the top candidate, emits a coverage report + a `decision`:
+
+```bash
+select-template.py "<request>" --components "<a>,<b>,…" --json [--level L2]
+```
+
+The `--json` payload carries `decision` ∈ {`scaffold`, `scaffold-extend`,
+`generate`}, `coverage`, `present`/`missing`/`extra`, `heavyGuardOk`, the top
+`template` id, `recommended`, and a bounded `delta`
+= `{remove: ["<label>", …], relabel: [{from, to}, …], add: ["<label>", …]}`.
+The decision is evaluated in this exact order (first match wins):
+
+1. **scaffold** (relabel-only) — top candidate is `★ recommended`, `missing` is
+   empty, and there are **no** `extra`. Pure relabel suffices.
+2. **scaffold-extend** — top candidate is `★ recommended`, `coverage ≥
+   COVERAGE_MIN`, there is at least one `missing` or `extra`, **and** the
+   heavy-extra guard holds. Apply the `delta`.
+3. **generate** — anything else (nothing clears the bar); `scaffold-diagram.py`
+   exits `3`.
+
+## Coverage report
+
+Component enumeration uses the candidate's **`serviceTokens` + `scenarioAliases`**
+only — `labelTokens` is deliberately excluded (it is noisy: CSS/px fragments like
+`2016px`, `20font-size`). Word-boundary matching (the selector's own `kw_hit`)
+classifies each requested/template component into:
+
+- **PRESENT** — requested components matched in the template's tokens.
+- **MISSING** — requested components not found → must be **ADDED**.
+- **EXTRA** — template components not requested → candidates to **REMOVE**, each
+  tagged **light** (a leaf cell) or **heavy** (a container: a frame /
+  `subaccount` / zone that has children).
+
+`coverage = |PRESENT| / |requested|`.
+
+The **light/heavy tag requires reading the candidate `.drawio`**, not just the
+index (the index carries no per-component role): for each EXTRA, the report finds
+the cell whose label matches the component and marks it *heavy* when any other
+cell has `parent == that cell` (a container with children), else *light*. This is
+the only place `select-template.py` opens a template file, and only for the top
+candidate it reports coverage on.
+
+## Decision thresholds
+
+Named, tunable constants in `select-template.py`:
+
+- `RECOMMEND_THRESHOLD = 14.0` — the top candidate's score must clear this to be
+  `★ recommended` (a prerequisite for both scaffold paths).
+- `COVERAGE_MIN = 0.4` — scaffold-extend requires `coverage ≥ 0.4`; below it the
+  template covers too little to be worth extending → generate.
+- `HEAVY_EXTRA_MAX = 1` + `zoneCount/3` clause — the **heavy-extra guard**: BOTH
+  must hold to allow scaffold-extend, failing either sends it to generate:
+  - `heavy extras ≤ HEAVY_EXTRA_MAX` (= 1), **AND**
+  - `heavy extras ≤ zoneCount / 3` (the candidate's `zoneCount` from
+    `template-index.json`) — a template with few zones can't absorb even one heavy
+    structural removal.
+
+## Ordered extend workflow (`scaffold-extend`)
+
+1. `scaffold-diagram.py --template <template> --out <out>.drawio` copies the
+   chosen template.
+2. **Snapshot the whole starting template**: `cp <out>.drawio <out>.drawio.pre-extend.bak`.
+3. Apply the `delta` as an ordered chain:
+   - **Remove** each `delta.remove` with `remove-cell.py` — **heavy extras first**
+     (they free the most space; removing a container drops its subtree + incident
+     edges).
+   - **Relabel** each `delta.relabel` with `relabel.py` (see below).
+   - **Add** each `delta.add` — `add-node.py` (Claude picks `--mode append` for a
+     group member with localized reflow, or `--mode slot --near <ref>` for the
+     nearest free slot) then `add-edge.py` to wire it in.
+4. **Run `check-composition.py` after each structural edit** (add-node /
+   add-edge / heavy remove) so a new FAIL is attributed to the edit that caused
+   it. Each edit writes its own `.bak` (reverts exactly that step); the
+   `.pre-extend.bak` snapshot reverts the whole chain.
+5. On a FAIL: revert that one edit via its `.bak` and retry with a different
+   placement/port hint — **max 2 mechanical retries per edit**; never hand-edit
+   geometry. If the chain can't converge, restore the `.pre-extend.bak` snapshot
+   and fall back to the **generate** path.
+6. Then the full downstream gate + visual-rubric loop.
 
 ## Selector scoring formula
 
@@ -79,23 +155,31 @@ select-template.py "a picnic in the park with sandwiches"
   → no template clears 14.0 → use generate-drawio.py
 ```
 
-## Corpus score gate (`--min-score 82`)
+## Dual score gate (authoritative)
 
-`score-diagram.py --corpus assets/templates <out> --min-score 82` fingerprints the
-candidate (structure + Horizon style, not literal content) against every reference
-and takes the best match. Empirically:
+The score gate is **authoritative and enforced identically** by the workflow
+(SKILL Step 5.5) and the integration test — nothing can pass one and fail the
+other. Regardless of path, the artifact must clear **both**:
 
-- a verbatim template copy scores **100**,
-- a scaffolded **+ relabelled** diagram scores **~98** (relabelling changes text,
-  not structure),
-- so **82** is a safe floor that a real scaffold always clears while still failing
-  a diagram whose structure has drifted from SAP conventions. It applies to the
-  procedural path too — a low score there means the IR wandered off-convention.
+- `score-diagram.py --sap-like <out>` **≥ 85** — reference-free SAP-likeness
+  (works everywhere, including Desktop where the loose corpus isn't bundled).
+- `score-diagram.py --corpus assets/templates <out> --min-score 82` — corpus
+  similarity: fingerprints the candidate (structure + Horizon style, not literal
+  content) against every reference and takes the best match.
+
+Empirically on the corpus check: a verbatim template copy scores **100**; a
+scaffolded **+ relabelled** (or **+ extended**) diagram scores **~98**
+(relabel/extend changes content and adds a few cells, not the overall structure);
+so **82** is a safe floor that a real scaffold always clears while still failing a
+diagram whose structure has drifted from SAP conventions. Both floors apply to the
+procedural `generate` path too — a low score there means the IR wandered
+off-convention. On Desktop the `--corpus` line is a no-op when `assets/templates/`
+is absent; the `--sap-like ≥ 85` floor still applies.
 
 ## Surgical relabel rules
 
-`relabel.py` is how the scaffold path adapts a copied template **without
-redrawing**:
+`relabel.py` is how the scaffold and scaffold-extend paths adapt a copied
+template **without redrawing**:
 
 - `--set <cellId>=<new label>` — address a cell by its `id`.
 - `--replace "<old>=<new>"` — match a cell by its rendered visible text (HTML

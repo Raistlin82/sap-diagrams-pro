@@ -57,37 +57,79 @@ short key + add it to that pack's `index.json` as a `dataUri`, then set
 `metadata.branding.partnerWatermark` / `branding.customerLogo` to that key. If they
 decline or provide nothing, omit `branding` entirely.
 
-### 2.5. Scaffold-or-generate (hybrid decision)
-Before authoring any IR, decide **how** to build the diagram. Two paths reach the
-same downstream gate:
+### 2.5. Scaffold, scaffold-extend, or generate (hybrid decision)
+Before authoring any IR, decide **how** to build the diagram. Three paths reach
+the same downstream gate:
 
-- **Scaffold** — copy the closest real SAP reference `.drawio` and edit it
+- **Scaffold** — copy the closest real SAP reference `.drawio` and relabel it
   surgically (inherits the exact canvas, zones, Horizon palette, fonts, icons —
   higher fidelity).
+- **Scaffold-extend** — start from that template, then **remove** out-of-scope
+  cells, **relabel** the matches, and **add** the missing components to reach the
+  exact confirmed inventory while inheriting the template's real SAP layout.
 - **Generate** — author an IR and render it procedurally (steps 3–7).
 
-Ask the selector (it reads the bundled `assets/template-index.json`):
+Feed the selector the **confirmed canonical component list** and read its
+`decision` (it reads the bundled `assets/template-index.json`):
 ```bash
-python3 scripts/select-template.py "<request>" --top 5
+python3 scripts/select-template.py "<request>" \
+  --components "<confirmed canonical components, comma-separated>" --json
 ```
-- If the top candidate is flagged **`★ recommended`** (score ≥ the confidence
-  threshold **14.0** — see [`references/scaffold-workflow.md`](references/scaffold-workflow.md)), take the **scaffold path**:
+The JSON carries `decision` ∈ {`scaffold`, `scaffold-extend`, `generate`}, a
+coverage report (`present` / `missing` / `extra` — each extra tagged
+`light`|`heavy`), the top `template` id, and a bounded
+`delta` = `{remove: […], relabel: [{from, to}, …], add: […]}`. Thresholds
+(`RECOMMEND_THRESHOLD=14`, `COVERAGE_MIN=0.4`, `HEAVY_EXTRA_MAX=1` + the
+`zoneCount/3` clause) are in [`references/scaffold-workflow.md`](references/scaffold-workflow.md). **Branch on `decision`:**
+
+- **`scaffold`** (relabel-only — nothing missing, nothing extra):
   ```bash
-  python3 scripts/scaffold-diagram.py "<request>" --out "<out>.drawio"   # writes the template + prints a relabel checklist
-  python3 scripts/relabel.py "<out>.drawio" --replace "Old Service=New Service" --set <cellId>="New label"
+  python3 scripts/scaffold-diagram.py --template <template> --out "<out>.drawio"
+  python3 scripts/relabel.py "<out>.drawio" --replace "<from>=<to>"   # one per delta.relabel entry
   ```
-  This bundle ships a **curated ~21-template subset** in `assets/templates-pack.json`
-  (embedded draw.io XML — the full 156-file corpus can't ship under the Skills
-  file-cap). The selector automatically ranks only what's scaffoldable here, and
-  `scaffold-diagram.py` writes the template's XML from the pack. Relabel preserves
-  geometry/style/ids and writes a `.bak`; swap icons as the checklist indicates.
-  Skip steps 3–4 (no IR) and go straight to the **step 5 gate**.
-- **Otherwise** — nothing clears the threshold or `scaffold-diagram.py` exits `3`
-  (no scaffoldable template for this request) — take the **generate path**:
-  proceed to step 3. This is the safe default; the scaffold path is a fidelity
+  Relabel preserves geometry/style/ids and writes a `.bak`; swap icons as the
+  checklist indicates. Skip steps 3–4 (no IR) and go straight to the **step 5 gate**.
+- **`scaffold-extend`** (base template + delta — recommended, `coverage ≥ 0.4`,
+  at least one missing/extra, heavy guard holds). Scaffold, **snapshot the whole
+  starting template**, then apply the delta as an **ordered chain**:
+  ```bash
+  python3 scripts/scaffold-diagram.py --template <template> --out "<out>.drawio"
+  cp "<out>.drawio" "<out>.drawio.pre-extend.bak"                    # whole-chain snapshot
+  # 1. remove each delta.remove — heavy extras first:
+  python3 scripts/remove-cell.py "<out>.drawio" --match "<label>"    # or --id <cellId>
+  # 2. relabel each delta.relabel (as in the scaffold path)
+  # 3. add each delta.add — a node (Claude picks the mode) + an edge to wire it:
+  python3 scripts/add-node.py "<out>.drawio" --group <groupId> --label "<…>" \
+    --service "<canonical name>" --mode append --json                # or: --mode slot --near <refCellId>
+  python3 scripts/add-edge.py "<out>.drawio" --source <id> --target <id> \
+    --flowFamily <family> --pill "<protocol>" --label "<…>"
+  ```
+  **Run `check-composition.py` after each structural edit** (add-node / add-edge /
+  heavy remove) so a new FAIL is attributed to the edit that caused it. On a FAIL,
+  revert that one edit via its `.bak` and retry with a different placement/port
+  (**max 2 retries per edit**); never hand-edit geometry. If the chain can't
+  converge, restore the snapshot
+  (`cp "<out>.drawio.pre-extend.bak" "<out>.drawio"`) and fall through to
+  **`generate`**. Then go to the **step 5 gate**.
+- **`generate`** (nothing clears the bar, or `scaffold-diagram.py` exits `3`):
+  proceed to step 3. This is the safe default; the scaffold paths are a fidelity
   boost when a close template exists, never a hard dependency.
 
-Either way, the **same downstream gate** (step 5) applies.
+This bundle ships a **curated ~21-template subset** in `assets/templates-pack.json`
+(embedded draw.io XML — the full 156-file corpus can't ship under the Skills
+file-cap). The selector ranks only what's scaffoldable here, and
+`scaffold-diagram.py` writes the template's XML from the pack; so scaffold and
+scaffold-extend work on Desktop for the packed subset.
+
+**Authoritative score gate (enforced identically here and in the integration
+test).** Whichever path produced the artifact, it must clear **both**:
+```bash
+python3 scripts/score-diagram.py --sap-like "<out>.drawio" --json                       # SAP-likeness ≥ 85
+python3 scripts/score-diagram.py --corpus assets/templates "<out>.drawio" --min-score 82
+```
+On Desktop the loose `assets/templates/` corpus isn't bundled (only
+`templates-pack.json`), so the `--corpus` line is a **no-op** — rely on the
+`--sap-like ≥ 85` floor. Either way, the **same downstream gate** (step 5) applies.
 
 ### 3. Build the IR v2 (JSON)
 
@@ -191,7 +233,7 @@ python3 scripts/validate-ir.py ir.json
 ```bash
 # generate path only — the scaffold path already has its .drawio from step 2.5:
 python3 scripts/generate-drawio.py   ir.json --out "<title>-<level>.drawio"
-# both paths run this gate on "<title>-<level>.drawio":
+# all paths run this gate on "<title>-<level>.drawio":
 python3 scripts/validate-drawio.py   "<title>-<level>.drawio" --strict   # palette/XML; exit 1 on CRITICAL
 python3 scripts/check-composition.py "<title>-<level>.drawio"             # geometric gate; exit 2 on FAIL
 # SAP-likeness gate (advisory — the hard gates are validate-drawio + check-composition).
