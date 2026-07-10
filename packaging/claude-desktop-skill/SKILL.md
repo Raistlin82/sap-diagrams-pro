@@ -57,6 +57,37 @@ short key + add it to that pack's `index.json` as a `dataUri`, then set
 `metadata.branding.partnerWatermark` / `branding.customerLogo` to that key. If they
 decline or provide nothing, omit `branding` entirely.
 
+### 2.5. Scaffold-or-generate (hybrid decision)
+Before authoring any IR, decide **how** to build the diagram. Two paths reach the
+same downstream gate:
+
+- **Scaffold** — copy the closest real SAP reference `.drawio` and edit it
+  surgically (inherits the exact canvas, zones, Horizon palette, fonts, icons —
+  higher fidelity).
+- **Generate** — author an IR and render it procedurally (steps 3–7).
+
+Ask the selector (it reads the bundled `assets/template-index.json`):
+```bash
+python3 scripts/select-template.py "<request>" --top 5
+```
+- If the top candidate is flagged **`★ recommended`** (score ≥ the confidence
+  threshold **14.0** — see [`references/scaffold-workflow.md`](references/scaffold-workflow.md)) **and the template corpus is bundled**
+  (`assets/templates/` present), take the **scaffold path**:
+  ```bash
+  python3 scripts/scaffold-diagram.py "<request>" --out "<out>.drawio"   # copies + prints a relabel checklist
+  python3 scripts/relabel.py "<out>.drawio" --replace "Old Service=New Service" --set <cellId>="New label"
+  ```
+  Relabel preserves geometry/style/ids and writes a `.bak`; swap icons as the
+  checklist indicates. Skip steps 3–4 (no IR) and go straight to the **step 5
+  gate**.
+- **Otherwise** — nothing clears the threshold, `scaffold-diagram.py` exits `3`,
+  **or this bundle ships without the `assets/templates/` corpus** (the default;
+  it is omitted to stay under the Skills file-upload cap) — take the **generate
+  path**: proceed to step 3. This is the safe default; the scaffold path is a
+  fidelity boost when the corpus is available, never a hard dependency.
+
+Either way, the **same downstream gate** (step 5) applies.
+
 ### 3. Build the IR v2 (JSON)
 
 The IR has `metadata`, `groups[]`, `nodes[]`, `edges[]`, and optional `layoutHints[]`.
@@ -157,12 +188,19 @@ python3 scripts/validate-ir.py ir.json
 
 ### 5. Generate + mechanical gate
 ```bash
+# generate path only — the scaffold path already has its .drawio from step 2.5:
 python3 scripts/generate-drawio.py   ir.json --out "<title>-<level>.drawio"
+# both paths run this gate on "<title>-<level>.drawio":
 python3 scripts/validate-drawio.py   "<title>-<level>.drawio" --strict   # palette/XML; exit 1 on CRITICAL
 python3 scripts/check-composition.py "<title>-<level>.drawio"             # geometric gate; exit 2 on FAIL
+# SAP-likeness vs the corpus — ONLY if assets/templates/ is bundled (else skip):
+python3 scripts/score-diagram.py --corpus assets/templates "<title>-<level>.drawio" --min-score 82  # exit 2 if best < 82
 ```
-On any CRITICAL/FAIL: fix the IR and regenerate. **Max 2 mechanical retries** before
-escalating to the user with the exact error.
+On any CRITICAL/FAIL/low-score: **generate path** — fix the IR and regenerate;
+**scaffold path** — restore the `.bak` and redo the `relabel.py` edits (or pick an
+alternate template). **Max 2 mechanical retries** before escalating with the exact
+error. If `assets/templates/` is absent (default Desktop bundle), the
+`score-diagram --corpus` line is a no-op — skip it.
 
 ### 6. Render, then LOOK — the visual-rubric self-critique loop
 ```bash

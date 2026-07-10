@@ -33,6 +33,16 @@ SCRIPTS=(
   check-composition.py      # geometric composition gate
   apply-rubric-patches.py   # visual-rubric patch-op consumer
   render-preview.py         # pure-Python PNG preview (no draw.io app)
+  score-diagram.py          # SAP-likeness / corpus similarity scorer (shared gate)
+  # hybrid scaffold path (Step 2.5). select-template ranks from template-index.json
+  # alone; scaffold-diagram/score-diagram --corpus need the loose assets/templates/
+  # corpus, which is NOT bundled (156 large files would breach claude.ai's 200-file
+  # upload cap that the icon-atlas packing exists to respect) — so the Desktop
+  # SKILL.md degrades to the procedural path when the corpus is absent.
+  select-template.py        # rank templates for a request (reads template-index.json)
+  scaffold-diagram.py       # copy the closest template + print relabel checklist
+  relabel.py                # surgical label edits on a scaffolded .drawio
+  build-template-index.py   # vocabularies reused by select-template.py (imported)
   # private modules (path-imported by the entry points above)
   _skeleton_layout.py       # slot layout + flow ordering
   _channel_router.py        # deterministic edge router
@@ -45,8 +55,9 @@ for f in "${SCRIPTS[@]}"; do
   cp "$ROOT/scripts/$f" "$STAGE/scripts/$f"
 done
 
-# Assets — single files.
-for f in shape-index.json canonical-pills.json style-contract.json; do
+# Assets — single files. template-index.json lets select-template.py rank even
+# though the loose template corpus (assets/templates/) is deliberately omitted.
+for f in shape-index.json canonical-pills.json style-contract.json template-index.json; do
   cp "$ROOT/assets/$f" "$STAGE/assets/$f"
 done
 
@@ -78,6 +89,9 @@ PY
 # Visual-rubric reference (the ~25 binary checks the rubric loop applies).
 cp "$ROOT/skills/sap-diagram-generate/references/visual-rubric.md" \
    "$STAGE/references/visual-rubric.md"
+# Hybrid scaffold-or-generate decision + selector threshold (Step 2.5).
+cp "$ROOT/skills/sap-diagram-generate/references/scaffold-workflow.md" \
+   "$STAGE/references/scaffold-workflow.md"
 
 # Safety net: fail loudly if any brand-pack.local artefact slipped into the stage.
 if find "$STAGE" -path '*brand-pack.local*' -print -quit | grep -q .; then
