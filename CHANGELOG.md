@@ -9,6 +9,27 @@ All notable changes to `sap-diagrams-pro` are documented in this file. The forma
 
 ## [Unreleased]
 
+### Added — template-informed completeness (0.7.0)
+
+- **Template-informed completeness**: the generate path now cross-checks the
+  request against the real SAP reference corpus so procedural diagrams inherit the
+  components a human architect would expect.
+  - **Step 1.5 recon** (SKILL, both flavours): before generating, the skill mines
+    the corpus for the components that neighbour the requested scenario.
+  - **Step 3.5 triage** (`suggest_extras()` + `scripts/select-template.py
+    --suggest`/`--best-practice`): ranks the missing-but-common components and
+    surfaces only the consensus extras (not one-off template noise).
+  - **Enriched interview**: the focused question set now folds the triaged extras in,
+    so the user confirms/declines the additions before the diagram is rendered.
+- **Gutting guard** (finding #1): `select-template.py --json` decision now flips to
+  `generate` when a candidate template would need to lose more than it keeps
+  (`remove > keep`), instead of scaffold-then-strip.
+- **Per-path score gate fix** (finding #2): the authoritative gate is now chosen by
+  path — the **generate** path gates on `--sap-like` (≥ 85); `--corpus` is
+  **scaffold-only** (procedural diagrams fingerprint ~55 against the corpus by
+  design and must not be blocked on it). Codified by
+  `tests/test_gate_calibration.py` (the four generate-path demos measure 93.7–100).
+
 ### Added — scaffold-and-extend (0.6.0)
 
 - **Surgical edit tools** for the scaffold path — adapt a scaffolded real SAP
