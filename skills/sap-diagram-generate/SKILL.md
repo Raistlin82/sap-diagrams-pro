@@ -55,6 +55,16 @@ test -f "${CLAUDE_PLUGIN_ROOT}/assets/shape-index.json" || python3 "${CLAUDE_PLU
 
 From the description, extract a first-pass list: actors/users, third-party/non-SAP systems, SAP applications (S/4HANA, SuccessFactors, Ariba…), BTP services, and the data flows between them. This draft is a hypothesis — Steps 2–3 verify it.
 
+### Step 1.5 — Template reconnaissance (early rank)
+
+Rank the corpus against the raw request so the candidate set is known before the interview:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/select-template.py" "<request>" --top 5 [--level Lx]
+```
+
+Remember the top ids; the *triage* runs at Step 3.5 once best-practice findings exist.
+
 ### Step 2 — Ground every component in the SAP Discovery Center (MCP)
 
 For each named or implied component, query the MCP so the diagram uses authoritative facts, not guesses:
@@ -79,6 +89,17 @@ Invoke the relevant skills (in parallel — multiple `Skill` calls in one messag
 
 Aggregate findings as `CRITICAL | WARNING | INFO` — typically *missing* components the inventory should include (Cloud Logging, Audit Log, Alert Notification, Cloud Connector, IAS↔XSUAA trust, Private Link for PCE).
 
+### Step 3.5 — Triage template extras into completeness suggestions
+
+Ask the selector which recurring components the top candidates have that the user did NOT mention:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/select-template.py" "<request>" \
+  --components "<draft csv>" --suggest --best-practice "<best-practice csv from Step 3>" --json
+```
+
+Read `suggestions[]` — each is an extra that appears across ≥2 top candidates OR matches a Step-3 best-practice finding (single-template noise like Joule/AI is filtered out). Feed these into the Step 4 interview; NEVER auto-add them.
+
 ### Step 4 — Interview the user (focused, derived questions)
 
 Using `AskUserQuestion`, ask only what is still ambiguous **after** Steps 2–3 (don't ask what the docs/skills already answered). Typical questions (batch 2–4 multiple-choice):
@@ -90,6 +111,7 @@ Using `AskUserQuestion`, ask only what is still ambiguous **after** Steps 2–3 
 - **Backends** — S/4HANA on-prem (PCE) / S/4HANA Cloud / non-SAP DBs / which.
 - **Connectivity** — Cloud Connector / Private Link / direct.
 - **Observability scope** — Cloud Logging only / + Audit Log + Alert Notification + Cloud ALM.
+- **Completeness (from Step 3.5)** — present `suggestions[]` as ONE multi-select question: "these commonly appear in this architecture but you didn't mention them — add any?", showing each suggestion's `reason`. Append accepted items to the inventory.
 - **Branding** — ask explicitly whether to add a **partner watermark** and/or a **customer logo**. **Default is NONE — never assume a company or apply a watermark on your own** (do not default to "Lutech" or any partner). If the user says yes, ask them to **provide the image** (paste/attach the logo file, or point to a path). Save it under `assets/brand-pack.local/` (gitignored — trademarks/customer assets stay local) with a short key, add it to that pack's `index.json` as a `dataUri`, and only then set `metadata.branding.partnerWatermark` / `branding.customerLogo` to that key. If the user declines or provides nothing, omit `branding` entirely.
 
 ### Step 5 — Confirm the inventory
@@ -99,7 +121,10 @@ Present the consolidated inventory (canonical names from Step 2) + best-practice
 ### Step 5.5 — Scaffold, scaffold-extend, or generate (hybrid decision) — ALWAYS
 
 Before authoring any IR, decide **how** to produce the diagram. Feed the selector
-the **confirmed canonical component list** from Step 5 and read its `decision`:
+the **confirmed canonical component list** from Step 5 and read its `decision`.
+This decision runs on the **refined** inventory (after Step 4), so any Step-3.5
+suggestions the user promoted count as `present` and the gutting guard
+(`remove > keep → generate`) sees the true delta:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/select-template.py" "<request>" \
@@ -167,19 +192,32 @@ fall through to the **`generate`** path. Then go to the **Step 8 gate**.
 
 **`generate`** (nothing clears the bar). Author the IR — proceed to **Step 6** as usual.
 
-**Authoritative score gate (enforced identically here and in the integration
-test).** Whichever path produced the artifact, it must clear **both**:
+**Authoritative score gate — per path.** The score portion of the gate depends on
+which path produced the artifact:
 
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --sap-like "<out>.drawio" --json                                    # SAP-likeness ≥ 85
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --corpus "${CLAUDE_PLUGIN_ROOT}/assets/templates" "<out>.drawio" --min-score 82
-```
+- **Generate path:** the authoritative score gate is
+  `score-diagram.py --sap-like "<out>" --json`; require `score ≥ 85`. Do **NOT**
+  run `--corpus --min-score` on this path — a from-scratch diagram fingerprints
+  ~55 against the corpus by design (the shipped gold demos score 55–60 on corpus
+  yet 93–100 on `--sap-like`).
 
-A scaffolded / scaffold-extended diagram keeps the template's structure, so it
-clears both comfortably; a low score on the `generate` path means the IR drifted
-from SAP conventions. This dual score gate is the score portion of the **same
-downstream gate** all three paths converge on (Step 8): `validate-drawio.py --strict`
-+ `check-composition.py` + this dual score gate + the visual-rubric loop.
+  ```bash
+  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --sap-like "<out>.drawio" --json   # require score ≥ 85
+  ```
+
+- **Scaffold / scaffold-extend path:** keep the dual gate — `--sap-like ≥ 85`
+  **AND** `score-diagram.py --corpus assets/templates "<out>" --min-score 82`. A
+  scaffolded / scaffold-extended diagram keeps the template's structure, so it
+  clears the corpus match comfortably:
+
+  ```bash
+  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --sap-like "<out>.drawio" --json                                    # SAP-likeness ≥ 85
+  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --corpus "${CLAUDE_PLUGIN_ROOT}/assets/templates" "<out>.drawio" --min-score 82
+  ```
+
+This score gate is the score portion of the **same downstream gate** all three
+paths converge on (Step 8): `validate-drawio.py --strict` + `check-composition.py`
++ this per-path score gate + the visual-rubric loop.
 
 ### Step 6 — Build the IR v2 (authoring grammar)
 
@@ -304,12 +342,15 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate-ir.py" /tmp/diagram-<level>.json
    ```bash
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate-drawio.py"   "<out>.drawio" --strict
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/check-composition.py" "<out>.drawio"
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --sap-like "<out>.drawio" --json   # all paths: require score ≥ 85
+   # scaffold / scaffold-extend paths ONLY — additionally require the corpus match:
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --corpus "${CLAUDE_PLUGIN_ROOT}/assets/templates" "<out>.drawio" --min-score 82
    ```
 
    - `validate-drawio.py --strict` — XML structure, Horizon palette, line styles, orphan edges; exits 1 if any CRITICAL is found.
    - `check-composition.py` — the **geometric** gate (zone overlaps, piercings, crossing budget once computed, legend presence); exits 2 on any FAIL.
-   - `score-diagram.py --corpus … --min-score 82` — SAP-likeness fingerprint vs the whole template corpus; exits 2 when the best match scores below 82. **All three paths must clear it** (see Step 5.5's authoritative dual score gate) — a scaffolded / scaffold-extended diagram fingerprints ~98 (it keeps the SAP template's structure), and a well-formed procedural diagram should clear 82 too; a low score on the generate path means the IR drifted from SAP conventions. (If the corpus is absent, this step is a no-op — skip it.)
+   - `score-diagram.py --sap-like … ≥ 85` — reference-free SAP-likeness; the authoritative score gate on **every** path. On the **generate** path this is the *only* score check — do **NOT** run `--corpus --min-score` there (a from-scratch diagram fingerprints ~55 against the corpus by design; the shipped gold demos score 55–60 on corpus yet 93–100 on `--sap-like`).
+   - `score-diagram.py --corpus … --min-score 82` — SAP-likeness fingerprint vs the whole template corpus; **scaffold / scaffold-extend paths only** (see Step 5.5's per-path score gate). A scaffolded / scaffold-extended diagram fingerprints ~98 because it keeps the SAP template's structure. (If the corpus is absent, this step is a no-op — skip it.)
 
    On any CRITICAL/FAIL/low-score: **generate path** — fix the IR and regenerate; **scaffold path** — undo via the `.bak` and redo the `relabel.py` edits (or pick an alternate template), never hand-edit geometry. **Max 2 mechanical retries** before escalating to the user with the exact error.
 
