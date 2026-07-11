@@ -255,8 +255,8 @@ def test_cli_no_suggest_is_backward_compatible(capsys):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `python3 -m pytest tests/test_template_completeness.py -q -k suggest`
-Expected: FAIL (`--suggest` unrecognized / KeyError)
+Run: `python3 -m pytest tests/test_template_completeness.py -q -k "suggest_emits or suggest_requires"`
+Expected: FAIL (`--suggest` unrecognized → argparse `SystemExit(2)`). Note: `test_cli_no_suggest_is_backward_compatible` already passes pre-impl — only the two genuinely-new tests fail.
 
 - [ ] **Step 3: Implement the CLI**
 
@@ -562,7 +562,7 @@ Expected: PASS (demos score 93.7–100)
   `tests/test_scaffold_extend_integration.py::test_demos_byte_identical`):
 
 Run: `python3 -m pytest tests/test_scaffold_extend_integration.py -q`
-Expected: PASS
+Expected: PASS. (This file's `test_scaffold_extend_dual_gate` also already covers the spec's "a scaffolded template clears `--corpus … --min-score 82`" assertion — no new scaffold-path test is needed here.)
 
 - [ ] **Step 4: Full suite**
 
@@ -573,6 +573,7 @@ Expected: PASS (previous count + the new tests, 0 fail)
 
 Run: `bash packaging/claude-desktop-skill/build.sh`
 Expected: exits 0, ≤ 200 files, `brand-pack.local` excluded (`select-template.py` already bundled). Confirm: `unzip -l dist/claude-desktop-skill/sap-diagram-generate.zip | tail -1`.
+Then run the automated bundle assertions rather than eyeballing: `python3 -m pytest tests/test_desktop_bundle.py -q` (enforces the file cap + `brand-pack.local` exclusion).
 
 - [ ] **Step 6: Bump to 0.7.0 + CHANGELOG**
 
