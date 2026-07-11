@@ -506,7 +506,8 @@ def restrict_to_available(index: dict) -> dict:
 
 
 def _emit_coverage(index: dict, ranked: list[Ranked], components: str,
-                   as_json: bool) -> int:
+                   as_json: bool, suggest: bool = False,
+                   best_practice: str = "") -> int:
     """Report component coverage + the routing decision for the top candidate."""
     requested = _clean_requested(components.split(","))
     top = ranked[0]
@@ -515,6 +516,14 @@ def _emit_coverage(index: dict, ranked: list[Ranked], components: str,
     result = decide(entry, requested, top.recommended)
     result["template"] = top.id
     result["recommended"] = top.recommended
+
+    if suggest:
+        entries = [next((e for e in index.get("templates", []) if e.get("id") == r.id),
+                        {"id": r.id, "file": r.file}) for r in ranked]
+        result["suggestions"] = suggest_extras(
+            entries, requested,
+            _clean_requested((best_practice or "").split(",")),
+            top_n=len(entries))
 
     if as_json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -535,6 +544,9 @@ def _emit_coverage(index: dict, ranked: list[Ranked], components: str,
         d = result["delta"]
         print(f"delta    : remove={len(d['remove'])} "
               f"relabel={len(d['relabel'])} add={len(d['add'])}")
+    if suggest and result.get("suggestions"):
+        print("suggest  : " + ", ".join(
+            f"{s['label']} ({s['reason']})" for s in result["suggestions"]))
     return 0
 
 
@@ -548,6 +560,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="comma-separated components to check against the top "
                          "candidate; prints a coverage report + a scaffold / "
                          "scaffold-extend / generate decision")
+    ap.add_argument("--suggest", action="store_true",
+                    help="with --components: also emit completeness suggestions "
+                         "(template extras seen across the top candidates)")
+    ap.add_argument("--best-practice", default="",
+                    help="comma-separated best-practice component names to OR into "
+                         "the --suggest triage")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
@@ -566,8 +584,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # Coverage + decision path (only when --components is given). Without it the
     # output below is EXACTLY the pre-existing ranking behaviour.
+    if args.suggest and args.components is None:
+        print("--suggest requires --components", file=sys.stderr)
+        return 2
     if args.components is not None:
-        return _emit_coverage(index, ranked, args.components, args.json)
+        return _emit_coverage(index, ranked, args.components, args.json,
+                              suggest=args.suggest, best_practice=args.best_practice)
 
     if args.json:
         payload = {

@@ -90,3 +90,37 @@ def test_sap_prefixed_request_not_resuggested():
     assert all(s["label"] != "Work Zone" for s in out)
     # (Destination Service is still legitimately suggested.)
     assert any("Destination" in s["label"] for s in out)
+
+
+# --------------------------------------------------------------------------- #
+# CLI: --suggest
+# --------------------------------------------------------------------------- #
+def test_cli_suggest_emits_suggestions(capsys):
+    rc = sel.main([
+        "sap build work zone with s4hana pce and build process automation",
+        "--components", "Build Work Zone,S/4HANA,Build Process Automation",
+        "--suggest", "--json",
+    ])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "suggestions" in payload
+    assert isinstance(payload["suggestions"], list)
+    for s in payload["suggestions"]:
+        assert set(s) >= {"label", "consensus", "candidates", "bestPractice", "reason"}
+
+
+def test_cli_suggest_requires_components(capsys):
+    rc = sel.main(["some request", "--suggest", "--json"])
+    assert rc == 2  # --suggest without --components is an error
+
+
+def test_cli_no_suggest_is_backward_compatible(capsys):
+    rc = sel.main([
+        "SAP Build Process Automation L2 with Task Center",
+        "--components", "Build Process Automation,Integration Suite,Cloud ALM",
+        "--json",
+    ])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "suggestions" not in payload
+    assert set(payload["delta"]) == {"remove", "relabel", "add"}
