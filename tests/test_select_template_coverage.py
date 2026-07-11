@@ -185,3 +185,33 @@ def test_cli_components_json(capsys):
     assert payload["decision"] in {"scaffold", "scaffold-extend", "generate"}
     assert isinstance(payload["coverage"], float)
     assert set(payload["delta"]) == {"remove", "relabel", "add"}
+
+
+# --------------------------------------------------------------------------- #
+# gutting guard: keep fewer than we strip -> generate (finding #1)
+# --------------------------------------------------------------------------- #
+def test_guard_generate_when_removes_exceed_keeps(tmp_path):
+    # 1 present (Alpha), 3 extras (Beta/Gamma/Delta) -> extra(3) > present(1).
+    _write_drawio(tmp_path / "gut.drawio", [
+        ("a", "Alpha", "1"), ("b", "Beta", "1"),
+        ("g", "Gamma", "1"), ("d", "Delta", "1"),
+    ])
+    entry = {"id": "gut", "file": "gut.drawio", "zoneCount": 12,
+             "serviceTokens": ["Alpha", "Beta", "Gamma", "Delta"],
+             "scenarioAliases": []}
+    result = sel.decide(entry, ["Alpha"], recommended=True, templates_dir=tmp_path)
+    assert result["decision"] == "generate"
+
+
+def test_guard_allows_scaffold_extend_when_keeps_dominate(tmp_path):
+    # 3 present, 1 extra -> guard does NOT fire; scaffold-extend still possible.
+    _write_drawio(tmp_path / "ok.drawio", [
+        ("a", "Alpha", "1"), ("b", "Beta", "1"),
+        ("c", "Cappa", "1"), ("e", "Extra", "1"),
+    ])
+    entry = {"id": "ok", "file": "ok.drawio", "zoneCount": 12,
+             "serviceTokens": ["Alpha", "Beta", "Cappa", "Extra"],
+             "scenarioAliases": []}
+    result = sel.decide(entry, ["Alpha", "Beta", "Cappa", "Missing"],
+                        recommended=True, templates_dir=tmp_path)
+    assert result["decision"] == "scaffold-extend"

@@ -433,6 +433,9 @@ def decide(entry: dict, requested, recommended: bool, templates_dir=None) -> dic
     """Route the winner to scaffold / scaffold-extend / generate (first match
     wins) and, for the scaffold paths, emit a bounded delta plan.
 
+    0. ``generate`` (gutting guard) — if more template components would be
+                             removed than kept (``len(extra) > len(present)``),
+                             the template is the wrong base.
     1. ``scaffold``        — ★ recommended, nothing missing and nothing extra:
                              copy the template and relabel in place.
     2. ``scaffold-extend`` — ★ recommended, coverage ≥ COVERAGE_MIN, at least one
@@ -449,7 +452,11 @@ def decide(entry: dict, requested, recommended: bool, templates_dir=None) -> dic
     zone_count = float(entry.get("zoneCount") or 0)
     heavy_guard = heavy <= HEAVY_EXTRA_MAX and heavy <= zone_count / 3
 
-    if recommended and not missing and not extra:
+    if len(extra) > len(present):
+        # Gutting guard: stripping more than we keep means the template is the
+        # wrong base (a hole-y layout; remove doesn't reflow/shrink frames).
+        decision = "generate"
+    elif recommended and not missing and not extra:
         decision = "scaffold"
     elif (recommended and coverage >= COVERAGE_MIN
           and (missing or extra) and heavy_guard):
