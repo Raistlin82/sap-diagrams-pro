@@ -49,6 +49,7 @@ import importlib.util
 import json
 import re
 import sys
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -367,6 +368,65 @@ def coverage_report(entry: dict, requested, templates_dir=None) -> dict:
         "heavyCount": heavy_count,
         "coverage": coverage,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Template-informed completeness: triage template extras into interview
+# SUGGESTIONS (consensus across candidates OR a best-practice match).
+# --------------------------------------------------------------------------- #
+def _canon_key(label: str) -> str:
+    """Grouping key: cleaned, lowercased, SAP-prefix-stripped."""
+    return clean_label(label).lower().removeprefix("sap ").strip()
+
+
+def suggest_extras(candidates, requested, best_practice=(), top_n=5,
+                   min_consensus=2, cap=6, templates_dir=None):
+    """Triage the top candidates' EXTRA components into completeness suggestions.
+
+    ``candidates`` are index-entry dicts (NOT ``Ranked``); only the first
+    ``top_n`` are used. ``coverage_report`` already excludes ``requested`` from
+    each candidate's ``extra``. A canonical extra (grouped by ``_canon_key``) is
+    suggested iff it appears in >= ``min_consensus`` distinct candidates OR it
+    word-boundary-matches a ``best_practice`` name (both directions). Returns
+    ``[{label, consensus, candidates, bestPractice, reason}]`` sorted by
+    consensus desc then label, capped at ``cap``."""
+    cands = list(candidates)[:top_n]
+    n = len(cands)
+    bp_low = [b.lower() for b in _clean_requested(best_practice)]
+    req_keys = [k for k in (_canon_key(r) for r in _clean_requested(requested)) if k]
+
+    buckets: dict[str, dict] = {}
+    for i, entry in enumerate(cands):
+        rep = coverage_report(entry, requested, templates_dir)
+        for e in rep["extra"]:
+            label = clean_label(e["label"])
+            key = _canon_key(e["label"])
+            if not key:
+                continue
+            b = buckets.setdefault(key, {"cands": set(), "spellings": Counter()})
+            b["cands"].add(i)
+            b["spellings"][label] += 1
+
+    out = []
+    for key, b in buckets.items():
+        if any(kw_hit(key, rk) or kw_hit(rk, key) for rk in req_keys):
+            continue
+        consensus = len(b["cands"])
+        bp = any(kw_hit(key, x) or kw_hit(x, key) for x in bp_low)
+        if consensus < min_consensus and not bp:
+            continue
+        label = sorted(b["spellings"].items(),
+                       key=lambda kv: (-kv[1], len(kv[0]), kv[0]))[0][0]
+        reasons = []
+        if consensus >= min_consensus:
+            reasons.append(f"in {consensus}/{n} reference simili")
+        if bp:
+            reasons.append("best-practice")
+        out.append({"label": label, "consensus": consensus, "candidates": n,
+                    "bestPractice": bp, "reason": " · ".join(reasons)})
+
+    out.sort(key=lambda s: (-s["consensus"], s["label"]))
+    return out[:cap]
 
 
 def decide(entry: dict, requested, recommended: bool, templates_dir=None) -> dict:
