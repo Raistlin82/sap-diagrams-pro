@@ -49,6 +49,16 @@ Confirm just what you can't infer: **level(s)** (L0/L1/L2, default L1); **runtim
 (sync OData/REST vs async events); **backends** (S/4HANA on-prem/PCE/Cloud, non-SAP
 DBs); **connectivity** (Cloud Connector / Private Link); **observability**.
 
+**Completeness (template-informed).** Before the interview, draft the component
+inventory and rank templates against it. Desktop has no best-practice consult, so
+completeness triage is **consensus-only**:
+```bash
+python3 scripts/select-template.py "<request>" --components "<draft csv>" --suggest --json
+```
+Present the returned `suggestions[]` (extras recurring across the top candidates) in
+the interview as a **multi-select** ("these commonly appear in this architecture but
+you didn't mention them — add any?"); **NEVER auto-add**.
+
 **Branding — always ask, never assume.** Ask explicitly whether to add a **partner
 watermark** and/or **customer logo**. **Default is NONE** — never apply a watermark
 or default to any company (e.g. do NOT assume "Lutech"). If the user wants one, ask
@@ -69,8 +79,9 @@ the same downstream gate:
   exact confirmed inventory while inheriting the template's real SAP layout.
 - **Generate** — author an IR and render it procedurally (steps 3–7).
 
-Feed the selector the **confirmed canonical component list** and read its
-`decision` (it reads the bundled `assets/template-index.json`):
+Feed the selector the **refined inventory** — the confirmed canonical components
+plus any completeness suggestions accepted in step 2, minus anything dropped — and
+read its `decision` (it reads the bundled `assets/template-index.json`):
 ```bash
 python3 scripts/select-template.py "<request>" \
   --components "<confirmed canonical components, comma-separated>" --json
@@ -80,7 +91,9 @@ coverage report (`present` / `missing` / `extra` — each extra tagged
 `light`|`heavy`), the top `template` id, and a bounded
 `delta` = `{remove: […], relabel: [{from, to}, …], add: […]}`. Thresholds
 (`RECOMMEND_THRESHOLD=14`, `COVERAGE_MIN=0.4`, `HEAVY_EXTRA_MAX=1` + the
-`zoneCount/3` clause) are in [`references/scaffold-workflow.md`](references/scaffold-workflow.md). **Branch on `decision`:**
+`zoneCount/3` clause) are in [`references/scaffold-workflow.md`](references/scaffold-workflow.md). Because this runs on the refined inventory, a **gutting guard** forces
+`generate` when the delta would remove more than it keeps (`remove > keep`) — a
+template is never gutted to fit. **Branch on `decision`:**
 
 - **`scaffold`** (relabel-only — nothing missing, nothing extra):
   ```bash
@@ -122,10 +135,12 @@ file-cap). The selector ranks only what's scaffoldable here, and
 scaffold-extend work on Desktop for the packed subset.
 
 **Authoritative score gate (enforced identically here and in the integration
-test).** Whichever path produced the artifact, it must clear **both**:
+test).** The gate is **per-path**: the **generate** path must clear
+`--sap-like ≥ 85`; the **scaffold / scaffold-extend** paths must clear **both**
+`--sap-like ≥ 85` **and** the corpus similarity floor:
 ```bash
-python3 scripts/score-diagram.py --sap-like "<out>.drawio" --json                       # SAP-likeness ≥ 85
-python3 scripts/score-diagram.py --corpus assets/templates "<out>.drawio" --min-score 82
+python3 scripts/score-diagram.py --sap-like "<out>.drawio" --json                       # SAP-likeness ≥ 85 (all paths)
+python3 scripts/score-diagram.py --corpus assets/templates "<out>.drawio" --min-score 82 # scaffold / scaffold-extend only
 ```
 On Desktop the loose `assets/templates/` corpus isn't bundled (only
 `templates-pack.json`), so the `--corpus` line is a **no-op** — rely on the
@@ -244,7 +259,9 @@ On any CRITICAL/FAIL/low-score: **generate path** — fix the IR and regenerate;
 **scaffold path** — restore the `.bak` and redo the `relabel.py` edits (or pick an
 alternate template). **Max 2 mechanical retries** before escalating with the exact
 error. If `assets/templates/` is absent (default Desktop bundle), the
-`score-diagram --corpus` line is a no-op — skip it.
+`score-diagram --corpus` line is a no-op — skip it. The **corpus similarity gate**
+applies **only** to the scaffold / scaffold-extend paths; the **generate** path
+relies on the `--sap-like ≥ 85` floor.
 
 ### 6. Render, then LOOK — the visual-rubric self-critique loop
 ```bash
