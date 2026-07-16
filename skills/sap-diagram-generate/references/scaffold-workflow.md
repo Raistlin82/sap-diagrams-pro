@@ -10,10 +10,10 @@ route between them, and the ordered extend workflow.
 |---|---|---|
 | **Scaffold** (relabel-only) | Copy the closest real SAP reference `.drawio`, then edit it surgically — relabel cells, swap icons; **no add/remove**. Inherits the exact canvas, zones, Horizon palette, fonts and icons of a real SAP diagram → highest fidelity. | A real template is *close enough* AND already covers every requested component with nothing extra. |
 | **Scaffold-extend** | Start from that template, then **remove** out-of-scope cells, **relabel** the matches, and **add** the missing components — reaching the exact confirmed inventory while inheriting the template's real SAP layout, palette, fonts and icons. | A template covers *a good part but not all* of the request (or carries a few extras), and the mismatch is not dominated by *heavy* structural extras. |
-| **Generate** | Author an IR v2 and render it procedurally with `generate-drawio.py`. Full control, arbitrary topology. | No template is close enough — the request is novel or a combination no single template covers. |
+| **Generate** | Author an IR v2 and render it procedurally with `generate-drawio.py`, after extracting a pattern brief from the closest SAP references. Full control, arbitrary topology, but still reference-informed. | No template is close enough — the request is novel or a combination no single template covers. |
 
 All three paths converge on the **same downstream gate**: `validate-drawio.py --strict`
-+ `check-composition.py` + the **dual score gate** (below) + the visual-rubric
++ `check-composition.py` + the **per-path score gate** (below) + the visual-rubric
 vision loop. A diagram is only delivered when that gate is green.
 
 ## Decision procedure
@@ -155,26 +155,53 @@ select-template.py "a picnic in the park with sandwiches"
   → no template clears 14.0 → use generate-drawio.py
 ```
 
-## Dual score gate (authoritative)
+## Per-path score gate and reference feedback
 
-The score gate is **authoritative and enforced identically** by the workflow
-(SKILL Step 5.5) and the integration test — nothing can pass one and fail the
-other. Regardless of path, the artifact must clear **both**:
+The score gate is **authoritative** but not identical for all paths. Scaffolded
+diagrams inherit a real template skeleton, so they can be hard-gated against the
+corpus. Procedural generate diagrams should learn from the corpus but not be
+blocked by a raw fingerprint score that intentionally measures structural
+similarity to one existing reference.
 
-- `score-diagram.py --sap-like <out>` **≥ 85** — reference-free SAP-likeness
-  (works everywhere, including Desktop where the loose corpus isn't bundled).
-- `score-diagram.py --corpus assets/templates <out> --min-score 82` — corpus
-  similarity: fingerprints the candidate (structure + Horizon style, not literal
-  content) against every reference and takes the best match.
+- All paths: `score-diagram.py --sap-like <out>` **≥ 85** — reference-free
+  SAP-likeness (works everywhere, including Desktop where the loose corpus isn't
+  bundled).
+- Scaffold / scaffold-extend only:
+  `score-diagram.py --corpus assets/templates <out> --min-score 82` — hard gate
+  because the artifact should still fingerprint like the copied reference.
+- Generate only: `score-diagram.py --corpus assets/templates <out> --json --top 5`
+  — feedback, not a hard gate. Use the top matches and weak dimensions to revise
+  the next IR pass if the diagram looks off-pattern.
 
 Empirically on the corpus check: a verbatim template copy scores **100**; a
 scaffolded **+ relabelled** (or **+ extended**) diagram scores **~98**
 (relabel/extend changes content and adds a few cells, not the overall structure);
 so **82** is a safe floor that a real scaffold always clears while still failing a
-diagram whose structure has drifted from SAP conventions. Both floors apply to the
-procedural `generate` path too — a low score there means the IR wandered
-off-convention. On Desktop the `--corpus` line is a no-op when `assets/templates/`
-is absent; the `--sap-like ≥ 85` floor still applies.
+scaffold whose structure drifted from the SAP base. A procedural `generate`
+diagram may score much lower on corpus similarity even when it is SAP-like,
+because no single reference shares its exact skeleton. On Desktop the corpus line
+is skipped when `assets/templates/` is absent; the `--sap-like ≥ 85` floor still
+applies.
+
+## Generate-from-reference pattern transfer
+
+When the decision is `generate`, the selector still matters. Treat the top ranked
+candidates as layout teachers:
+
+1. Record the top reference id/path, score, rationale, coverage, `present`,
+   `missing`, and `extra`.
+2. State why it cannot be extended: low coverage, gutting guard, heavy extras, or
+   user choice.
+3. Borrow structural patterns only: zone count/depth, left-center-right reading
+   direction, BTP/subaccount nesting, identity band, governance/top band,
+   private/on-prem right tier, network separator, suite/product molecule style,
+   and edge/pill families.
+4. Do not borrow unconfirmed content. Extras from references become interview or
+   best-practice suggestions, not automatic nodes.
+5. After rendering, run corpus scoring without `--min-score` and compare the
+   closest matches against the brief. If the generated diagram is visually unlike
+   every close reference for avoidable reasons, revise the IR once before
+   delivering.
 
 ## Surgical relabel rules
 

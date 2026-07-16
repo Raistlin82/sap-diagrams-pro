@@ -215,3 +215,27 @@ def test_guard_allows_scaffold_extend_when_keeps_dominate(tmp_path):
     result = sel.decide(entry, ["Alpha", "Beta", "Cappa", "Missing"],
                         recommended=True, templates_dir=tmp_path)
     assert result["decision"] == "scaffold-extend"
+
+
+def test_choose_decision_tries_next_candidate_when_top_would_be_gutted():
+    index = {"templates": [
+        {"id": "too-wide", "file": "too-wide.drawio", "zoneCount": 12,
+         "serviceTokens": ["Alpha", "Beta", "Gamma"], "scenarioAliases": []},
+        {"id": "clean", "file": "clean.drawio", "zoneCount": 12,
+         "serviceTokens": ["Alpha"], "scenarioAliases": []},
+    ]}
+    ranked = [
+        sel.Ranked(id="too-wide", file="too-wide.drawio", score=30.0,
+                   level="L1", family="generic", title="Too Wide",
+                   recommended=True),
+        sel.Ranked(id="clean", file="clean.drawio", score=24.0,
+                   level="L1", family="generic", title="Clean",
+                   recommended=True),
+    ]
+
+    result, top, evaluated = sel.choose_decision(index, ranked, ["Alpha"])
+
+    assert top.id == "clean"
+    assert result["template"] == "clean"
+    assert result["decision"] == "scaffold"
+    assert [e["decision"] for e in evaluated] == ["generate", "scaffold"]

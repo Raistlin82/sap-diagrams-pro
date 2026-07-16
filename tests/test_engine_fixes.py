@@ -204,6 +204,10 @@ def test_identity_group_has_no_btp_chip(gen):
         f"identity group must NOT carry a SAP BTP chip; got {badges_on.get(identity_cell)}")
     # …but the real btp-layer container still does (chip-once rule intact).
     assert btp in badges_on, "the non-identity btp-layer must keep its SAP BTP badge"
+    identity_badge = gen._stable_id("identitybadge", identity_cell)
+    badge = next((el for el in root.iter("mxCell") if el.get("id") == identity_badge), None)
+    assert badge is not None, "identity group must carry an Identity icon badge"
+    assert "image=data:image" in (badge.get("style") or "")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -121,6 +121,24 @@ def test_product_box_chip_embeds_resolved_icon(M, contract):
     assert chip["value"] == "Monitor"
 
 
+def test_product_box_title_keeps_resolved_product_icon(M, contract):
+    node = NS(id="integration-suite", label="SAP Integration Suite",
+              service="SAP Integration Suite", type="product",
+              capabilities=[{"label": "API Management"}])
+    uri = "data:image/svg+xml,PHN2Zz48L3N2Zz4="
+    cells = M.product_box(
+        node, contract,
+        icon_resolver=lambda n: uri if n == "SAP Integration Suite" else None,
+    )
+
+    icon = next(c for c in cells if c["id"] == "title-icon")
+    title = next(c for c in cells if c["id"] == "title")
+
+    assert f"image={uri}" in icon["style"]
+    assert title["value"] == "SAP Integration Suite"
+    assert title["x"] > icon["x"] + icon["w"]
+
+
 def test_product_box_icon_chip_stacks_icon_above_label_no_overlap(M, contract):
     """Regression for the icon/label-overlap defect: an icon-bearing capability
     chip must position its icon top-centered and its label BELOW it (stacked,

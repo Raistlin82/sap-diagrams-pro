@@ -491,6 +491,61 @@ def decide(entry: dict, requested, recommended: bool, templates_dir=None) -> dic
     }
 
 
+def choose_decision(index: dict, ranked: list[Ranked], requested,
+                    templates_dir=None) -> tuple[dict, Ranked | None, list[dict]]:
+    """Pick the first ranked candidate that can actually reuse a template.
+
+    Ranking still determines the order, but a top candidate that falls back to
+    ``generate`` because it would be gutted or fails coverage/heavy guards no
+    longer prevents the next close candidate from being reused.
+    """
+    evaluated: list[dict] = []
+    entries = {e.get("id"): e for e in index.get("templates", [])}
+
+    first: tuple[dict, Ranked] | None = None
+    for r in ranked:
+        entry = entries.get(r.id, {"id": r.id, "file": r.file})
+        result = decide(entry, requested, r.recommended, templates_dir)
+        result["template"] = r.id
+        result["recommended"] = r.recommended
+        result["rankScore"] = r.score
+        result["rankReasons"] = list(r.reasons)
+        evaluated.append({
+            "template": r.id,
+            "decision": result["decision"],
+            "rankScore": r.score,
+            "coverage": result["coverage"],
+            "heavyGuardOk": result["heavyGuardOk"],
+            "recommended": r.recommended,
+        })
+        if first is None:
+            first = (result, r)
+        if result["decision"] != "generate":
+            result["candidatesEvaluated"] = evaluated
+            return result, r, evaluated
+
+    if first is not None:
+        result, r = first
+        result["candidatesEvaluated"] = evaluated
+        return result, r, evaluated
+
+    result = {
+        "decision": "generate",
+        "coverage": 0.0,
+        "present": [],
+        "missing": _clean_requested(requested),
+        "extra": [],
+        "heavyGuardOk": False,
+        "delta": {"remove": [], "relabel": [], "add": _clean_requested(requested)},
+        "template": None,
+        "recommended": False,
+        "rankScore": 0.0,
+        "rankReasons": [],
+        "candidatesEvaluated": evaluated,
+    }
+    return result, None, evaluated
+
+
 def load_index(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -517,12 +572,7 @@ def _emit_coverage(index: dict, ranked: list[Ranked], components: str,
                    best_practice: str = "") -> int:
     """Report component coverage + the routing decision for the top candidate."""
     requested = _clean_requested(components.split(","))
-    top = ranked[0]
-    entry = next((e for e in index.get("templates", []) if e.get("id") == top.id),
-                 {"id": top.id, "file": top.file})
-    result = decide(entry, requested, top.recommended)
-    result["template"] = top.id
-    result["recommended"] = top.recommended
+    result, top, _evaluated = choose_decision(index, ranked, requested)
 
     if suggest:
         entries = [next((e for e in index.get("templates", []) if e.get("id") == r.id),
@@ -536,8 +586,9 @@ def _emit_coverage(index: dict, ranked: list[Ranked], components: str,
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
 
-    print(f"template : {top.id}  [{top.family}/{top.level}]"
-          + ("  * recommended" if top.recommended else ""))
+    top_label = f"{top.id}  [{top.family}/{top.level}]" if top else "none"
+    print("template : " + top_label
+          + ("  * recommended" if top and top.recommended else ""))
     print(f"decision : {result['decision']}")
     print(f"coverage : {result['coverage']:.2f}  (min {COVERAGE_MIN})")
     if result["present"]:

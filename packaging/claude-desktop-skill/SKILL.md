@@ -43,6 +43,20 @@ Examples: "DOX" → product is now **"SAP Document AI"** (resolve the icon via t
 historic name `Document Information Extraction`); "Enterprise Messaging" → **"SAP
 Event Mesh"**.
 
+**Bundle products vs capabilities.** Do not flatten a SAP product suite into peer
+service nodes when the named items are capabilities of that suite. Model the suite
+as one `type:"product"` node with `capabilities[]`, then connect edges to the
+product node. Use this especially for:
+
+- `SAP Integration Suite` → capabilities such as `API Management`, `Cloud Integration`,
+  `Event Mesh`, `Integration Advisor`, `Trading Partner Management`, `Open Connectors`.
+- `SAP Build Process Automation` → capabilities such as `Workflow`, `Decision`,
+  `Process Visibility`, `RPA`.
+
+Keep companion BTP services outside the suite unless SAP defines them as capabilities
+of that product. For example, `Destination service` and `Connectivity Service`
+remain BTP services in the subaccount; they are not children of `SAP Integration Suite`.
+
 ### 2. Interview the user (only what's ambiguous)
 Confirm just what you can't infer: **level(s)** (L0/L1/L2, default L1); **runtime**
 (Cloud Foundry / Kyma); **identity** (IAS + XSUAA / external IdP); **integration**
@@ -125,8 +139,12 @@ template is never gutted to fit. **Branch on `decision`:**
   (`cp "<out>.drawio.pre-extend.bak" "<out>.drawio"`) and fall through to
   **`generate`**. Then go to the **step 5 gate**.
 - **`generate`** (nothing clears the bar, or `scaffold-diagram.py` exits `3`):
-  proceed to step 3. This is the safe default; the scaffold paths are a fidelity
-  boost when a close template exists, never a hard dependency.
+  proceed to step 3, but do **not** treat this as blank-page mode. First extract a
+  compact reference pattern brief from the closest ranked candidates: why the
+  reference was not extended, what composition/grouping/flow pattern is reused,
+  and which unrequested components are deliberately not copied. This is the safe
+  default; the scaffold paths are a fidelity boost when a close template exists,
+  never a hard dependency.
 
 This bundle ships a **curated ~21-template subset** in `assets/templates-pack.json`
 (embedded draw.io XML — the full 156-file corpus can't ship under the Skills
@@ -134,8 +152,7 @@ file-cap). The selector ranks only what's scaffoldable here, and
 `scaffold-diagram.py` writes the template's XML from the pack; so scaffold and
 scaffold-extend work on Desktop for the packed subset.
 
-**Authoritative score gate (enforced identically here and in the integration
-test).** The gate is **per-path**: the **generate** path must clear
+**Authoritative score gate.** The gate is **per-path**: the **generate** path must clear
 `--sap-like ≥ 85`; the **scaffold / scaffold-extend** paths must clear **both**
 `--sap-like ≥ 85` **and** the corpus similarity floor:
 ```bash
@@ -144,12 +161,35 @@ python3 scripts/score-diagram.py --corpus assets/templates "<out>.drawio" --min-
 ```
 On Desktop the loose `assets/templates/` corpus isn't bundled (only
 `templates-pack.json`), so the `--corpus` line is a **no-op** — rely on the
-`--sap-like ≥ 85` floor. Either way, the **same downstream gate** (step 5) applies.
+`--sap-like ≥ 85` floor. If a loose corpus is present, a generate-path corpus run
+without `--min-score` is feedback only, not a hard gate. Either way, the **same
+downstream gate** (step 5) applies.
 
 ### 3. Build the IR v2 (JSON)
 
 The IR has `metadata`, `groups[]`, `nodes[]`, `edges[]`, and optional `layoutHints[]`.
 **Group `type` selects the molecule and zone automatically** — no manual coordinates.
+
+**Reference pattern brief for `generate`.** Before writing the IR on a generate
+path, inspect the top ranked reference candidates and write down the pattern you
+are borrowing. At minimum capture:
+
+- closest reference id/path and why it was not extended (`coverage`, `missing`,
+  `extra`, gutting/heavy guard);
+- canvas/level shape: L0/L1/L2 density, number of composition zones, nested zone
+  depth, left/center/right or top-band/right-tier pattern;
+- group model: BTP frame/subaccounts, identity band, governance strip, private
+  cloud/on-prem tier, external/user lane;
+- molecule choices: suite as `product.capabilities[]`, standalone SaaS as
+  `sap-app`/`cloud-tier`, companion services as separate BTP nodes;
+- flow pattern: primary direction, edge families, protocols/pills, network
+  separator expectation;
+- explicit deviations from the reference: components removed, components added,
+  and why.
+
+Map the brief into IR fields (`groups[].type`, `parent`, `zone`/`position`, `flow`,
+`nodes[].type`, `capabilities`, `flowFamily`, `pill`, `metadata.networkSeparator`).
+Keep `layoutHints` empty at authoring time; the visual loop owns geometry patching.
 
 **`groups[]` — `type` → zone → molecule**
 
@@ -191,6 +231,11 @@ overrides the column), `flow` (`row`\|`col`\|`grid`, intra-group packing).
 | `pill` | free-text protocol label on the edge (`"SAML2/OIDC"`, `"SCIM"`, `"CTMS"`) |
 
 Use kebab-case ids. L0 ≤ 10 elements · L1 10–30 · L2 ≥ 30.
+
+When an edge addresses a capability inside a product box, target the product node
+and express the capability/protocol in `pill` or `label` (for example `REST/OData`,
+`API proxy`, `iFlow`). Capability chips are not addressable node IDs; they are part
+of the product molecule.
 
 **Identity placement.** Never fold the identity cluster (IAS / XSUAA / Authorization)
 into a generic ops/third-party box. Parent it to the BTP frame (`parent:"<btp-id>"`)
@@ -252,16 +297,19 @@ python3 scripts/generate-drawio.py   ir.json --out "<title>-<level>.drawio"
 python3 scripts/validate-drawio.py   "<title>-<level>.drawio" --strict   # palette/XML; exit 1 on CRITICAL
 python3 scripts/check-composition.py "<title>-<level>.drawio"             # geometric gate; exit 2 on FAIL
 # SAP-likeness gate (advisory — the hard gates are validate-drawio + check-composition).
-# Reference-free score, works everywhere; ~80+ is good (sparse L0 diagrams score lower):
-python3 scripts/score-diagram.py --sap-like "<title>-<level>.drawio" --json   # objective 0-100 SAP-likeness
+# Reference-free score, works everywhere; require >= 85 on generate path:
+python3 scripts/score-diagram.py --sap-like "<title>-<level>.drawio" --json
+# optional generate-path pattern feedback when assets/templates exists; no --min-score:
+python3 scripts/score-diagram.py --corpus assets/templates "<title>-<level>.drawio" --json --top 5
 ```
 On any CRITICAL/FAIL/low-score: **generate path** — fix the IR and regenerate;
 **scaffold path** — restore the `.bak` and redo the `relabel.py` edits (or pick an
 alternate template). **Max 2 mechanical retries** before escalating with the exact
 error. If `assets/templates/` is absent (default Desktop bundle), the
 `score-diagram --corpus` line is a no-op — skip it. The **corpus similarity gate**
-applies **only** to the scaffold / scaffold-extend paths; the **generate** path
-relies on the `--sap-like ≥ 85` floor.
+applies **only** to the scaffold / scaffold-extend paths; on the **generate** path
+corpus scoring is only reference-pattern feedback and the hard score floor is
+`--sap-like ≥ 85`.
 
 ### 6. Render, then LOOK — the visual-rubric self-critique loop
 ```bash

@@ -85,6 +85,24 @@ def test_resolve_no_regression_on_already_working_names(shape_index, query):
     assert svc["name"] == query  # these queries ARE the canonical name
 
 
+def test_resolve_with_score_exposes_match_reason(shape_index):
+    hit = shape_index.resolve_with_score("BPA")
+    assert hit is not None
+    assert hit.entry["name"] == "SAP Build Process Automation"
+    assert hit.score >= 0.95
+    assert hit.reason == "exact-alias"
+
+
+def test_discovery_center_document_ai_name_reuses_legacy_dox_icon(shape_index):
+    """Discovery Center currently returns SAP Document AI for the former DOX
+    scenario; keep it mapped to the official Document Information Extraction
+    icon until SAP ships a separate replacement glyph."""
+    hit = shape_index.resolve_with_score("SAP Document AI")
+    assert hit is not None
+    assert hit.entry["name"] == "Document Information Extraction"
+    assert hit.reason == "exact-alias"
+
+
 def test_resolve_full_catalog_names_and_aliases_are_stable(gen, shape_index):
     """Every canonical name and alias already in the catalog must resolve to
     itself — a blanket regression net across all ~470 catalog entries, not

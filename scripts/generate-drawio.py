@@ -269,6 +269,15 @@ class Node:
     capabilities: list[dict[str, Any]] | None = None
 
 
+@dataclass(frozen=True)
+class ShapeResolution:
+    entry: dict[str, Any]
+    score: float
+    reason: str
+    query: str
+    matched: str
+
+
 @dataclass
 class Edge:
     id: str
@@ -473,7 +482,19 @@ class ShapeIndex:
         " Service",
     )
 
-    def _exact_or_subset(self, query: str) -> dict[str, Any] | None:
+    @staticmethod
+    def _resolution(entry: dict[str, Any], score: float, reason: str,
+                    query: str, matched: str) -> ShapeResolution:
+        return ShapeResolution(
+            entry=entry,
+            score=round(score, 3),
+            reason=reason,
+            query=query,
+            matched=matched,
+        )
+
+    def _exact_or_subset_scored(self, query: str,
+                                reason_prefix: str = "") -> ShapeResolution | None:
         """Original resolve() algorithm for a single query string: exact
         name → exact alias (case-insensitive) → exact techId → safe
         word-level subset match. Returns None on miss.
@@ -487,11 +508,29 @@ class ShapeIndex:
         bad "block types".
         """
         if query in self._by_name:
-            return self._by_name[query]
+            return self._resolution(
+                self._by_name[query],
+                1.0 if not reason_prefix else 0.93,
+                f"{reason_prefix}exact-name",
+                query,
+                query,
+            )
         if query.lower() in self._by_alias:
-            return self._by_alias[query.lower()]
+            return self._resolution(
+                self._by_alias[query.lower()],
+                0.97 if not reason_prefix else 0.90,
+                f"{reason_prefix}exact-alias",
+                query,
+                query,
+            )
         if query in self._by_techid:
-            return self._by_techid[query]
+            return self._resolution(
+                self._by_techid[query],
+                0.96 if not reason_prefix else 0.89,
+                f"{reason_prefix}exact-techid",
+                query,
+                query,
+            )
         ql = query.strip().lower()
         if len(ql) < 3:
             return None
@@ -499,13 +538,29 @@ class ShapeIndex:
         if not q_tokens:
             return None
         best, best_extra = None, 1 << 30
+        best_name = ""
         for name, svc in sorted(self._by_name.items()):
             n_tokens = set(re.findall(r"[a-z0-9]+", name.lower()))
             if q_tokens <= n_tokens:  # every query word is a word in the name
                 extra = len(n_tokens - q_tokens)
                 if extra < best_extra:
                     best, best_extra = svc, extra
-        return best
+                    best_name = name
+        if best is None:
+            return None
+        base = 0.88 if not reason_prefix else 0.82
+        score = max(0.72, base - min(best_extra, 6) * 0.025)
+        return self._resolution(
+            best,
+            score,
+            f"{reason_prefix}word-subset",
+            query,
+            best_name,
+        )
+
+    def _exact_or_subset(self, query: str) -> dict[str, Any] | None:
+        hit = self._exact_or_subset_scored(query)
+        return hit.entry if hit else None
 
     @classmethod
     def _normalized_variants(cls, query: str) -> list[str]:
@@ -550,7 +605,7 @@ class ShapeIndex:
 
         return variants
 
-    def _fuzzy_tokenset(self, query: str) -> dict[str, Any] | None:
+    def _fuzzy_tokenset_scored(self, query: str) -> ShapeResolution | None:
         """Last-resort tier: token-set match tolerant of short-form
         abbreviations (e.g. "Application" vs "App"). Requires every query
         token to be covered — either an exact token match, or a
@@ -560,6 +615,7 @@ class ShapeIndex:
         queries only: a single-word query never reaches this tier.
         """
         best, best_score = None, None
+        best_name = ""
         for variant in self._normalized_variants(query):
             q_tokens = set(re.findall(r"[a-z0-9]+", variant.lower()))
             if len(q_tokens) < 2:
@@ -588,7 +644,43 @@ class ShapeIndex:
                 score = (len(n_tokens - matched), len(n_tokens))
                 if best_score is None or score < best_score:
                     best, best_score = svc, score
-        return best
+                    best_name = name
+        if best is None or best_score is None:
+            return None
+        extra, total = best_score
+        # Keep the last-resort tier clearly below exact/alias/normalised matches
+        # so callers can decide when to confirm with Discovery Center/MCP.
+        score = max(0.62, 0.76 - min(extra, 6) * 0.02 - min(total, 10) * 0.005)
+        return self._resolution(best, score, "fuzzy-token-set", query, best_name)
+
+    def _fuzzy_tokenset(self, query: str) -> dict[str, Any] | None:
+        hit = self._fuzzy_tokenset_scored(query)
+        return hit.entry if hit else None
+
+    def resolve_with_score(self, query: str | None) -> ShapeResolution | None:
+        """Resolve a service and expose match confidence.
+
+        ``resolve()`` intentionally returns the legacy raw shape entry. This
+        companion keeps the same lookup order but adds a stable ``score`` and
+        ``reason`` so the generation workflow can distinguish exact catalog
+        reuse from a weaker fallback that should be confirmed with MCP.
+        """
+        if not query:
+            return None
+        hit = self._exact_or_subset_scored(query)
+        if hit is not None:
+            return hit
+        for variant in self._normalized_variants(query)[1:]:
+            hit = self._exact_or_subset_scored(variant, "normalized-")
+            if hit is not None:
+                return ShapeResolution(
+                    entry=hit.entry,
+                    score=hit.score,
+                    reason=hit.reason,
+                    query=query,
+                    matched=hit.matched,
+                )
+        return self._fuzzy_tokenset_scored(query)
 
     def resolve(self, query: str | None) -> dict[str, Any] | None:
         """Lookup priority: exact name → exact alias (case-insensitive) →
@@ -602,16 +694,8 @@ class ShapeIndex:
         "Application" ~ "App") is tried only if nothing else matched.
         Returns None on miss.
         """
-        if not query:
-            return None
-        hit = self._exact_or_subset(query)
-        if hit is not None:
-            return hit
-        for variant in self._normalized_variants(query)[1:]:
-            hit = self._exact_or_subset(variant)
-            if hit is not None:
-                return hit
-        return self._fuzzy_tokenset(query)
+        hit = self.resolve_with_score(query)
+        return hit.entry if hit else None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -999,6 +1083,47 @@ def _emit_sap_btp_badge(root: ET.Element, parent_cell_id: str) -> None:
         badge,
         "mxGeometry",
         attrib={"x": "12", "y": "8", "width": "60", "height": "22", "as": "geometry"},
+    )
+
+
+def _emit_identity_badge(root: ET.Element, parent_cell_id: str, icon_resolver) -> None:
+    """Small identity header badge for BTP identity frames."""
+    uri = None
+    if icon_resolver:
+        uri = (
+            icon_resolver("SAP Cloud Identity Service")
+            or icon_resolver("Identity Authentication")
+            or icon_resolver("SAP Cloud Identity Services")
+        )
+    if uri:
+        style = (
+            "shape=label;rounded=0;whiteSpace=wrap;html=1;strokeColor=none;"
+            "fillColor=none;fontColor=#1D2D3E;fontStyle=1;fontSize=12;"
+            "align=left;verticalAlign=middle;imageAlign=left;"
+            "imageVerticalAlign=middle;imageWidth=20;imageHeight=20;"
+            f"spacingLeft=28;image={uri};"
+        )
+    else:
+        style = (
+            "text;html=1;strokeColor=none;fillColor=none;fontColor=#1D2D3E;"
+            "fontStyle=1;fontSize=12;align=left;verticalAlign=middle;"
+        )
+    badge = ET.SubElement(
+        root,
+        "mxCell",
+        attrib={
+            "id": _stable_id("identitybadge", parent_cell_id),
+            "value": "Identity",
+            "style": style,
+            "vertex": "1",
+            "parent": parent_cell_id,
+            "connectable": "0",
+        },
+    )
+    ET.SubElement(
+        badge,
+        "mxGeometry",
+        attrib={"x": "12", "y": "8", "width": "160", "height": "24", "as": "geometry"},
     )
 
 
@@ -2052,7 +2177,8 @@ def emit(
             )
             continue
         # The BTP layer carries a "SAP BTP" logo chip instead of a text label.
-        g_value = "" if g.type == "btp-layer" else g.label
+        # Identity btp-layer frames carry their own identity badge instead.
+        g_value = "" if (g.type == "btp-layer" or g.id in identity_group_ids) else g.label
         g_cell = ET.SubElement(
             root,
             "mxCell",
@@ -2077,6 +2203,8 @@ def emit(
         )
         if g.type == "btp-layer" and g.id not in identity_group_ids:
             _emit_sap_btp_badge(root, cell_id)   # FIX-3: not on identity groups
+        elif g.id in identity_group_ids:
+            _emit_identity_badge(root, cell_id, icon_resolver)
 
     for g in nested_groups:
         if g.id not in group_geo or g.parent not in group_geo:
@@ -2102,12 +2230,13 @@ def emit(
                 anchor_size=(float(w), float(h)),
             )
             continue
+        g_value = "" if g.id in identity_group_ids else g.label
         g_cell = ET.SubElement(
             root,
             "mxCell",
             attrib={
                 "id": cell_id,
-                "value": g.label,
+                "value": g_value,
                 "style": _group_style(g, is_nested=True),
                 "vertex": "1",
                 "parent": parent_cell_id,
@@ -2124,6 +2253,8 @@ def emit(
                 "as": "geometry",
             },
         )
+        if g.id in identity_group_ids:
+            _emit_identity_badge(root, cell_id, icon_resolver)
 
     # 3. Nodes (parented to "1", positioned absolutely; group is visual only)
     node_xy: dict[str, tuple[int, int]] = {}

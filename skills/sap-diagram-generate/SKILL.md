@@ -10,7 +10,7 @@ version: 0.3.0
 
 Produce one or more `.drawio` files that follow the official [SAP BTP Solution Diagram Guideline](https://sap.github.io/btp-solution-diagrams/).
 
-**The golden rule: ground the content before you draw.** A diagram is only as good as the inventory behind it. You cannot know which components a solution needs, their canonical names, or whether each is a *BTP service* or a *standalone SaaS product* by guessing — you must look it up in the SAP Discovery Center (via the `mcp-sap-docs` MCP) and check best-practice completeness with the SAP-domain skills. So the flow is always: **preflight → ground → consult → interview → confirm → generate → verify**. Never jump straight to rendering.
+**The golden rule: ground the content before you draw.** A diagram is only as good as the inventory behind it. You cannot know which components a solution needs, their canonical names, whether each is a *BTP service* or a *standalone SaaS product*, or whether a close SAP reference diagram already exists by guessing. You must look components up in the SAP Discovery Center (via the `mcp-sap-docs` MCP), rank similar SAP/reference diagrams, and check best-practice completeness with the SAP-domain skills. So the flow is always: **preflight → reference reconnaissance → ground → consult → interview → confirm → scaffold/extend-or-generate → verify**. Never jump straight to rendering.
 
 ## When to invoke
 
@@ -57,13 +57,13 @@ From the description, extract a first-pass list: actors/users, third-party/non-S
 
 ### Step 1.5 — Template reconnaissance (early rank)
 
-Rank the corpus against the raw request so the candidate set is known before the interview:
+Rank the corpus against the raw request so the candidate set is known before the interview. This is mandatory; do not treat it as an internal hint. Capture the top candidates (`id`, title/path, level, score, `recommended`, and why they match) for Step 4/5.
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/select-template.py" "<request>" --top 5 [--level Lx]
 ```
 
-Remember the top ids; the *triage* runs at Step 3.5 once best-practice findings exist.
+If the template index/corpus is unavailable, surface that as a WARNING and continue with the generate path only after Step 4 confirms the user accepts a from-scratch diagram. Otherwise, remember the top ids; the *triage* runs at Step 3.5 once best-practice findings exist.
 
 ### Step 2 — Ground every component in the SAP Discovery Center (MCP)
 
@@ -82,6 +82,29 @@ Use the result to capture, per component:
 - **`isDeprecated`** — warn the user and suggest the replacement if true.
 
 For capability/architecture facts (what a service does, required companions, recommended patterns) use `mcp__sap-docs__search` then `mcp__sap-docs__fetch` on the best hit, and `sap_discovery_center_service(serviceId=…)` for pricing/roadmap when relevant. Resolve aliases (BPA → SAP Build Process Automation, DOX → SAP Document Information Extraction, IAS → SAP Cloud Identity Services / Identity Authentication, XSUAA → SAP Authorization and Trust Management Service).
+
+**Bundle products vs capabilities.** Do not flatten a SAP product suite into peer service nodes when the named items are capabilities of that suite. Model the suite as one `type: "product"` node with `capabilities[]`, then connect edges to the product node. Use this especially for:
+
+- `SAP Integration Suite` → capabilities such as `API Management`, `Cloud Integration`, `Event Mesh`, `Integration Advisor`, `Trading Partner Management`, `Open Connectors`.
+- `SAP Build Process Automation` → capabilities such as `Workflow`, `Decision`, `Process Visibility`, `RPA`.
+
+Example:
+
+```json
+{
+  "id": "integration-suite",
+  "label": "SAP Integration Suite",
+  "service": "SAP Integration Suite",
+  "group": "subaccount",
+  "type": "product",
+  "capabilities": [
+    {"label": "API Management", "icon": "api"},
+    {"label": "Cloud Integration", "icon": "integration"}
+  ]
+}
+```
+
+Keep companion BTP services outside the suite unless SAP defines them as capabilities of that product. For example, `Destination service` and `Connectivity Service` remain BTP services in the subaccount; they are not children of `SAP Integration Suite`.
 
 ### Step 3 — Consult SAP-domain skills (best-practice completeness)
 
@@ -104,6 +127,7 @@ Read `suggestions[]` — each is an extra that appears across ≥2 top candidate
 
 Using `AskUserQuestion`, ask only what is still ambiguous **after** Steps 2–3 (don't ask what the docs/skills already answered). Typical questions (batch 2–4 multiple-choice):
 
+- **Reference/base diagram** — always show the closest Step-1.5 reference candidates before generation. If one is recommended, ask whether to use it as a scaffold/scaffold-extend base or generate from scratch. If none clears the threshold, ask whether to continue from scratch and mention that no close reference matched. In `auto` mode, proceed with the selector's decision but include the chosen/declined reference in the final report.
 - **Level(s)** — L0 / L1 / L2 / combo (default L1).
 - **Runtime** — Cloud Foundry / Kyma / both / ABAP.
 - **Identity** — IAS + XSUAA only / external IdP federated via IAS / corporate SAML.
@@ -116,7 +140,7 @@ Using `AskUserQuestion`, ask only what is still ambiguous **after** Steps 2–3 
 
 ### Step 5 — Confirm the inventory
 
-Present the consolidated inventory (canonical names from Step 2) + best-practice findings (Step 3) + the interview answers, and offer three choices: **accept** · **apply best-practice suggestions** · **amend manually** (then re-run Step 3 on the edits). Wait for the answer. Only proceed once confirmed (or `auto` was given).
+Present the consolidated inventory (canonical names from Step 2) + best-practice findings (Step 3) + the template/reference candidates and intended reuse path + the interview answers, and offer three choices: **accept** · **apply best-practice/template suggestions** · **amend manually** (then re-run Step 3 and Step 5.5 on the edits). Wait for the answer. Only proceed once confirmed (or `auto` was given).
 
 ### Step 5.5 — Scaffold, scaffold-extend, or generate (hybrid decision) — ALWAYS
 
@@ -138,6 +162,11 @@ bounded `delta` = `{remove: ["<label>", …], relabel: [{from, to}, …], add: [
 The thresholds behind the decision (`RECOMMEND_THRESHOLD=14`, `COVERAGE_MIN=0.4`,
 `HEAVY_EXTRA_MAX=1` + the `zoneCount/3` clause) are documented in
 [`references/scaffold-workflow.md`](references/scaffold-workflow.md). **Branch on `decision`:**
+
+Before branching, surface the selected path unless `auto` was explicit:
+
+- `scaffold` / `scaffold-extend`: ask for confirmation to use the named reference template as the base, showing `present`, `missing`, `extra`, and `delta`. Do not silently scaffold from a reference diagram.
+- `generate`: state why no reference will be extended (`not recommended`, low coverage, heavy extras, or gutting guard). Ask one confirmation question before generating from scratch when the user expected reuse or when Step 1.5 had plausible candidates.
 
 **`scaffold`** (relabel-only — the existing pure path: `★ recommended`, nothing
 `missing`, nothing `extra`). Copy the template and apply the relabels; adapt
@@ -190,7 +219,12 @@ retries per edit**. Never hand-edit geometry. If the chain still can't converge,
 **restore the snapshot** (`cp "<out>.drawio.pre-extend.bak" "<out>.drawio"`) and
 fall through to the **`generate`** path. Then go to the **Step 8 gate**.
 
-**`generate`** (nothing clears the bar). Author the IR — proceed to **Step 6** as usual.
+**`generate`** (nothing clears the bar). This is **not** a blank-page mode. Author
+the IR only after extracting a compact pattern brief from the closest Step-1.5 /
+Step-5.5 references. Use the references to learn composition, grouping, lane
+direction, edge semantics, title/icon treatment, and expected SAP visual density;
+do **not** copy unconfirmed components just because they appear in the reference.
+Proceed to **Step 6** with that pattern brief in hand.
 
 **Authoritative score gate — per path.** The score portion of the gate depends on
 which path produced the artifact:
@@ -199,7 +233,8 @@ which path produced the artifact:
   `score-diagram.py --sap-like "<out>" --json`; require `score ≥ 85`. Do **NOT**
   run `--corpus --min-score` on this path — a from-scratch diagram fingerprints
   ~55 against the corpus by design (the shipped gold demos score 55–60 on corpus
-  yet 93–100 on `--sap-like`).
+  yet 93–100 on `--sap-like`). You may still run `--corpus ... --json` without
+  `--min-score` as a non-blocking pattern feedback report after render.
 
   ```bash
   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --sap-like "<out>.drawio" --json   # require score ≥ 85
@@ -222,6 +257,28 @@ paths converge on (Step 8): `validate-drawio.py --strict` + `check-composition.p
 ### Step 6 — Build the IR v2 (authoring grammar)
 
 Compose one JSON object per level. See [`examples/`](examples/) for worked v1 patterns and [`tests/fixtures/ir-v2-sample.json`](../../tests/fixtures/ir-v2-sample.json) for the full v2 archetype this step is grounded in. IR v2 is a **strict superset** of v1 — every v1 field still works; the fields below are additive.
+
+**Reference pattern brief for `generate`.** Before writing the IR on a generate
+path, inspect the top ranked reference candidates and write down the pattern you
+are borrowing. At minimum capture:
+
+- closest reference id/path and why it was not extended (`coverage`, `missing`,
+  `extra`, gutting/heavy guard);
+- canvas/level shape: L0/L1/L2 density, number of composition zones, nested zone
+  depth, left/center/right or top-band/right-tier pattern;
+- group model: BTP frame/subaccounts, identity band, governance strip, private
+  cloud/on-prem tier, external/user lane;
+- molecule choices: suite as `product.capabilities[]`, standalone SaaS as
+  `sap-app`/`cloud-tier`, companion services as separate BTP nodes;
+- flow pattern: primary direction, edge families, protocols/pills, network
+  separator expectation;
+- explicit deviations from the reference: components removed, components added,
+  and why.
+
+Map the brief into IR fields (`groups[].type`, `parent`, `zone`/`position`,
+`flow`, `nodes[].type`, `capabilities`, `flowFamily`, `pill`,
+`metadata.networkSeparator`). Keep `layoutHints` empty; the visual loop owns
+geometry patching.
 
 **`metadata`**
 
@@ -275,6 +332,8 @@ Every group also accepts `badges: {hyperscalers: [...], runtimes: [...]}` (rende
 | `pill` | string (v2) | free-text protocol/annotation label rendered as a pill on the edge (e.g. `"SAML2/OIDC"`, `"SCIM"`, `"CTMS"`) — independent of `kind`/`pillColor` |
 
 Use kebab-case IDs throughout.
+
+When an edge addresses a capability inside a product box, target the product node and express the capability/protocol in `pill` or `label` (for example `REST/OData`, `API proxy`, `iFlow`). Capability chips are not addressable node IDs; they are part of the product molecule.
 
 **Identity placement.** The identity cluster (IAS / XSUAA / Authorization) is never folded into a generic ops/third-party box. If it's parented to the BTP frame (`parent: "<btp-group-id>"`), it nests inside as its own labelled BTP-blue inner frame near the bottom. If it isn't parented (a standalone top-level group), give it its own `btp-layer`-typed group positioned just below the main BTP frame — never place it on the RIGHT with the backends.
 
@@ -345,12 +404,15 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate-ir.py" /tmp/diagram-<level>.json
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --sap-like "<out>.drawio" --json   # all paths: require score ≥ 85
    # scaffold / scaffold-extend paths ONLY — additionally require the corpus match:
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --corpus "${CLAUDE_PLUGIN_ROOT}/assets/templates" "<out>.drawio" --min-score 82
+   # generate path ONLY — optional pattern feedback, not a hard gate:
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/score-diagram.py" --corpus "${CLAUDE_PLUGIN_ROOT}/assets/templates" "<out>.drawio" --json --top 5
    ```
 
    - `validate-drawio.py --strict` — XML structure, Horizon palette, line styles, orphan edges; exits 1 if any CRITICAL is found.
    - `check-composition.py` — the **geometric** gate (zone overlaps, piercings, crossing budget once computed, legend presence); exits 2 on any FAIL.
    - `score-diagram.py --sap-like … ≥ 85` — reference-free SAP-likeness; the authoritative score gate on **every** path. On the **generate** path this is the *only* score check — do **NOT** run `--corpus --min-score` there (a from-scratch diagram fingerprints ~55 against the corpus by design; the shipped gold demos score 55–60 on corpus yet 93–100 on `--sap-like`).
    - `score-diagram.py --corpus … --min-score 82` — SAP-likeness fingerprint vs the whole template corpus; **scaffold / scaffold-extend paths only** (see Step 5.5's per-path score gate). A scaffolded / scaffold-extended diagram fingerprints ~98 because it keeps the SAP template's structure. (If the corpus is absent, this step is a no-op — skip it.)
+   - On the **generate** path, run corpus scoring only as feedback (`--json`, no `--min-score`) when the corpus exists. Use the closest matches and low-scoring dimensions as pattern-learning signals for the next IR revision; do not block delivery on the raw corpus score.
 
    On any CRITICAL/FAIL/low-score: **generate path** — fix the IR and regenerate; **scaffold path** — undo via the `.bak` and redo the `relabel.py` edits (or pick an alternate template), never hand-edit geometry. **Max 2 mechanical retries** before escalating to the user with the exact error.
 
@@ -391,7 +453,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate-ir.py" /tmp/diagram-<level>.json
 
 ### Step 9 — Report
 
-Per file: path, level, element counts, the gate scorecard (validator + composition + rubric, per Step 8.6), and the PNG path if rendered. Call out any degrade-path WARNING (Step 8.7) and any user-approved override explicitly. For multi-level, note cross-level consistency. Suggest opening in draw.io desktop / [drawio.com](https://drawio.com) / VS Code draw.io extension, and (when relevant) SAP Architecture Center submission.
+Per file: path, level, element counts, the reference/template search outcome (`scaffold`, `scaffold-extend`, or `generate`, with template id/title when used or the reason none was used), the gate scorecard (validator + composition + rubric, per Step 8.6), and the PNG path if rendered. Call out any degrade-path WARNING (Step 8.7) and any user-approved override explicitly. For multi-level, note cross-level consistency. Suggest opening in draw.io desktop / [drawio.com](https://drawio.com) / VS Code draw.io extension, and (when relevant) SAP Architecture Center submission.
 
 ## Configuration
 

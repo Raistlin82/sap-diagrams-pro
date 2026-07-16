@@ -559,6 +559,11 @@ def product_box(
     cap_w, cap_h, cap_gap = _capability_grid_geometry(contract)
 
     caps = list(getattr(node, "capabilities", None) or [])
+    product_icon_uri = None
+    if icon_resolver:
+        product_icon_uri = icon_resolver(getattr(node, "service", None))
+        if not product_icon_uri:
+            product_icon_uri = icon_resolver(getattr(node, "label", None))
     # Resolve every capability's icon (if any) UP FRONT, once — both to decide
     # the grid's row height below (an icon-bearing row needs to be taller
     # than a text-only one; the row height is one shared number for the whole
@@ -605,15 +610,39 @@ def product_box(
         }
     ]
 
-    # Title row (product name), text style from the contract.
+    # Title row (product name), text style from the contract. Product boxes
+    # represent suite-level products, so keep the product/service icon in the
+    # title when it resolves while capability chips show the used subfeatures.
+    title_x = pad_x
+    title_w = box_w - 2 * pad_x
+    title_style = _style(contract, "title-block")
+    if product_icon_uri:
+        title_x += 28.0
+        title_w = max(40.0, title_w - 28.0)
+        cells.append(
+            {
+                "id": "title-icon",
+                "value": "",
+                "style": (
+                    "shape=image;html=1;imageAspect=0;aspect=fixed;"
+                    f"image={product_icon_uri};"
+                ),
+                "x": pad_x,
+                "y": max(6.0, (top - 24.0) / 2.0),
+                "w": 24.0,
+                "h": 24.0,
+                "parent": "box",
+                "connectable": False,
+            }
+        )
     cells.append(
         {
             "id": "title",
             "value": getattr(node, "label", "") or "",
-            "style": _style(contract, "title-block"),
-            "x": pad_x,
+            "style": title_style,
+            "x": title_x,
             "y": max(6.0, (top - 30.0) / 2.0),
-            "w": box_w - 2 * pad_x,
+            "w": title_w,
             "h": 30.0,
             "parent": "box",
             "connectable": False,

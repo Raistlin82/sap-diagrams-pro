@@ -14,6 +14,7 @@
 # tech_id is matched case-sensitively against shape-index.json services[].name (pre-normalize).
 
 tech_id,canonical_name,aliases
+10004-document-information-extraction_sd,Document Information Extraction,DOX|Document Info Extraction|SAP Document Information Extraction|SAP Document AI|Document AI
 10002-cloud-integration-automation_sd,SAP Cloud Integration Automation,CIAS|Cloud Integration Automation
 10014-sap-audit-log-service_sd,SAP Audit Log Service,Audit Log|SAP Audit
 10017-sap-btp_cloud-foundry-runtime_sd,SAP BTP Cloud Foundry Runtime,Cloud Foundry|CF Runtime|CF

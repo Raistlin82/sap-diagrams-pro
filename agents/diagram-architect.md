@@ -74,6 +74,16 @@ If the input is a codebase, look for tell-tales:
 - `*.cds` schema with namespace `sap.*` → CAP service.
 - References to "DOX", "BPA", "Event Mesh", "AI Core" in markdown → those services.
 
+### Phase 2.5 — Reference reconnaissance
+
+Before the user confirmation, rank SAP reference templates and Architecture Center-derived templates against the request:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/select-template.py "<request>" --top 5 [--level Lx]
+```
+
+Capture the closest candidates with `id`, title/path, score, `recommended`, and match rationale. These candidates must be shown in Phase 4. If the index/corpus is unavailable, include a WARNING and ask whether to proceed from scratch.
+
 ### Phase 3 — Consult SAP-domain skills (parallelised)
 
 Apply the trigger heuristics in `skills/sap-diagram-generate/references/sap-skills-integration.md`. Invoke matching skills via the `Skill` tool — when possible, **in parallel** (multiple `Skill` calls in one assistant message) to reduce latency.
@@ -87,20 +97,34 @@ Present:
 1. The component inventory.
 2. The aggregated SAP-skill findings.
 3. The proposed level(s) and rationale.
-4. Three choices: accept / apply suggestions / amend manually.
+4. The closest SAP reference/template candidates and the proposed reuse direction.
+5. Three choices: accept / apply suggestions / amend manually.
 
 Wait for the user's answer before proceeding.
 
-### Phase 5 — Generate (IR v2 + gate + visual-rubric loop)
+### Phase 4.5 — Decide scaffold / extend / generate
 
-For each requested level, follow `skills/sap-diagram-generate/SKILL.md` Steps 6-8 in full — this agent doesn't shortcut them just because it's orchestrating multiple levels:
+Run `skills/sap-diagram-generate/SKILL.md` Step 5.5 on the confirmed inventory before authoring IR:
 
-1. Build the IR v2 (deterministic IDs, kebab-case) using the full authoring grammar: `subaccount` (nestable)/`governance`/`cloud-tier`(`kind`)/`custom-app` groups, `product`(`capabilities`)/`chip`/`db` nodes, `flowFamily`/`pill` edges, `metadata.branding`/`badges`/`networkSeparator`. Leave `layoutHints` empty at authoring — Step 8's loop fills it.
-2. Validate: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate-ir.py <ir.json>` — must exit 0 before generating; fix and re-validate on exit 2.
-3. Generate: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate-drawio.py <ir.json> --out <file>.drawio`.
-4. Gate: `validate-drawio.py <file>.drawio --strict` + `check-composition.py <file>.drawio`. Fix the IR and regenerate on any CRITICAL/FAIL (max 2 mechanical retries).
-5. Render + vision loop: `render-preview.py <file>.drawio --engine auto --out <file>.png`, read the PNG against `references/visual-rubric.md`'s 26 checks, emit findings, `apply-rubric-patches.py` → regenerate → re-render. Max 3 vision iterations per level. If no render engine is available, skip the loop and say so as a WARNING (never dead-end).
-6. Save each `.drawio`/`.png` pair to the output directory (`./diagrams/` by default).
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/select-template.py "<request>" \
+  --components "<confirmed canonical components, comma-separated>" --json [--level Lx]
+```
+
+If the decision is `scaffold` or `scaffold-extend`, ask for explicit confirmation to use that reference base unless the user explicitly requested `auto`. If the decision is `generate`, report why no reference will be extended.
+
+### Phase 5 — Produce (scaffold/extend or IR v2 + gate + visual-rubric loop)
+
+For each requested level, follow `skills/sap-diagram-generate/SKILL.md` Steps 5.5-8 in full — this agent doesn't shortcut them just because it's orchestrating multiple levels:
+
+1. If Step 5.5 chooses `scaffold` or `scaffold-extend`, use the selected reference template as the base and apply only the ordered relabel/remove/add delta. Do not author IR for that level unless the extend chain fails and falls back to `generate`.
+2. If Step 5.5 chooses `generate`, first write a reference pattern brief from the closest ranked templates: why the best base was not extended, what structure is reused (zone depth/count, left/center/right lanes, BTP/subaccount nesting, identity/governance/private-cloud placement, suite/product molecule treatment, edge/pill families), and what content is deliberately not copied. Then build the IR v2 (deterministic IDs, kebab-case) using the full authoring grammar: `subaccount` (nestable)/`governance`/`cloud-tier`(`kind`)/`custom-app` groups, `product`(`capabilities`)/`chip`/`db` nodes, `flowFamily`/`pill` edges, `metadata.branding`/`badges`/`networkSeparator`. Leave `layoutHints` empty at authoring — Step 8's loop fills it.
+   Treat suite capabilities as `product.capabilities[]`, not peer service nodes. For example, model `SAP Integration Suite` as one product node containing `API Management` and `Cloud Integration`; keep companion BTP services such as `Destination service` and `Connectivity Service` as separate subaccount nodes.
+3. Validate generated IR: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/validate-ir.py <ir.json>` — must exit 0 before generating; fix and re-validate on exit 2.
+4. Generate from IR when on the `generate` path: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/generate-drawio.py <ir.json> --out <file>.drawio`.
+5. Gate: `validate-drawio.py <file>.drawio --strict` + `check-composition.py <file>.drawio` + the Step-5.5 score gate (`--sap-like >= 85` on every path; `--corpus --min-score 82` only for scaffold/scaffold-extend; `--corpus --json --top 5` as generate-path feedback). Fix the IR or scaffold delta and regenerate on any CRITICAL/FAIL/low `--sap-like` score (max 2 mechanical retries). On generate, use the corpus feedback to revise only when it reveals an avoidable pattern mismatch; do not treat the raw corpus score as a hard gate.
+6. Render + vision loop: `render-preview.py <file>.drawio --engine auto --out <file>.png`, read the PNG against `references/visual-rubric.md`'s 26 checks, emit findings, `apply-rubric-patches.py` → regenerate → re-render. Max 3 vision iterations per level. If no render engine is available, skip the loop and say so as a WARNING (never dead-end).
+7. Save each `.drawio`/`.png` pair to the output directory (`./diagrams/` by default).
 
 When generating multiple levels, ensure cross-level consistency:
 
